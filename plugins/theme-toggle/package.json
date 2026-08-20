@@ -2,15 +2,21 @@
   "name": "bb-plugin-theme-toggle",
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xMinor-1/bb-plugins.git",
+    "directory": "plugins/theme-toggle"
+  },
   "engines": {
     "bb": ">=0.39",
     "bbPluginSdk": ">=0.4.8"
   },
   "bb": {
     "name": "Theme Toggle",
-    "description": "Палитра BB и режим светлая/тёмная одной кнопкой в футере сайдбара",
+    "description": "Switches the bb palette from the sidebar footer: click cycles palettes, hold or right-click opens a menu with light/dark/system appearance and every installed palette.",
     "branding": {
-      "icon": "Palette"
+      "icon": "./icon.svg"
     },
     "server": "./server.ts",
     "app": "./app.tsx"

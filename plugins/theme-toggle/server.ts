@@ -1,11 +1,11 @@
-// bb-plugin-theme-toggle — палитра BB + режим светлая/тёмная одной кнопкой.
+// bb-plugin-theme-toggle — bb palette plus light/dark mode from one button.
 //
-// Палитра живёт на сервере (bb.sdk.theme), режим light/dark — клиентский
-// (localStorage `bb.theme`), поэтому режимом занимается app.tsx.
+// The palette lives on the server (bb.sdk.theme); light/dark is a client-side
+// setting (localStorage `bb.theme`), so app.tsx owns that half.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
-// Встроенные палитры BB: каталог отдаёт только custom- и plugin-темы.
+// bb's built-in palettes: the catalog only reports custom and plugin themes.
 const BUILT_IN = [
   { id: "default", name: "Default" },
   { id: "nord", name: "Nord" },
@@ -32,7 +32,7 @@ export default async function plugin(bb: BbPluginApi) {
     const themes = [
       ...BUILT_IN,
       ...catalog.custom.map((id) => ({ id, name: id })),
-      // id тем плагинов уже namespaced (plugin:<pluginId>:<id>).
+      // Plugin theme ids are already namespaced (plugin:<pluginId>:<id>).
       ...catalog.plugins.map((t) => ({ id: t.id, name: t.name })),
     ];
     return { activeId: catalog.active.themeId, themes, catalog };
@@ -40,7 +40,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   async function apply(themeId: string) {
     const { catalog } = await read();
-    // faviconColor обязателен в selection — переносим текущий как есть.
+    // selection requires faviconColor — carry the current one over unchanged.
     await bb.sdk.theme.set({ themeId, faviconColor: catalog.active.faviconColor });
     const next = await read();
     return { activeId: next.activeId, themes: next.themes };

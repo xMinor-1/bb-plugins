@@ -1,10 +1,10 @@
-// Кнопка темы в футере сайдбара.
-//   короткий клик       — следующая палитра
-//   удержание / ПКМ     — меню: светлая / тёмная / как в системе + список палитр
+// Theme button in the sidebar footer.
+//   short click        — next palette
+//   hold / right-click — menu: light / dark / system + the palette list
 //
-// sidebarFooterAction рисует сам хост, поэтому long-press вешается content
-// script'ом на host-разметку кнопки (стабильный data-testid), а меню рисуется
-// своим DOM поверх приложения.
+// sidebarFooterAction is rendered by the host, so the long-press is attached by
+// a content script to the host's own button markup (stable data-testid), and
+// the menu is drawn as plain DOM on top of the app.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
@@ -13,14 +13,14 @@ const ACTION_ID = "cycle-theme";
 const BUTTON_SELECTOR = `[data-testid="plugin-sidebar-footer-action-${PLUGIN_ID}-${ACTION_ID}"]`;
 const HOLD_MS = 400;
 
-// Режим оформления — клиентская настройка BB (jotai atomWithStorage, сырая
-// строка). Ключ и значения совпадают с useTheme приложения.
+// Appearance is a client-side bb setting (jotai atomWithStorage, raw string).
+// The key and its values match the app's own useTheme.
 const MODE_KEY = "bb.theme";
 type Mode = "light" | "dark" | "system";
 const MODES: Array<{ id: Mode; label: string }> = [
-  { id: "light", label: "Светлая" },
-  { id: "dark", label: "Тёмная" },
-  { id: "system", label: "Как в системе" },
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
+  { id: "system", label: "System" },
 ];
 
 function readMode(): Mode {
@@ -43,11 +43,11 @@ function writeMode(mode: Mode): void {
   try {
     localStorage.setItem(MODE_KEY, mode);
   } catch {
-    /* приватный режим — обойдёмся классом ниже */
+    /* private mode — the class toggle below still applies */
   }
-  // BB читает ключ через atomWithStorage, который слушает событие storage.
-  // Своя вкладка его не получает, поэтому шлём синтетическое — приложение
-  // перерисуется штатно, а не только сменит класс.
+  // bb reads this key through atomWithStorage, which listens for `storage`.
+  // The originating tab never receives that event, so dispatch a synthetic one
+  // and let the app re-render normally instead of only swapping the class.
   window.dispatchEvent(
     new StorageEvent("storage", {
       key: MODE_KEY,
@@ -56,7 +56,7 @@ function writeMode(mode: Mode): void {
       storageArea: localStorage,
     }),
   );
-  // Подстраховка, если событие не дошло: класс `dark` — то, что читает CSS.
+  // Fallback if the event does not land: `dark` is the class the CSS reads.
   const resolved =
     mode === "system"
       ? window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -84,7 +84,7 @@ async function callRpc(method: string, input: unknown = null): Promise<ThemeStat
   return envelope.result as ThemeState;
 }
 
-// --- меню -------------------------------------------------------------------
+// --- menu -------------------------------------------------------------------
 
 const PANEL_STYLE = [
   "position:fixed",
@@ -185,8 +185,8 @@ class ThemeMenu {
     const panel = document.createElement("div");
     panel.setAttribute("style", PANEL_STYLE);
     panel.setAttribute("role", "menu");
-    panel.setAttribute("aria-label", "Оформление");
-    // Ставим за экран, пока не измерили высоту.
+    panel.setAttribute("aria-label", "Appearance");
+    // Park it off-screen until the height is known.
     panel.style.left = "-9999px";
     panel.style.top = "0";
     document.body.append(panel);
@@ -214,7 +214,7 @@ class ThemeMenu {
       panel.replaceChildren();
 
       const modeLabel = document.createElement("div");
-      modeLabel.textContent = "Оформление";
+      modeLabel.textContent = "Appearance";
       modeLabel.setAttribute("style", LABEL_STYLE);
       panel.append(modeLabel);
 
@@ -230,7 +230,7 @@ class ThemeMenu {
 
       panel.append(makeSeparator());
       const paletteLabel = document.createElement("div");
-      paletteLabel.textContent = "Палитра";
+      paletteLabel.textContent = "Palette";
       paletteLabel.setAttribute("style", LABEL_STYLE);
       panel.append(paletteLabel);
 
@@ -240,7 +240,7 @@ class ThemeMenu {
             void callRpc("select", { themeId: theme.id })
               .then(render)
               .catch((error: unknown) =>
-                toast.error(`Не удалось сменить палитру: ${String(error)}`),
+                toast.error(`Could not change the palette: ${String(error)}`),
               );
           }),
         );
@@ -267,17 +267,17 @@ class ThemeMenu {
       render(await callRpc("state"));
     } catch (error) {
       this.close();
-      toast.error(`Не удалось прочитать темы: ${String(error)}`);
+      toast.error(`Could not load the themes: ${String(error)}`);
     }
   }
 }
 
-// --- регистрация ------------------------------------------------------------
+// --- registration -----------------------------------------------------------
 
 export default definePluginApp((app) => {
   app.slots.sidebarFooterAction({
     id: ACTION_ID,
-    title: "Тема: клик — следующая палитра, удержание — выбор",
+    title: "Theme: click for the next palette, hold to choose",
     icon: "Palette",
     run: async () => {
       try {
@@ -285,9 +285,9 @@ export default definePluginApp((app) => {
         const name =
           state.themes.find((t) => t.id === state.activeId)?.name ??
           state.activeId;
-        toast.success(`Палитра: ${name}`);
+        toast.success(`Palette: ${name}`);
       } catch (error) {
-        toast.error(`Не удалось сменить палитру: ${String(error)}`);
+        toast.error(`Could not change the palette: ${String(error)}`);
       }
     },
   });
@@ -338,8 +338,8 @@ export default definePluginApp((app) => {
         });
       }
 
-      // Удержание уже открыло меню — гасим штатный клик хоста (иначе он ещё
-      // и палитру переключит).
+      // The hold already opened the menu — swallow the host's click, otherwise
+      // it cycles the palette on top of that.
       document.addEventListener(
         "click",
         (event) => {
@@ -351,7 +351,7 @@ export default definePluginApp((app) => {
         { capture: true, signal },
       );
 
-      // Правый клик — тот же выбор, привычный для десктопа.
+      // Right-click opens the same menu, the way desktop users expect.
       document.addEventListener(
         "contextmenu",
         (event) => {
