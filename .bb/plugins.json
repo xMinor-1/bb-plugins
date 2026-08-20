@@ -1,0 +1,9 @@
+{
+  "$schema": "https://getbb.app/schemas/plugins.schema.json",
+  "schemaVersion": 1,
+  "name": "xminor-bb-plugins",
+  "plugins": [
+    { "name": "theme-toggle", "source": "./plugins/theme-toggle" },
+    { "name": "file-manager", "source": "./plugins/file-manager" }
+  ]
+}
