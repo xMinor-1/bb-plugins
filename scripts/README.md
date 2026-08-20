@@ -6,6 +6,7 @@
 | --- | --- |
 | `new-plugin.sh` | Создаёт новый плагин и регистрирует его в `.bb/plugins.json`. |
 | `check-after-bb-upgrade.sh` | Сторож: проверяет, не сломало ли обновление bb плагины `usage-meter` и `server-status`. |
+| `patch-taskboard-statuses.py` | Даёт GitHub-задачам в панели Taskboard три статуса вместо двух: Todo → In Progress → Closed. |
 
 ## Сторож `check-after-bb-upgrade.sh`
 
@@ -123,3 +124,43 @@ bb automation update $A --project $P --cron "0 8 * * *" --timezone Europe/Sofia
 Автоматизация живёт в проекте `BB Plugins` (`proj_58ezp634x9`), а не в
 `proj_personal`: `bb automation create` этот id не принимает — `Project not
 found`.
+
+## Патч `patch-taskboard-statuses.py`
+
+### Зачем
+
+`bb-plugin-taskboard` — чужой плагин из npm. У GitHub-задач он знает только два
+состояния, Open и Closed, поэтому канбан получается из двух колонок. Патч правит
+установленный плагин так, чтобы колонок стало три:
+
+| Колонка | Что это на GitHub |
+| --- | --- |
+| Todo | открытая задача |
+| In Progress | открытая задача с меткой `in progress` |
+| Closed | закрытая задача |
+
+Перетаскивание карточки между колонками вешает и снимает метку и открывает или
+закрывает задачу. Метку `in progress` нужно один раз завести в каждом
+репозитории:
+
+```sh
+gh label create "in progress" --repo <owner/repo> --color 0e8a16 --description "В работе"
+```
+
+### Как применять
+
+```sh
+python3 scripts/patch-taskboard-statuses.py
+bb plugin reload taskboard
+```
+
+Скрипт идемпотентный, правит `dist/server.js` (его и исполняет bb) и
+`sources/github.ts` в кэше npm, рядом кладёт бэкапы `*.tb-orig`. Откат —
+`--revert`.
+
+### Когда переприменять
+
+Патч живёт в кэше npm и слетает при `bb plugin update taskboard` — после
+обновления плагина прогнать скрипт заново. Если апстрим переписал GitHub-адаптер,
+скрипт остановится с сообщением, какой фрагмент он не нашёл: значит, замены надо
+переписать под новую версию плагина.
