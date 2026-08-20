@@ -5,13 +5,13 @@
 
 | Плагин | Что делает | Статус |
 | --- | --- | --- |
-| [theme-toggle](plugins/theme-toggle) | Кнопка темы в футере сайдбара: клик — следующая палитра, удержание или правый клик — меню выбора палитры и режима светлая / тёмная / как в системе | Работает, релиз `theme-toggle/v0.1.0`; заявка в каталог bb — [PR #74](https://github.com/get-bb/marketplace/pull/74) |
+| [theme-toggle](plugins/theme-toggle) | Кнопка темы в футере сайдбара: клик — следующая палитра, наведение с задержкой, удержание или правый клик — меню выбора палитры и режима светлая / тёмная / как в системе | Работает, релиз `theme-toggle/v0.2.0`; заявка в каталог bb — [PR #74](https://github.com/get-bb/marketplace/pull/74) |
 | [file-manager](plugins/file-manager) | Панель для файлов на сервере bb: дерево, загрузка и скачивание больших файлов потоком | Спецификация готова, реализация не начата |
 
 ## Установка
 
 ```sh
-bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.1.0 --plugin theme-toggle --tag-prefix theme-toggle/
+bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.2.0 --plugin theme-toggle --tag-prefix theme-toggle/
 bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@main --plugin file-manager
 ```
 
@@ -32,14 +32,15 @@ bb plugin install path:. --plugin theme-toggle
 Каждый плагин версионируется отдельно тегом `<плагин>/vX.Y.Z`:
 
 ```sh
-git tag -a theme-toggle/v0.2.0 -m "Release theme-toggle v0.2.0"
-git push origin theme-toggle/v0.2.0
+git tag -a theme-toggle/v0.3.0 -m "Release theme-toggle v0.3.0"
+git push origin theme-toggle/v0.3.0
 ```
 
 Версия в теге должна совпадать с `version` в `package.json` плагина. Тег не
 переносят и не переписывают — на каждый релиз новый. Пока диапазон в записи
-каталога (`^0.1.0`) покрывает новую версию, обновлять запись в каталоге не
-нужно: bb сам увидит релиз. Смена источника, названия, иконки или описания —
+каталога (`^0.2.0`) покрывает новую версию, обновлять запись в каталоге не
+нужно: bb сам увидит релиз. Для версий `0.x` смена второй цифры выходит за
+диапазон — тогда запись в каталоге правится отдельным PR. Смена источника, названия, иконки или описания —
 новый PR в каталог.
 
 ## Новый плагин
