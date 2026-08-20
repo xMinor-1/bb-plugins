@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- An open folder with an upload arrow: browsing plus the upload half of the
+       product. Stroked outline at 1.5 on a 24 viewBox, round caps and joins, to
+       match BB's icon set (hugeicons). BB renders plugin icons as CSS masks,
+       which key off alpha coverage only, so the stroke is an opaque literal
+       rather than currentColor - currentColor has no inherited context inside a
+       mask source, and mask rendering ignores the color anyway. No XML prolog,
+       no DOCTYPE, no script, no external reference: BB's SVG sanitizer rejects
+       the first two and the marketplace forbids the rest. -->
+  <path d="M3.65 17.09V6.4a1.6 1.6 0 0 1 1.6-1.6h2.9a1.6 1.6 0 0 1 1.28.64l1.06 1.42a1.6 1.6 0 0 0 1.28.64h4.13a1.6 1.6 0 0 1 1.6 1.6v2.5"/>
+  <path d="M3.65 17.09 5.45 12.49A1.4 1.4 0 0 1 6.75 11.6h11.1a1.4 1.4 0 0 1 1.3 1.91l-1.8 4.6A1.4 1.4 0 0 1 16.05 19H4.95a1.4 1.4 0 0 1-1.3-1.91Z"/>
+  <path d="M11.4 17.75V13.5m-1.8 1.8 1.8-1.8 1.8 1.8"/>
+</svg>

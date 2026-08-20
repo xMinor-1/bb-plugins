@@ -1,0 +1,434 @@
+// @vitest-environment jsdom
+//
+// The keyboard map of §8.3, key by key, plus the cut/copy/paste round trip of
+// §8.5. Two rules in that table are as important as the shortcuts themselves:
+// keys the panel does not handle must never be preventDefault()ed, and the
+// whole map is skipped while the user is typing in an input.
+import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
+import type { PluginRpcTestHandlers, RenderedSlot, RpcCall } from "@get-bb/plugin-sdk/testing/app";
+
+import type { FileEntry, FileManagerContract } from "../../contract";
+
+const toasts = vi.hoisted(() => ({ error: [] as string[], success: [] as string[] }));
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: (text: string) => void toasts.error.push(text),
+    success: (text: string) => void toasts.success.push(text),
+    message: () => undefined,
+    warning: () => undefined,
+    info: () => undefined,
+  },
+}));
+
+const app = await loadPluginApp(() => import("../../app"));
+const { resetUploadManager } = await import("../../hooks/useUploads");
+const { resetPanelSnapshot } = await import("../../components/panel-bus");
+
+const registration = app.navPanels[0]!;
+const Panel = registration.component;
+const ROOT = "/home/coder";
+const DOCS = `${ROOT}/docs`;
+
+function makeEntry(partial: Partial<FileEntry> & { name: string }): FileEntry {
+  return {
+    name: partial.name,
+    path: partial.path ?? `${ROOT}/${partial.name}`,
+    kind: partial.kind ?? "file",
+    targetKind: partial.targetKind ?? null,
+    sizeBytes: partial.sizeBytes ?? 3,
+    modifiedAtMs: partial.modifiedAtMs ?? Date.UTC(2024, 2, 12),
+    isHidden: false,
+    isSymlink: false,
+    escapesRoot: false,
+    archiveFormat: partial.archiveFormat ?? null,
+  };
+}
+
+const A = makeEntry({ name: "a.txt" });
+const B = makeEntry({ name: "b.txt" });
+const C = makeEntry({ name: "c.txt" });
+const FOLDER = makeEntry({ name: "docs", kind: "directory", path: DOCS });
+
+const PREFERENCES = {
+  showHiddenFiles: false,
+  confirmOnDelete: true,
+  sortField: "name" as const,
+  sortDirection: "asc" as const,
+};
+
+function listingFor(path: string) {
+  const entries = path === ROOT ? [FOLDER, A, B, C] : [makeEntry({ name: "inner.txt", path: `${path}/inner.txt` })];
+  return {
+    path,
+    parentPath: path === ROOT ? null : path.slice(0, path.lastIndexOf("/")),
+    isRoot: path === ROOT,
+    entries,
+    truncated: false,
+    totalEntries: entries.length,
+    hiddenCount: 0,
+    writable: true,
+    volume: null,
+  };
+}
+
+function baseRpc(
+  overrides: Partial<PluginRpcTestHandlers<FileManagerContract>> = {},
+): Partial<PluginRpcTestHandlers<FileManagerContract>> {
+  return {
+    getState: () => ({
+      root: ROOT,
+      startFolder: ROOT,
+      preferences: PREFERENCES,
+      chunkSizeBytes: 8 * 1024 * 1024,
+      maxListEntries: 5000,
+      archiveSupport: { zip: true, tar: true, sevenZip: false },
+      pluginVersion: "0.1.0",
+    }),
+    listDir: (input) => listingFor(input.path),
+    savePreferences: () => ({
+      startFolder: ROOT,
+      preferences: PREFERENCES,
+      chunkSizeBytes: 8 * 1024 * 1024,
+    }),
+    ...overrides,
+  };
+}
+
+async function mountPanel(
+  handlers: Partial<PluginRpcTestHandlers<FileManagerContract>> = baseRpc(),
+  subPath = "",
+): Promise<RenderedSlot> {
+  const slot = renderSlot(
+    { component: registration.component },
+    { subPath },
+    { rpc: handlers as PluginRpcTestHandlers<FileManagerContract> },
+  );
+  await slot.findByTestId("fm-table");
+  await waitFor(() => {
+    expect(slot.queryAllByTestId("fm-row").length).toBeGreaterThan(0);
+  });
+  return slot;
+}
+
+function rowFor(slot: RenderedSlot, path: string): HTMLElement {
+  return slot.getAllByTestId("fm-row").find((row) => row.getAttribute("data-fm-path") === path)!;
+}
+
+function selectedNames(slot: RenderedSlot): string[] {
+  return slot
+    .getAllByTestId("fm-row")
+    .filter((row) => row.getAttribute("data-selected") === "true")
+    .map((row) => (row.getAttribute("data-fm-path") ?? "").slice(ROOT.length + 1));
+}
+
+function callsTo(slot: RenderedSlot, method: string): RpcCall[] {
+  return slot.inspection.rpcCalls.filter((call) => call.method === method);
+}
+
+/** fireEvent returns false when a handler called preventDefault(). */
+function press(target: HTMLElement, init: Record<string, unknown>): boolean {
+  return fireEvent.keyDown(target, init);
+}
+
+beforeEach(() => {
+  toasts.error.length = 0;
+  toasts.success.length = 0;
+  resetUploadManager();
+  resetPanelSnapshot();
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+/* ------------------------------------------------------------------ */
+
+describe("keyboard map (§8.3)", () => {
+  it("moves the cursor with ArrowDown / ArrowUp and extends with Shift", async () => {
+    const slot = await mountPanel();
+    const panel = slot.getByTestId("fm-panel");
+
+    press(panel, { key: "ArrowDown" });
+    expect(selectedNames(slot)).toEqual(["docs"]);
+
+    press(panel, { key: "ArrowDown" });
+    expect(selectedNames(slot)).toEqual(["a.txt"]);
+
+    press(panel, { key: "ArrowDown", shiftKey: true });
+    expect(selectedNames(slot)).toEqual(["a.txt", "b.txt"]);
+
+    press(panel, { key: "ArrowUp", shiftKey: true });
+    expect(selectedNames(slot)).toEqual(["a.txt"]);
+
+    press(panel, { key: "ArrowUp" });
+    expect(selectedNames(slot)).toEqual(["docs"]);
+  });
+
+  it("jumps to the first and last row with Home / End", async () => {
+    const slot = await mountPanel();
+    const panel = slot.getByTestId("fm-panel");
+
+    press(panel, { key: "End" });
+    expect(selectedNames(slot)).toEqual(["c.txt"]);
+
+    press(panel, { key: "Home" });
+    expect(selectedNames(slot)).toEqual(["docs"]);
+
+    press(panel, { key: "End", shiftKey: true });
+    expect(selectedNames(slot)).toEqual(["docs", "a.txt", "b.txt", "c.txt"]);
+  });
+
+  it("opens a directory and downloads a file with Enter", async () => {
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+    const slot = await mountPanel();
+    const panel = slot.getByTestId("fm-panel");
+
+    fireEvent.click(rowFor(slot, DOCS));
+    press(panel, { key: "Enter" });
+    expect(slot.inspection.navigateCalls).toEqual([
+      { method: "toPluginPanel", path: "files", options: { subPath: "docs" } },
+    ]);
+
+    fireEvent.click(rowFor(slot, A.path));
+    press(panel, { key: "Enter" });
+    expect(clicked).toHaveLength(1);
+    expect(clicked[0]).toContain(encodeURIComponent(A.path));
+  });
+
+  it("goes to the parent with Backspace and with Alt+ArrowLeft", async () => {
+    const slot = await mountPanel(baseRpc(), "docs");
+    const panel = slot.getByTestId("fm-panel");
+
+    press(panel, { key: "Backspace" });
+    press(panel, { key: "ArrowLeft", altKey: true });
+
+    expect(slot.inspection.navigateCalls).toEqual([
+      { method: "toPluginPanel", path: "files", options: { subPath: "" } },
+      { method: "toPluginPanel", path: "files", options: { subPath: "" } },
+    ]);
+  });
+
+  it("does nothing on Backspace at the root", async () => {
+    const slot = await mountPanel();
+    press(slot.getByTestId("fm-panel"), { key: "Backspace" });
+    expect(slot.inspection.navigateCalls).toEqual([]);
+  });
+
+  it("opens the rename dialog with F2 only for a single selection", async () => {
+    const slot = await mountPanel();
+    const panel = slot.getByTestId("fm-panel");
+
+    fireEvent.click(rowFor(slot, A.path));
+    fireEvent.click(rowFor(slot, B.path), { ctrlKey: true });
+    press(panel, { key: "F2" });
+    expect(slot.queryByTestId("fm-rename-dialog")).toBeNull();
+
+    fireEvent.click(rowFor(slot, B.path));
+    press(panel, { key: "F2" });
+    const dialog = await slot.findByTestId("fm-rename-dialog");
+    expect((within(dialog).getByLabelText("New name") as HTMLInputElement).value).toBe("b.txt");
+  });
+
+  it("focuses the filter box with Ctrl+F", async () => {
+    const slot = await mountPanel();
+    press(slot.getByTestId("fm-panel"), { key: "f", ctrlKey: true });
+    expect(document.activeElement).toBe(slot.getByTestId("fm-search"));
+  });
+
+  it("opens the new-folder dialog with Ctrl+Shift+N", async () => {
+    const slot = await mountPanel();
+    press(slot.getByTestId("fm-panel"), { key: "N", ctrlKey: true, shiftKey: true });
+    expect(await slot.findByTestId("fm-new-folder-dialog")).toBeDefined();
+  });
+
+  it("toggles hidden files with Ctrl+Shift+.", async () => {
+    const slot = await mountPanel();
+    press(slot.getByTestId("fm-panel"), { key: ".", ctrlKey: true, shiftKey: true });
+
+    await waitFor(() => {
+      expect(callsTo(slot, "listDir")).toHaveLength(2);
+    });
+    expect(callsTo(slot, "listDir")[1]?.input).toEqual({ path: ROOT, showHidden: true });
+    await waitFor(() => {
+      expect(callsTo(slot, "savePreferences")).toEqual([
+        { method: "savePreferences", input: { showHiddenFiles: true } },
+      ]);
+    });
+  });
+
+  it("Escape over the table clears the selection and leaves the filter alone", async () => {
+    // §8.3: "clear search box if focused, else clear selection" — the box is
+    // not focused here, so the filter must survive.
+    const slot = await mountPanel();
+    const panel = slot.getByTestId("fm-panel");
+    const search = slot.getByTestId("fm-search") as HTMLInputElement;
+
+    fireEvent.change(search, { target: { value: "a" } });
+    fireEvent.click(rowFor(slot, A.path));
+    expect(selectedNames(slot)).toEqual(["a.txt"]);
+
+    press(panel, { key: "Escape" });
+    expect(selectedNames(slot)).toEqual([]);
+    expect(search.value).toBe("a");
+  });
+
+  it("Escape inside the focused filter box clears it without touching the selection", async () => {
+    const slot = await mountPanel();
+    const search = slot.getByTestId("fm-search") as HTMLInputElement;
+
+    fireEvent.click(rowFor(slot, A.path));
+    fireEvent.change(search, { target: { value: "a" } });
+    press(search, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(search.value).toBe("");
+    });
+    expect(selectedNames(slot)).toEqual(["a.txt"]);
+  });
+
+  it("leaves F5 and Ctrl+R to the browser (§8.3: not bound)", async () => {
+    const slot = await mountPanel();
+    const panel = slot.getByTestId("fm-panel");
+    const before = callsTo(slot, "listDir").length;
+
+    expect(press(panel, { key: "F5" })).toBe(true);
+    expect(press(panel, { key: "r", ctrlKey: true })).toBe(true);
+    // Sanity: a key the panel *does* handle is cancelled.
+    expect(press(panel, { key: "ArrowDown" })).toBe(false);
+
+    expect(callsTo(slot, "listDir")).toHaveLength(before);
+  });
+
+  it("skips the whole map while the event target is a text input", async () => {
+    const slot = await mountPanel();
+    const search = slot.getByTestId("fm-search");
+
+    press(search, { key: "a", ctrlKey: true });
+    press(search, { key: "ArrowDown" });
+    press(search, { key: "Delete" });
+
+    expect(selectedNames(slot)).toEqual([]);
+    expect(slot.queryByTestId("fm-delete-dialog")).toBeNull();
+  });
+});
+
+describe("cut / copy / paste (§8.5)", () => {
+  it("Ctrl+X then Ctrl+V moves through moveEntries and clears the clipboard", async () => {
+    const slot = await mountPanel(
+      baseRpc({ moveEntries: () => ({ succeeded: [A.path], failed: [] }) }),
+    );
+    const panel = slot.getByTestId("fm-panel");
+
+    fireEvent.click(rowFor(slot, A.path));
+    press(panel, { key: "x", ctrlKey: true });
+    await waitFor(() => {
+      expect(rowFor(slot, A.path).className).toContain("opacity-50");
+    });
+
+    slot.lifecycle.rerender(<Panel subPath="docs" />);
+    await slot.findByText("inner.txt");
+    press(slot.getByTestId("fm-panel"), { key: "v", ctrlKey: true });
+
+    await waitFor(() => {
+      expect(callsTo(slot, "moveEntries")).toEqual([
+        {
+          method: "moveEntries",
+          input: { paths: [A.path], destinationDir: DOCS, conflict: "fail" },
+        },
+      ]);
+    });
+
+    // The cut clipboard is consumed by the paste.
+    press(slot.getByTestId("fm-panel"), { key: "v", ctrlKey: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(callsTo(slot, "moveEntries")).toHaveLength(1);
+  });
+
+  it("Ctrl+C then Ctrl+V copies through copyEntries and keeps the clipboard", async () => {
+    const slot = await mountPanel(
+      baseRpc({ copyEntries: () => ({ succeeded: [A.path], failed: [] }) }),
+    );
+    const panel = slot.getByTestId("fm-panel");
+
+    fireEvent.click(rowFor(slot, A.path));
+    fireEvent.click(rowFor(slot, B.path), { ctrlKey: true });
+    press(panel, { key: "c", ctrlKey: true });
+    expect(rowFor(slot, A.path).className).not.toContain("opacity-50");
+
+    slot.lifecycle.rerender(<Panel subPath="docs" />);
+    await slot.findByText("inner.txt");
+    press(slot.getByTestId("fm-panel"), { key: "v", ctrlKey: true });
+
+    await waitFor(() => {
+      expect(callsTo(slot, "copyEntries")).toEqual([
+        {
+          method: "copyEntries",
+          input: { paths: [A.path, B.path], destinationDir: DOCS, conflict: "rename" },
+        },
+      ]);
+    });
+
+    press(slot.getByTestId("fm-panel"), { key: "v", ctrlKey: true });
+    await waitFor(() => {
+      expect(callsTo(slot, "copyEntries")).toHaveLength(2);
+    });
+  });
+
+  it("re-issues the move with overwrite when the conflict dialog says Replace", async () => {
+    const moves: unknown[] = [];
+    const slot = await mountPanel(
+      baseRpc({
+        moveEntries: (input) => {
+          moves.push(input);
+          return moves.length === 1
+            ? {
+                succeeded: [],
+                failed: [{ path: A.path, code: "exists" as const, message: "exists" }],
+              }
+            : { succeeded: [A.path], failed: [] };
+        },
+      }),
+    );
+
+    fireEvent.click(rowFor(slot, A.path));
+    press(slot.getByTestId("fm-panel"), { key: "x", ctrlKey: true });
+    slot.lifecycle.rerender(<Panel subPath="docs" />);
+    await slot.findByText("inner.txt");
+    press(slot.getByTestId("fm-panel"), { key: "v", ctrlKey: true });
+
+    const dialog = await slot.findByTestId("fm-conflict-dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Replace" }));
+
+    await waitFor(() => {
+      expect(moves).toEqual([
+        { paths: [A.path], destinationDir: DOCS, conflict: "fail" },
+        { paths: [A.path], destinationDir: DOCS, conflict: "overwrite" },
+      ]);
+    });
+  });
+
+  it("refuses to paste a cut folder into itself", async () => {
+    const slot = await mountPanel(
+      baseRpc({ moveEntries: () => ({ succeeded: [], failed: [] }) }),
+    );
+
+    fireEvent.click(rowFor(slot, DOCS));
+    press(slot.getByTestId("fm-panel"), { key: "x", ctrlKey: true });
+
+    slot.lifecycle.rerender(<Panel subPath="docs" />);
+    await slot.findByText("inner.txt");
+    press(slot.getByTestId("fm-panel"), { key: "v", ctrlKey: true });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(callsTo(slot, "moveEntries")).toHaveLength(0);
+  });
+});

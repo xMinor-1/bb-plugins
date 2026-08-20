@@ -1,61 +1,107 @@
-// bb-plugin-file-manager — a BB plugin backend entry.
+// server.ts — File Manager backend entry (§1: a plain bb.server factory over
+// node:fs; metadata through bb.rpc, bytes through bb.http.route).
 //
-// The default export is a factory that receives the plugin API. BB supplies
-// the tiny defineRpcContract runtime helper; the API type remains type-only.
-import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
-import { z } from "zod";
+// This file is wiring only. It resolves the hard root once, builds the settings
+// module, hands the two halves of the contract to bb.rpc, registers the byte
+// routes and the upload GC schedule, and logs on dispose.
+import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
-export const rpcContract = defineRpcContract({
-  greeting: {
-    input: z.null(),
-    output: z.object({ greeting: z.string(), loadCount: z.number().int() }),
-  },
-});
+// One source of truth for both sides (§4): the panel does
+// `useRpc<typeof fileManagerContract>()` against this re-export.
+export { fileManagerContract } from "./contract";
 
-export default async function plugin(bb: BbPluginApi) {
-  bb.log.info("loaded");
+import { registerRpc, type ArchiveSupport } from "./src/rpc";
+import { createSettings } from "./src/settings";
+import { getRoot, initRoot } from "./src/root";
 
-  // Declarative settings — rendered in BB's settings UI and editable with
-  // `bb plugin config file-manager`. Add `secret: true` for values like API keys.
-  const settings = bb.settings.define({
-    greeting: { type: "string", label: "Greeting", default: "hello" },
+/* --- BACKEND-TRANSFER modules (see the integration note at the bottom) --- */
+import { createArchives } from "./src/archives";
+import { createJobs } from "./src/jobs";
+import { createUploads } from "./src/uploads";
+import { registerHttpRoutes } from "./src/http-routes";
+
+/** Kept in sync with package.json#version by hand, like the first-party plugins. */
+export const PLUGIN_VERSION = "0.2.0";
+export const PLUGIN_NAME = "File Manager";
+
+/** §5.2: hourly sweep of upload sessions whose part file is older than 24 h. */
+const UPLOAD_GC_CRON = "17 * * * *";
+const UPLOAD_GC_NAME = "upload-gc";
+
+export default async function plugin(bb: BbPluginApi): Promise<void> {
+  // §6: ROOT is realpath'ed exactly once; every later path check compares
+  // against this value, after its own realpath.
+  const root = await initRoot();
+  const settings = await createSettings(bb);
+
+  /* ---------------- byte transfer (BACKEND-TRANSFER) ---------------- */
+  const jobs = await createJobs(bb);
+  const archives = await createArchives(bb, { jobs, settings });
+  const uploads = await createUploads(bb, { settings });
+  const archiveSupport: ArchiveSupport = archives.support;
+
+  registerHttpRoutes(bb, { uploads });
+  bb.background.schedule(UPLOAD_GC_NAME, UPLOAD_GC_CRON, async () => {
+    const dropped = await uploads.sweep();
+    if (dropped > 0) bb.log.info(`upload-gc dropped ${dropped} stale upload session(s)`);
   });
-  const { greeting } = await settings.get();
-
-  // Namespaced key-value storage in bb.db (JSON values, up to 256KB each).
-  // For bigger or relational data use bb.storage.database().
-  const loadCount = ((await bb.storage.kv.get<number>("load-count")) ?? 0) + 1;
-  await bb.storage.kv.set("load-count", loadCount);
-  bb.log.info(`${greeting} — load #${loadCount}`);
-
-  // Both schemas run at the wire boundary. Handler input/output are inferred
-  // from the shared contract; app.tsx imports only its type.
-  bb.rpc.register(rpcContract, {
-    greeting: () => ({ greeting, loadCount }),
+  // §5.2: the GC also runs once at load, so a crash mid-upload cannot leave
+  // stale parts lying around until the next hour boundary.
+  void uploads.sweep().catch((error: unknown) => {
+    bb.log.warn(`upload-gc sweep at load failed: ${String(error)}`);
   });
 
-  // Cleanup on reload/disable/shutdown; hooks run LIFO. The sanctioned place
-  // to clear timers and close connections.
+  /* ---------------- rpc ---------------- */
+  registerRpc(bb, {
+    settings,
+    archiveSupport,
+    pluginVersion: PLUGIN_VERSION,
+    transfer: {
+      extractArchive: archives.extractArchive,
+      jobStatus: jobs.jobStatus,
+      jobCancel: jobs.jobCancel,
+      uploadCreate: uploads.uploadCreate,
+      uploadStatus: uploads.uploadStatus,
+      uploadFinish: uploads.uploadFinish,
+      uploadAbort: uploads.uploadAbort,
+    },
+  });
+
+  bb.log.info(
+    `${PLUGIN_NAME} ${PLUGIN_VERSION} loaded — root ${root}` +
+      ` (zip:${archiveSupport.zip} tar:${archiveSupport.tar} 7z:${archiveSupport.sevenZip})`,
+  );
+
   bb.onDispose(() => {
-    bb.log.info("disposed");
+    // Hooks run LIFO, so this one — registered last — runs *first*, and must
+    // therefore not tear anything down that the modules still need.
+    // `createArchives` registers its own hook (kill the extractor children,
+    // delete their staging directories) and it runs right after this line.
+    // Uploads need no hook: a chunk in flight holds nothing but a raw fd, and
+    // its `.part` file is the resume point by design (§5.2).
+    bb.log.info(`${PLUGIN_NAME} disposed — root was ${getRoot()}`);
   });
-
-  // Long-lived background work: starts after load, gets an AbortSignal on
-  // reload/disable/shutdown, and restarts with backoff if it crashes. Sleeps
-  // must wake on abort — a plain setTimeout sleeps through the stop window
-  // and the plugin reports "degraded (service did not stop)" on reload.
-  // bb.background.service("worker", {
-  //   async start(signal) {
-  //     while (!signal.aborted) {
-  //       await new Promise((resolve) => {
-  //         const timer = setTimeout(resolve, 60_000);
-  //         signal.addEventListener(
-  //           "abort",
-  //           () => { clearTimeout(timer); resolve(undefined); },
-  //           { once: true },
-  //         );
-  //       });
-  //     }
-  //   },
-  // });
 }
+
+/* --------------------------------------------------------------------------
+ * Integration note (BACKEND-CORE → BACKEND-TRANSFER)
+ *
+ * The four imports above are the *entire* coupling surface between the two
+ * backend workstreams. src/rpc.ts deliberately imports none of them: it takes
+ * the seven transfer methods as `deps.transfer`, typed straight off
+ * contract.ts, so a name change here is a one-line edit in this file only.
+ *
+ * Expected exports:
+ *   src/jobs.ts        createJobs(bb) -> { jobStatus, jobCancel }
+ *                      (handlers matching the contract methods of the same name)
+ *   src/archives.ts    createArchives(bb, { jobs, settings })
+ *                        -> { extractArchive, support: { zip, tar, sevenZip } }
+ *   src/uploads.ts     createUploads(bb, { settings })
+ *                        -> { uploadCreate, uploadStatus, uploadFinish,
+ *                             uploadAbort, sweep() }
+ *   src/http-routes.ts registerHttpRoutes(bb, { uploads }) -> void
+ *
+ * All three factories are awaited, so returning a plain object is fine too.
+ * `settings` is the SettingsModule from src/settings.ts (chunkSizeBytes(),
+ * preferences(), values(), resolveStartFolder(), savePreferences()).
+ * ------------------------------------------------------------------------ */
