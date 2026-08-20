@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-theme-toggle",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -14,7 +14,7 @@
   },
   "bb": {
     "name": "Theme Toggle",
-    "description": "Switches the bb palette from the sidebar footer: click cycles palettes, hold or right-click opens a menu with light/dark/system appearance and every installed palette.",
+    "description": "Switches the bb palette from the sidebar footer: click cycles palettes, and hovering, holding, or right-clicking opens a menu with light/dark/system appearance and every installed palette.",
     "branding": {
       "icon": "./icon.svg"
     },

@@ -1,6 +1,7 @@
 // Theme button in the sidebar footer.
 //   short click        — next palette
 //   hold / right-click — menu: light / dark / system + the palette list
+//   hover and wait     — the same menu, without pressing anything (mouse only)
 //
 // sidebarFooterAction is rendered by the host, so the long-press is attached by
 // a content script to the host's own button markup (stable data-testid), and
@@ -12,6 +13,12 @@ const PLUGIN_ID = "theme-toggle";
 const ACTION_ID = "cycle-theme";
 const BUTTON_SELECTOR = `[data-testid="plugin-sidebar-footer-action-${PLUGIN_ID}-${ACTION_ID}"]`;
 const HOLD_MS = 400;
+// Hovering opens the same menu, so the button answers a resting cursor without
+// a click. Long enough that a cursor crossing the footer never triggers it.
+const HOVER_MS = 600;
+// A hover-opened menu closes itself once the cursor leaves; the grace period
+// covers the gap the cursor crosses between the button and the panel.
+const CLOSE_GRACE_MS = 250;
 
 // Appearance is a client-side bb setting (jotai atomWithStorage, raw string).
 // The key and its values match the app's own useTheme.
@@ -169,19 +176,38 @@ function makeSeparator(): HTMLDivElement {
 class ThemeMenu {
   private panel: HTMLDivElement | null = null;
   private cleanup: Array<() => void> = [];
+  private closeTimer: number | null = null;
+  // A hover-opened menu was not asked for, so a click on the button should
+  // still cycle the palette; a held-open one swallows that click instead.
+  openedByHover = false;
 
   get isOpen(): boolean {
     return this.panel !== null;
   }
 
+  private cancelClose = (): void => {
+    if (this.closeTimer !== null) {
+      window.clearTimeout(this.closeTimer);
+      this.closeTimer = null;
+    }
+  };
+
+  private armClose = (): void => {
+    this.cancelClose();
+    this.closeTimer = window.setTimeout(this.close, CLOSE_GRACE_MS);
+  };
+
   close = (): void => {
+    this.cancelClose();
     for (const off of this.cleanup.splice(0)) off();
     this.panel?.remove();
     this.panel = null;
+    this.openedByHover = false;
   };
 
-  async open(anchor: HTMLElement): Promise<void> {
+  async open(anchor: HTMLElement, byHover = false): Promise<void> {
     this.close();
+    this.openedByHover = byHover;
     const panel = document.createElement("div");
     panel.setAttribute("style", PANEL_STYLE);
     panel.setAttribute("role", "menu");
@@ -208,6 +234,17 @@ class ThemeMenu {
       () => document.removeEventListener("keydown", onKeyDown, true),
       () => window.removeEventListener("resize", this.close),
     );
+
+    if (byHover) {
+      panel.addEventListener("pointerenter", this.cancelClose);
+      panel.addEventListener("pointerleave", this.armClose);
+      anchor.addEventListener("pointerenter", this.cancelClose);
+      anchor.addEventListener("pointerleave", this.armClose);
+      this.cleanup.push(
+        () => anchor.removeEventListener("pointerenter", this.cancelClose),
+        () => anchor.removeEventListener("pointerleave", this.armClose),
+      );
+    }
 
     const render = (state: ThemeState) => {
       if (this.panel !== panel) return;
@@ -297,7 +334,11 @@ export default definePluginApp((app) => {
     mount({ signal }) {
       const menu = new ThemeMenu();
       let holdTimer: number | null = null;
+      let hoverTimer: number | null = null;
       let suppressClick = false;
+      // Set while the cursor rests on the button after a press: without it the
+      // menu would pop up again on its own right after every click.
+      let hoverBlocked = false;
 
       const buttonFrom = (target: EventTarget | null): HTMLElement | null =>
         target instanceof Element
@@ -311,14 +352,28 @@ export default definePluginApp((app) => {
         }
       };
 
+      const cancelHover = () => {
+        if (hoverTimer !== null) {
+          window.clearTimeout(hoverTimer);
+          hoverTimer = null;
+        }
+      };
+
       document.addEventListener(
         "pointerdown",
         (event) => {
           const button = buttonFrom(event.target);
           if (!button || event.button !== 0) return;
+          cancelHover();
+          // Pressing the button is an explicit choice: no menu until the cursor
+          // has left and come back.
+          hoverBlocked = true;
           if (menu.isOpen) {
+            const wasHover = menu.openedByHover;
             menu.close();
-            suppressClick = true;
+            // The hover menu opened by itself, so let the click do its usual
+            // job — cycle the palette. A held-open menu swallows it.
+            suppressClick = !wasHover;
             return;
           }
           cancelHold();
@@ -337,6 +392,38 @@ export default definePluginApp((app) => {
           signal,
         });
       }
+
+      // Resting the cursor on the button opens the menu. Mouse only: a touch
+      // "hover" is just the start of a tap, and that path is the hold gesture.
+      document.addEventListener(
+        "pointerover",
+        (event) => {
+          if (event.pointerType !== "mouse") return;
+          const button = buttonFrom(event.target);
+          if (!button || hoverBlocked || menu.isOpen || hoverTimer !== null) {
+            return;
+          }
+          hoverTimer = window.setTimeout(() => {
+            hoverTimer = null;
+            void menu.open(button, true);
+          }, HOVER_MS);
+        },
+        { capture: true, signal },
+      );
+
+      document.addEventListener(
+        "pointerout",
+        (event) => {
+          const button = buttonFrom(event.target);
+          if (!button) return;
+          // Moving between the button's own children is not a departure.
+          const to = event.relatedTarget;
+          if (to instanceof Node && button.contains(to)) return;
+          cancelHover();
+          hoverBlocked = false;
+        },
+        { capture: true, signal },
+      );
 
       // The hold already opened the menu — swallow the host's click, otherwise
       // it cycles the palette on top of that.
@@ -366,6 +453,7 @@ export default definePluginApp((app) => {
 
       return () => {
         cancelHold();
+        cancelHover();
         menu.close();
       };
     },

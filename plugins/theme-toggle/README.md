@@ -3,9 +3,13 @@
 Theme switching one click away, in the bb sidebar footer.
 
 - **Click** — cycle to the next palette.
-- **Hold (400 ms) or right-click** — a menu with light / dark / system
-  appearance and the full palette list, including palettes contributed by
-  other plugins.
+- **Hover and wait (600 ms)** — the menu opens on its own, no click needed.
+  Mouse only, and it closes again once the cursor leaves.
+- **Hold (400 ms) or right-click** — the same menu, for touch and for people
+  who would rather ask for it.
+
+The menu lists light / dark / system appearance and every palette on the host,
+including ones contributed by other plugins.
 
 ## Install
 

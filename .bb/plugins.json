@@ -8,6 +8,10 @@
       "source": "./plugins/file-manager"
     },
     {
+      "name": "server-status",
+      "source": "./plugins/server-status"
+    },
+    {
       "name": "theme-toggle",
       "source": "./plugins/theme-toggle"
     }
