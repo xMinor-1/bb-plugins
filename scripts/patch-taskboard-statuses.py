@@ -42,6 +42,10 @@ DIST_REPLACEMENTS: list[tuple[str, str]] = [
         'var DEFAULT_STAGE_LABEL = "coding";\n'
         'function hasInProgressLabel(labels) {\n'
         '  return labels.some((label) => IN_PROGRESS_LABELS.includes(label.trim().toLowerCase()));\n'
+        '}\n'
+        'function stageLabelsFirst(labels) {\n'
+        '  const stage = (label) => IN_PROGRESS_LABELS.includes(label.trim().toLowerCase()) ? 0 : 1;\n'
+        '  return [...labels].sort((left, right) => stage(left) - stage(right));\n'
         '}',
     ),
     (
@@ -58,6 +62,18 @@ DIST_REPLACEMENTS: list[tuple[str, str]] = [
         '    stateCategory: open ? "todo" : "done",',
         '    status: open ? inProgress ? "In Progress" : "Todo" : "Done",\n'
         '    stateCategory: open ? inProgress ? "in_progress" : "todo" : "done",',
+    ),
+    (
+        '    labels: value.labels,\n'
+        '    updatedAt: value.updatedAt,\n'
+        '    comments\n'
+        '  };\n'
+        '}',
+        '    labels: stageLabelsFirst(value.labels),\n'
+        '    updatedAt: value.updatedAt,\n'
+        '    comments\n'
+        '  };\n'
+        '}',
     ),
     (
         '  async function statusOptions(locator) {\n'
@@ -185,6 +201,11 @@ SOURCE_REPLACEMENTS: list[tuple[str, str]] = [
         '    IN_PROGRESS_LABELS.includes(label.trim().toLowerCase())\n'
         '  );\n'
         '}\n\n'
+        'function stageLabelsFirst(labels: readonly string[]): string[] {\n'
+        '  const stage = (label: string): number =>\n'
+        '    IN_PROGRESS_LABELS.includes(label.trim().toLowerCase()) ? 0 : 1;\n'
+        '  return [...labels].sort((left, right) => stage(left) - stage(right));\n'
+        '}\n\n'
         'function toItem(\n'
         '  value: z.infer<typeof githubItemSchema>,\n'
         '  comments: ExternalWorkItemDetail[\'comments\'] = []\n'
@@ -198,6 +219,18 @@ SOURCE_REPLACEMENTS: list[tuple[str, str]] = [
         '    stateCategory: open ? \'todo\' : \'done\',',
         '    status: open ? (inProgress ? \'In Progress\' : \'Todo\') : \'Done\',\n'
         '    stateCategory: open ? (inProgress ? \'in_progress\' : \'todo\') : \'done\',',
+    ),
+    (
+        '    labels: value.labels,\n'
+        '    updatedAt: value.updatedAt,\n'
+        '    comments\n'
+        '  };\n'
+        '}',
+        '    labels: stageLabelsFirst(value.labels),\n'
+        '    updatedAt: value.updatedAt,\n'
+        '    comments\n'
+        '  };\n'
+        '}',
     ),
     (
         '    const issue = await scopedIssue(locator);\n'
@@ -289,6 +322,53 @@ SOURCE_REPLACEMENTS: list[tuple[str, str]] = [
 ]
 
 
+# ---------------------------------------------------------------- dist/app.js, dist/app.css
+# Панель рисует все метки одинаково серыми. Проставляем каждой метке data-label,
+# чтобы в стилях покрасить стадии в их цвета с GitHub.
+
+APP_REPLACEMENTS: list[tuple[str, str]] = [
+    (
+        '            className: "tb-label-chip min-w-0 truncate rounded-full px-2 py-0.5 text-xs",\n'
+        '            title: label,',
+        '            className: "tb-label-chip min-w-0 truncate rounded-full px-2 py-0.5 text-xs",\n'
+        '            "data-label": label.trim().toLowerCase(),\n'
+        '            title: label,',
+    ),
+    (
+        'item.labels.map((label) => /* @__PURE__ */ jsx(Badge, { variant: "secondary", children: label }, label))',
+        'item.labels.map((label) => /* @__PURE__ */ jsx(Badge, { variant: "secondary", "data-label": label.trim().toLowerCase(), children: label }, label))',
+    ),
+]
+
+LABEL_COLORS: list[tuple[str, str]] = [
+    ("coding", "#1f6feb"),
+    ("review", "#8250df"),
+    ("qa", "#bf8700"),
+    ("blocked", "#b60205"),
+    ("in progress", "#0e8a16"),
+    ("now", "#0e8a16"),
+    ("next", "#1d76db"),
+    ("later", "#6e7781"),
+    ("idea", "#d4a72c"),
+    ("bug", "#d73a4a"),
+]
+
+CSS_MARKER = "/* patch-taskboard-statuses */"
+
+
+def css_block() -> str:
+    rules = [CSS_MARKER]
+    for name, color in LABEL_COLORS:
+        rules.append(
+            f'[data-label="{name}"] {{\n'
+            f"  border-color: color-mix(in oklch, {color} 45%, transparent) !important;\n"
+            f"  background: color-mix(in oklch, {color} 16%, var(--canvas)) !important;\n"
+            f"  color: color-mix(in oklch, {color} 55%, var(--ink)) !important;\n"
+            f"}}"
+        )
+    return "\n" + "\n".join(rules) + "\n"
+
+
 def installed_plugin_dirs() -> list[Path]:
     if not CACHE.is_dir():
         return []
@@ -300,9 +380,14 @@ def installed_plugin_dirs() -> list[Path]:
     return [directory for directory in dirs if (directory / "dist/server.js").is_file()]
 
 
-def apply(path: Path, replacements: list[tuple[str, str]], strict: bool) -> bool:
+def apply(
+    path: Path,
+    replacements: list[tuple[str, str]],
+    strict: bool,
+    marker: str = MARKER,
+) -> bool:
     text = path.read_text(encoding="utf-8")
-    if MARKER in text:
+    if marker in text:
         return False
     updated = text
     for old, new in replacements:
@@ -326,8 +411,19 @@ def apply(path: Path, replacements: list[tuple[str, str]], strict: bool) -> bool
     return True
 
 
+def append_css(path: Path) -> bool:
+    text = path.read_text(encoding="utf-8")
+    if CSS_MARKER in text:
+        return False
+    backup = path.with_suffix(path.suffix + ".tb-orig")
+    if not backup.exists():
+        shutil.copy2(path, backup)
+    path.write_text(text.rstrip("\n") + "\n" + css_block(), encoding="utf-8")
+    return True
+
+
 def revert(directory: Path) -> None:
-    for name in ("dist/server.js", "sources/github.ts"):
+    for name in ("dist/server.js", "sources/github.ts", "dist/app.js", "dist/app.css"):
         path = directory / name
         backup = path.with_suffix(path.suffix + ".tb-orig")
         if backup.exists():
@@ -356,6 +452,12 @@ def main() -> None:
         if source.is_file():
             changed = apply(source, SOURCE_REPLACEMENTS, strict=False)
             print("  sources/github.ts: " + ("пропатчен" if changed else "уже пропатчен"))
+        changed = apply(
+            directory / "dist/app.js", APP_REPLACEMENTS, strict=True, marker='"data-label"'
+        )
+        print("  dist/app.js: " + ("пропатчен" if changed else "уже пропатчен"))
+        changed = append_css(directory / "dist/app.css")
+        print("  dist/app.css: " + ("пропатчен" if changed else "уже пропатчен"))
 
     if not args.revert:
         print("\nДальше: bb plugin reload taskboard")
