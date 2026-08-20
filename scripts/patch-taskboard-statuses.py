@@ -3,8 +3,10 @@
 
 Плагин `bb-plugin-taskboard` (чужой, ставится из npm) знает у GitHub-задач только
 Open и Closed — канбан из двух колонок. Скрипт правит установленный плагин так,
-чтобы колонок стало три: Todo → In Progress → Done, где «In Progress» это
-открытая задача с меткой `in progress` в репозитории.
+чтобы колонок стало три: Todo → In Progress → Done. «In Progress» — это открытая
+задача, на которой висит любая из меток-стадий: `coding`, `review`, `qa`, `blocked`
+или общая `in progress`. Стадия внутри работы меняется меткой, колонка при этом
+остаётся одна.
 
 Патч живёт в кэше npm и слетает при обновлении плагина — после
 `bb plugin update taskboard` прогнать скрипт заново:
@@ -36,9 +38,10 @@ DIST_REPLACEMENTS: list[tuple[str, str]] = [
         '  ok: external_exports.literal(true),\n'
         '  labels: external_exports.array(external_exports.string())\n'
         '}).strict();\n'
-        'var IN_PROGRESS_LABEL = "in progress";\n'
+        'var IN_PROGRESS_LABELS = ["in progress", "coding", "review", "qa", "blocked"];\n'
+        'var DEFAULT_STAGE_LABEL = "coding";\n'
         'function hasInProgressLabel(labels) {\n'
-        '  return labels.some((label) => label.trim().toLowerCase() === IN_PROGRESS_LABEL);\n'
+        '  return labels.some((label) => IN_PROGRESS_LABELS.includes(label.trim().toLowerCase()));\n'
         '}',
     ),
     (
@@ -131,8 +134,8 @@ DIST_REPLACEMENTS: list[tuple[str, str]] = [
         '        const wantLabel = statusId === "in-progress";\n'
         '        const hasLabel = hasInProgressLabel(detail.labels);\n'
         '        if (wantLabel !== hasLabel) {\n'
-        '          const labels = wantLabel ? [...detail.labels, IN_PROGRESS_LABEL] : detail.labels.filter(\n'
-        '            (label) => label.trim().toLowerCase() !== IN_PROGRESS_LABEL\n'
+        '          const labels = wantLabel ? [...detail.labels, DEFAULT_STAGE_LABEL] : detail.labels.filter(\n'
+        '            (label) => !IN_PROGRESS_LABELS.includes(label.trim().toLowerCase())\n'
         '          );\n'
         '          await bb.sdk.plugins.callRpc({\n'
         '            pluginId: "github",\n'
@@ -169,9 +172,18 @@ SOURCE_REPLACEMENTS: list[tuple[str, str]] = [
         '): ExternalWorkItemDetail {\n'
         '  const open = value.state.toLowerCase() === \'open\';\n'
         '  return {',
-        'const IN_PROGRESS_LABEL = \'in progress\';\n\n'
+        'const IN_PROGRESS_LABELS: readonly string[] = [\n'
+        '  \'in progress\',\n'
+        '  \'coding\',\n'
+        '  \'review\',\n'
+        '  \'qa\',\n'
+        '  \'blocked\'\n'
+        '];\n'
+        'const DEFAULT_STAGE_LABEL = \'coding\';\n\n'
         'function hasInProgressLabel(labels: readonly string[]): boolean {\n'
-        '  return labels.some(label => label.trim().toLowerCase() === IN_PROGRESS_LABEL);\n'
+        '  return labels.some(label =>\n'
+        '    IN_PROGRESS_LABELS.includes(label.trim().toLowerCase())\n'
+        '  );\n'
         '}\n\n'
         'function toItem(\n'
         '  value: z.infer<typeof githubItemSchema>,\n'
@@ -242,9 +254,10 @@ SOURCE_REPLACEMENTS: list[tuple[str, str]] = [
         '        const wantLabel = statusId === \'in-progress\';\n'
         '        if (wantLabel !== hasInProgressLabel(detail.labels)) {\n'
         '          const labels = wantLabel\n'
-        '            ? [...detail.labels, IN_PROGRESS_LABEL]\n'
+        '            ? [...detail.labels, DEFAULT_STAGE_LABEL]\n'
         '            : detail.labels.filter(\n'
-        '                label => label.trim().toLowerCase() !== IN_PROGRESS_LABEL\n'
+        '                label =>\n'
+        '                  !IN_PROGRESS_LABELS.includes(label.trim().toLowerCase())\n'
         '              );\n'
         '          await bb.sdk.plugins.callRpc({\n'
         '            pluginId: \'github\',\n'
