@@ -24,6 +24,15 @@ bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@main --plugin f
 bb plugin install path:. --plugin theme-toggle
 ```
 
+## Новый плагин
+
+```sh
+scripts/new-plugin.sh <имя> [--app]
+```
+
+Создаёт `plugins/<имя>` и регистрирует его в `.bb/plugins.json`. Остальные шаги —
+в [CLAUDE.md](CLAUDE.md).
+
 ## Разработка
 
 ```sh

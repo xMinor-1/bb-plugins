@@ -3,7 +3,13 @@
   "schemaVersion": 1,
   "name": "xminor-bb-plugins",
   "plugins": [
-    { "name": "theme-toggle", "source": "./plugins/theme-toggle" },
-    { "name": "file-manager", "source": "./plugins/file-manager" }
+    {
+      "name": "file-manager",
+      "source": "./plugins/file-manager"
+    },
+    {
+      "name": "theme-toggle",
+      "source": "./plugins/theme-toggle"
+    }
   ]
 }
