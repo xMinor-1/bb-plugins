@@ -6,7 +6,7 @@
 | --- | --- |
 | `new-plugin.sh` | Создаёт новый плагин и регистрирует его в `.bb/plugins.json`. |
 | `check-after-bb-upgrade.sh` | Сторож: проверяет, не сломало ли обновление bb плагины `usage-meter` и `server-status`. |
-| `patch-taskboard-statuses.py` | Даёт GitHub-задачам в панели Taskboard три статуса вместо двух: Todo → In Progress → Closed. |
+| `patch-taskboard-statuses.py` | Даёт GitHub-задачам в панели Taskboard три статуса вместо двух: Todo → In Progress → Done. |
 
 ## Сторож `check-after-bb-upgrade.sh`
 
@@ -137,7 +137,7 @@ found`.
 | --- | --- |
 | Todo | открытая задача |
 | In Progress | открытая задача с меткой `in progress` |
-| Closed | закрытая задача |
+| Done | закрытая задача |
 
 Перетаскивание карточки между колонками вешает и снимает метку и открывает или
 закрывает задачу. Метку `in progress` нужно один раз завести в каждом

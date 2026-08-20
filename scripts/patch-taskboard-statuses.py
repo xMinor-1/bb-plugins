@@ -3,7 +3,7 @@
 
 Плагин `bb-plugin-taskboard` (чужой, ставится из npm) знает у GitHub-задач только
 Open и Closed — канбан из двух колонок. Скрипт правит установленный плагин так,
-чтобы колонок стало три: Todo → In Progress → Closed, где «In Progress» это
+чтобы колонок стало три: Todo → In Progress → Done, где «In Progress» это
 открытая задача с меткой `in progress` в репозитории.
 
 Патч живёт в кэше npm и слетает при обновлении плагина — после
@@ -53,7 +53,7 @@ DIST_REPLACEMENTS: list[tuple[str, str]] = [
     (
         '    status: value.state,\n'
         '    stateCategory: open ? "todo" : "done",',
-        '    status: open ? inProgress ? "In Progress" : "Todo" : "Closed",\n'
+        '    status: open ? inProgress ? "In Progress" : "Todo" : "Done",\n'
         '    stateCategory: open ? inProgress ? "in_progress" : "todo" : "done",',
     ),
     (
@@ -92,9 +92,9 @@ DIST_REPLACEMENTS: list[tuple[str, str]] = [
         '      },\n'
         '      {\n'
         '        id: "closed",\n'
-        '        name: "Closed",\n'
+        '        name: "Done",\n'
         '        stateCategory: "done",\n'
-        '        current: detail.status === "Closed"\n'
+        '        current: detail.status === "Done"\n'
         '      }\n'
         '    ];\n'
         '  }',
@@ -142,7 +142,7 @@ DIST_REPLACEMENTS: list[tuple[str, str]] = [
         '          });\n'
         '        }\n'
         '        const wantState = statusId === "closed" ? "closed" : "open";\n'
-        '        const hasState = detail.status === "Closed" ? "closed" : "open";\n'
+        '        const hasState = detail.status === "Done" ? "closed" : "open";\n'
         '        if (wantState !== hasState) {\n'
         '          await bb.sdk.plugins.callRpc({\n'
         '            pluginId: "github",\n'
@@ -184,7 +184,7 @@ SOURCE_REPLACEMENTS: list[tuple[str, str]] = [
     (
         '    status: value.state,\n'
         '    stateCategory: open ? \'todo\' : \'done\',',
-        '    status: open ? (inProgress ? \'In Progress\' : \'Todo\') : \'Closed\',\n'
+        '    status: open ? (inProgress ? \'In Progress\' : \'Todo\') : \'Done\',\n'
         '    stateCategory: open ? (inProgress ? \'in_progress\' : \'todo\') : \'done\',',
     ),
     (
@@ -220,9 +220,9 @@ SOURCE_REPLACEMENTS: list[tuple[str, str]] = [
         '      },\n'
         '      {\n'
         '        id: \'closed\',\n'
-        '        name: \'Closed\',\n'
+        '        name: \'Done\',\n'
         '        stateCategory: \'done\',\n'
-        '        current: issue.status === \'Closed\'\n'
+        '        current: issue.status === \'Done\'\n'
         '      }\n'
         '    ];',
     ),
@@ -254,7 +254,7 @@ SOURCE_REPLACEMENTS: list[tuple[str, str]] = [
         '          });\n'
         '        }\n'
         '        const wantState = statusId === \'closed\' ? \'closed\' : \'open\';\n'
-        '        const hasState = detail.status === \'Closed\' ? \'closed\' : \'open\';\n'
+        '        const hasState = detail.status === \'Done\' ? \'closed\' : \'open\';\n'
         '        if (wantState !== hasState) {\n'
         '          await bb.sdk.plugins.callRpc({\n'
         '            pluginId: \'github\',\n'
