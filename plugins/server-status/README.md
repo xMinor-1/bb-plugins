@@ -1,101 +1,77 @@
-# bb-plugin-server-status
+# Server Status
 
-A BB plugin.
+Состояние сервера, на котором крутится bb, — кольцом вокруг иконки в футере
+сайдбара.
 
-## UI components
+- **Кольцо** — расход оперативной памяти. До 80% приглушённое, с 80% жёлтое,
+  выше 90% красное. Обновляется раз в пять секунд.
+- **Клик** — окно с полной сводкой. Закрывается по Escape, кликом мимо или
+  повторным кликом по иконке.
 
-`components/ui/` is vendored source you own (the shadcn model): edit the
-files freely — they never update out from under you. Add more from the BB
-component registry (the full shadcn set, version-matched to your BB install
-via the pinned ref in `components.json`):
+В окне: процессор с числом ядер, оперативная память в процентах и гигабайтах,
+файл подкачки отдельным пунктом с предупреждением, диск (занято, всего,
+свободно), средняя нагрузка за 1, 5 и 15 минут, время без перезагрузки и дата
+последней, версия ОС и ядра. Объёмы печатаются в гигабайтах, а от терабайта —
+в терабайтах, одной единицей на строку.
 
+Кольцо повторяет геометрию плагина [usage-meter](../usage-meter): та же
+толщина, тот же радиус, та же анимация — в футере они стоят рядом и должны
+читаться как одна система.
+
+## Установка
+
+```sh
+bb plugin install git:https://github.com/xMinor-1/bb-plugins.git --plugin server-status
 ```
-npx shadcn add @bb/dialog @bb/select
+
+## Настройки
+
+```sh
+bb plugin config server-status set diskPath /
 ```
 
-Run `npm install` once before `bb plugin build` — the vendored components'
-npm deps bundle into your dist. React, and BB-shimmed packages like the
-radix portal primitives and `sonner` (`import { toast } from "sonner"`
-reaches BB's own toaster), are provided by the BB app at runtime and never
-bundled. Ship `dist/` (npm tarball or committed for git installs) so
-people installing your plugin never need npm.
+`diskPath` — точка монтирования, по которой считается диск. По умолчанию `/`.
 
-## Manifest
+## Как устроено
 
-`package.json` is the plugin manifest. Notable fields:
+`server.ts` читает метрики напрямую из ядра, без зависимостей и без вызовов
+внешних команд:
 
-- `bb.server` — backend entry (required); optional `bb.app` for a frontend.
-- `bb.name` and `bb.description` — required human-facing identity.
-- `bb.branding` — required; declare `icon` as a BB icon name or a
-  plugin-relative compact SVG, or declare `logo.light` (with optional
-  `logo.dark`). Logo assets must be relative `.svg`, `.png`, or
-  `.webp` files.
-- `engines.bb` — supported bb app version range.
-- `engines.bbPluginSdk` — the lowest plugin SDK you need (scaffold:
-  `>=0.4.8`). BB reads this as a floor, not a ceiling: a later
-  SDK in the same major still loads your plugin.
-- `dependencies` — every package your source imports that BB does not provide.
-  `bb plugin build` inlines them into `dist/`, and git installs resolve this
-  list alone, so a build-required package here rather than in
-  `devDependencies` is what keeps your plugin installable. `devDependencies`
-  is for types and tooling only (BB shims React, the portal primitives, and
-  `@get-bb/plugin-sdk` at runtime — never bundle them).
+| Метрика | Источник | Тонкость |
+| --- | --- | --- |
+| Процессор | `/proc/stat` | загрузка — дельта между двумя замерами, одно чтение не говорит ничего; `iowait` считается простоем |
+| Память | `/proc/meminfo`, `MemAvailable` | оценка самого ядра, сколько получил бы новый процесс; по `MemFree` простаивающая машина показывала бы 95% |
+| Подкачка | `/proc/meminfo`, `SwapTotal`/`SwapFree` | `null`, если подкачки нет |
+| Диск | `statfs` | процент как у `df(1)`: `used / (used + available)`, зарезервированные под root блоки не в счёт. Опрашивается раз в минуту — это самое дорогое чтение |
+| Аптайм, ядро, средняя нагрузка | `os` | момент загрузки уезжает на фронтенд, и вкладка растит аптайм сама |
+| Имя ОС | `/etc/os-release`, `PRETTY_NAME` | читается один раз при старте |
 
-Run `bb plugin build` before publishing git/npm installs. It writes
-`dist/server.js` + `server.meta.json` (and, with `bb.app`, `app.js` /
-`app.css` / `app.meta.json`). Each `*.meta.json` stamps SDK major/version,
-`artifactFormatVersion`, `pluginId`, `pluginVersion`, and
-`builtWith` so managed installs can verify the artifacts.
+Одна фоновая служба `metrics` тикает раз в пять секунд на весь сервер и держит
+свежий снимок в памяти; отдаёт его rpc-метод `state` — цена съёма метрик не
+растёт с числом открытых вкладок. В realtime-канал снимок не публикуется:
+подписчиков у него нет, а кадры уходили бы в каждую вкладку даже тогда, когда
+она скрыта и опрос молчит.
 
-## Install
+`sidebarFooterAction` рисует хост, и рисует только иконку, поэтому кольцо
+добавляет контент-скрипт: свой `<svg>` кладётся внутрь кнопки хоста (найденной
+по стабильному `data-testid`) абсолютом поверх её иконки и не ловит указатель —
+клик и тултип остаются кнопке. Окно — обычный DOM в `body`, оно красится от CSS-
+переменных приложения и потому следует активной палитре. Хуков React в контент-
+скрипте нет, значит `useRealtime` недоступен: скрипт опрашивает `state` тем же
+тиком в пять секунд и молчит, пока вкладка скрыта.
 
-From this directory (`bb plugin new` already ran the install; a fresh clone
-needs it):
+Чужие узлы плагин не двигает и не удаляет; свои узлы, слушатели, таймеры и
+наблюдатели снимаются disposer'ом контент-скрипта.
 
-```
+## Разработка
+
+```sh
 npm install
-bb plugin install .
+npx tsc --noEmit
+bb plugin build .
+bb plugin dev .
 ```
 
-After editing sources, reload:
+## Лицензия
 
-```
-bb plugin reload server-status
-```
-
-## Configure
-
-```
-bb plugin config server-status
-bb plugin config server-status set greeting hi
-```
-
-## Types & API reference
-
-The plugin API ships as the npm package `@get-bb/plugin-sdk`, pinned to an
-exact version in `devDependencies` (`0.4.8` — the SDK of the BB
-that scaffolded this plugin). After `npm install`, the full surface is on disk
-at:
-
-```
-node_modules/@get-bb/plugin-sdk/bundled-types/bb-plugin-sdk.d.ts      # backend
-node_modules/@get-bb/plugin-sdk/bundled-types/bb-plugin-sdk-app.d.ts  # frontend
-```
-
-Your editor and `tsc` resolve `@get-bb/plugin-sdk` there through ordinary node
-resolution — no path mapping. These are readable declarations: open them for an
-exact signature.
-
-The SDK surface grows with every BB release, so the pin has to track the BB you
-actually run:
-
-```
-bb plugin types          # sync this plugin's SDK surface to the running BB
-bb plugin types --check  # CI: fail when it does not match
-```
-
-Ask BB to write plugins for you: the `bb-plugin-authoring` skill documents
-the whole surface with examples.
-
-Confused by the API, or need something the types don't explain? Clone the BB
-repo and read the source: <https://github.com/get-bb/bb>.
+MIT — см. [LICENSE](LICENSE).

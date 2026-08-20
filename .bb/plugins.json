@@ -14,6 +14,10 @@
     {
       "name": "theme-toggle",
       "source": "./plugins/theme-toggle"
+    },
+    {
+      "name": "usage-meter",
+      "source": "./plugins/usage-meter"
     }
   ]
 }
