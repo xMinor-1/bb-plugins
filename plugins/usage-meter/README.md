@@ -1,74 +1,76 @@
 # Usage Meter
 
-Расход лимитов подписки Claude — двумя кольцами вокруг иконки в футере
-сайдбара.
+Claude subscription limits, as two rings around a sidebar footer button.
 
-- **Внешнее кольцо** — пятичасовая сессия, окно `Current session`.
-- **Внутреннее кольцо** — недельный лимит, окно `Weekly limit`. Радиус меньше,
-  штрих тоньше, между кольцами видимый зазор.
+- **Outer ring** — the five-hour session, the `Current session` window.
+- **Inner ring** — the weekly limit, the `Weekly limit` window. Smaller radius,
+  thinner stroke, a visible gap between the two.
 
-Оба заполняются от 12 часов по часовой стрелке и красятся независимо друг от
-друга по своему значению: до 60% приглушённые, с 60% жёлтые, выше 85% красные.
-Пороги названы словами в попапе — у соседней кнопки в футере они другие.
+Both fill clockwise from twelve o'clock and colour independently by their own
+value: muted below 60%, amber from 60%, red above 85%. The popup names those
+thresholds in words — the neighbouring footer button uses different ones.
 
-Лимит по модели (`Fable`) третьим кольцом не рисуется — на кнопке 32×32 он уже
-не читается, поэтому живёт строкой в попапе. Молчать про него нельзя: как
-только он переваливает за 60%, в правом верхнем углу кнопки загорается точка
-того же цвета, что и кольца на этом значении, а строка окна в попапе получает
-такую же точку меткой.
+The per-model limit (`Fable`) gets no third ring: on a 32×32 button it stops
+being readable, so it lives as a row in the popup. Staying silent about it is
+not an option either — the moment it passes 60%, a dot lights up in the top
+right corner of the button in the same colour the rings take at that value, and
+the popup row is marked with the same dot.
 
-- **Наведение** — попап со всеми окнами лимитов: процент и время сброса в
-  местном времени, плюс план подписки и почта аккаунта.
-- **Клик** — тот же попап, но закреплённый: не закрывается при уводе курсора.
-  Закрывается повторным кликом, Escape или кликом мимо.
+- **Hover** — a popup with every limit window: percentage and reset time in
+  local time, plus the subscription plan and the account email.
+- **Click** — the same popup, pinned: it survives the cursor leaving. Closes on
+  a second click, on Escape, or on a click outside.
 
-Внешнее кольцо повторяет геометрию соседнего плагина
-[server-status](../server-status): тот же путь по границе кнопки, та же
-толщина, та же анимация. В футере кнопки стоят рядом и должны читаться как одна
-система. Пороги цветов у соседа свои (80% и 90% по расходу ОЗУ) — это разные
-величины, и совпадать они не обязаны.
+The outer ring repeats the geometry of the neighbouring
+[server-status](../server-status) plugin: same path along the button's edge,
+same thickness, same animation. The two buttons sit next to each other in the
+footer and should read as one system. The neighbour's colour thresholds are its
+own (80% and 90% of RAM usage) — different quantities, under no obligation to
+match.
 
-## Установка
+## Install
 
 ```sh
 bb plugin install git:https://github.com/xMinor-1/bb-plugins.git --plugin usage-meter
 ```
 
-## Как устроено
+## How it works
 
-`server.ts` — один опрос на весь сервер. Фоновый сервис зовёт
-`bb.sdk.system.usageLimits()` и держит снимок в памяти; RPC-метод `state`
-отдаёт этот же снимок. Число открытых вкладок не увеличивает нагрузку на API.
-Realtime тут не при делах: подписка на канал живёт только в React-хуке
-`useRealtime`, а кольца рисует контент-скрипт, которому до хуков не дотянуться.
-Поэтому снимок просто опрашивается — раз в 60 секунд и на возврате вкладки.
+`server.ts` polls once for the whole server. A background service calls
+`bb.sdk.system.usageLimits()` and keeps the snapshot in memory; the `state` RPC
+method serves that same snapshot, so the number of open tabs adds no load on the
+API. Realtime does not apply here: the channel subscription lives only in the
+`useRealtime` React hook, and the rings are drawn by a content script that
+cannot reach hooks. So the snapshot is simply polled — every 60 seconds and when
+the tab comes back into view.
 
-| Тонкость | Решение |
+| Detail | Handling |
 | --- | --- |
-| Провайдер отбивает частые вызовы («Claude usage is rate limited right now») | Опрос раз в 5 минут, после неудачи период удваивается до получаса |
-| Разовый сбой сети | Прошлые цифры остаются на экране: кольца продолжают их показывать, а попап отдельной строкой говорит возраст (`okAt`) и причину |
-| `not_installed` / `unauthenticated` / `expired` | Снимок обнуляется: старые цифры уже не про этот аккаунт |
-| Одна и та же жалоба каждую минуту | В лог пишется только смена причины |
+| The provider rejects frequent calls ("Claude usage is rate limited right now") | Poll every 5 minutes; after a failure the period doubles up to half an hour |
+| A one-off network failure | The previous numbers stay on screen: the rings keep showing them, and a dedicated popup row states their age (`okAt`) and the reason |
+| `not_installed` / `unauthenticated` / `expired` | The snapshot is cleared: the old numbers are no longer about this account |
+| The same complaint every minute | Only a change of reason reaches the log |
 
-`app.tsx` — кольца и попап. Слот `sidebarFooterAction` рисует у хоста только
-иконку, поэтому кольца добавляет контент-скрипт: свой `<svg>` кладётся внутрь
-кнопки хоста абсолютом поверх иконки и не ловит указатель. Чужие узлы не
-двигаются и не удаляются — приложение такое блокирует; всё своё (узел, слушатели,
-таймеры, `MutationObserver`) снимается disposer'ом.
+`app.tsx` holds the rings and the popup. The host renders the
+`sidebarFooterAction` slot as an icon only, so the rings come from a content
+script: its own `<svg>` goes inside the host button, absolutely positioned over
+the icon and transparent to pointer events. Nodes the plugin does not own are
+never moved or removed — the application blocks that; everything it does own
+(node, listeners, timers, `MutationObserver`) is torn down by a disposer.
 
-| Тонкость | Решение |
+| Detail | Handling |
 | --- | --- |
-| Кнопки ещё нет в момент старта скрипта | `MutationObserver` ждёт её появления и возвращает кольца, если React перерисовал футер |
-| Скрытая вкладка | Опрос раз в 60 секунд молчит, пока вкладка не на виду; возврат из фона обновляет цифры сразу |
-| Набор окон у API другой | Кольцо рисуется только для найденного окна, остальные окна просто попадают в попап списком |
-| Обнулённый снимок (`expired` и прочие) | Оба кольца стоят серыми и пустыми, причина уезжает в попап |
-| Английское сообщение провайдера | Знакомые переводятся, незнакомое в интерфейс не попадает — уходит в подсказку строки |
-| Длинная подпись окна из API | Обрезается многоточием внутри панели, полная видна подсказкой |
-| Тултип кнопки хоста | Попап замечает его и уходит выше, чтобы не накрыть |
-| Нулевое значение | Дуга прячется целиком: круглый колпачок штриха оставил бы точку на 12 часах |
-| Сложенный сайдбар | Кольцо, которому не хватило места, не рисуется вместо вывернутого наизнанку пути |
+| The button does not exist yet when the script starts | A `MutationObserver` waits for it and restores the rings if React re-renders the footer |
+| Hidden tab | The 60-second poll stays silent until the tab is visible again; returning from the background refreshes the numbers at once |
+| The API returns a different set of windows | A ring is drawn only for a window that was found; the rest simply appear in the popup list |
+| A cleared snapshot (`expired` and friends) | Both rings stand grey and empty, and the reason moves into the popup |
+| An English provider message | Known ones are translated; an unknown one never reaches the interface — it goes into the row's tooltip |
+| A long window label from the API | Truncated with an ellipsis inside the panel; the full text stays available as a tooltip |
+| The host button's own tooltip | The popup notices it and moves higher so it does not cover it |
+| A zero value | The arc hides entirely: a round stroke cap would leave a dot at twelve o'clock |
+| A collapsed sidebar | A ring with no room is skipped rather than drawn as an inside-out path |
 
-## Разработка
+## Development
 
 ```sh
 npm install
@@ -76,3 +78,7 @@ npx tsc --noEmit
 bb plugin build .
 bb plugin dev .
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

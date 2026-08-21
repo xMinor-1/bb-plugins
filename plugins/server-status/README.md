@@ -1,69 +1,71 @@
 # Server Status
 
-Состояние сервера, на котором крутится bb, — кольцом вокруг иконки в футере
-сайдбара.
+The health of the machine that runs bb, as a ring around a sidebar footer
+button.
 
-- **Кольцо** — расход оперативной памяти. До 80% приглушённое, с 80% жёлтое,
-  выше 90% красное. Обновляется раз в пять секунд.
-- **Клик** — окно с полной сводкой. Закрывается по Escape, кликом мимо или
-  повторным кликом по иконке.
+- **Ring** — RAM usage. Muted below 80%, amber from 80%, red above 90%.
+  Refreshed every five seconds.
+- **Click** — a panel with the full summary. Closes on Escape, on a click
+  outside, or on a second click of the button.
 
-В окне: процессор с числом ядер, оперативная память в процентах и гигабайтах,
-файл подкачки отдельным пунктом с предупреждением, диск (занято, всего,
-свободно), средняя нагрузка за 1, 5 и 15 минут, время без перезагрузки и дата
-последней, версия ОС и ядра. Объёмы печатаются в гигабайтах, а от терабайта —
-в терабайтах, одной единицей на строку.
+The panel shows the CPU with its core count, memory in percent and gigabytes,
+swap as a separate row with a warning, disk (used, total, free), load average
+over 1, 5 and 15 minutes, uptime with the date of the last boot, and the OS and
+kernel version. Sizes print in gigabytes, and in terabytes past a terabyte, one
+unit per row.
 
-Кольцо повторяет геометрию плагина [usage-meter](../usage-meter): та же
-толщина, тот же радиус, та же анимация — в футере они стоят рядом и должны
-читаться как одна система.
+The ring repeats the geometry of the [usage-meter](../usage-meter) plugin — same
+thickness, same radius, same animation. The two buttons sit next to each other
+in the footer and should read as one system.
 
-## Установка
+## Install
 
 ```sh
 bb plugin install git:https://github.com/xMinor-1/bb-plugins.git --plugin server-status
 ```
 
-## Настройки
+## Settings
 
 ```sh
 bb plugin config server-status set diskPath /
 ```
 
-`diskPath` — точка монтирования, по которой считается диск. По умолчанию `/`.
+`diskPath` is the mount point the disk figures are read from. Defaults to `/`.
 
-## Как устроено
+## How it works
 
-`server.ts` читает метрики напрямую из ядра, без зависимостей и без вызовов
-внешних команд:
+`server.ts` reads metrics straight from the kernel, with no dependencies and no
+shelling out:
 
-| Метрика | Источник | Тонкость |
+| Metric | Source | Detail |
 | --- | --- | --- |
-| Процессор | `/proc/stat` | загрузка — дельта между двумя замерами, одно чтение не говорит ничего; `iowait` считается простоем |
-| Память | `/proc/meminfo`, `MemAvailable` | оценка самого ядра, сколько получил бы новый процесс; по `MemFree` простаивающая машина показывала бы 95% |
-| Подкачка | `/proc/meminfo`, `SwapTotal`/`SwapFree` | `null`, если подкачки нет |
-| Диск | `statfs` | процент как у `df(1)`: `used / (used + available)`, зарезервированные под root блоки не в счёт. Опрашивается раз в минуту — это самое дорогое чтение |
-| Аптайм, ядро, средняя нагрузка | `os` | момент загрузки уезжает на фронтенд, и вкладка растит аптайм сама |
-| Имя ОС | `/etc/os-release`, `PRETTY_NAME` | читается один раз при старте |
+| CPU | `/proc/stat` | load is the delta between two samples; a single read says nothing. `iowait` counts as idle |
+| Memory | `/proc/meminfo`, `MemAvailable` | the kernel's own estimate of what a new process would get. Read from `MemFree`, an idle machine would report 95% |
+| Swap | `/proc/meminfo`, `SwapTotal`/`SwapFree` | `null` when there is no swap |
+| Disk | `statfs` | percentage as in `df(1)`: `used / (used + available)`, root-reserved blocks excluded. Polled once a minute — it is the most expensive read |
+| Uptime, kernel, load average | `os` | the boot moment travels to the frontend, and the tab grows uptime on its own |
+| OS name | `/etc/os-release`, `PRETTY_NAME` | read once at startup |
 
-Одна фоновая служба `metrics` тикает раз в пять секунд на весь сервер и держит
-свежий снимок в памяти; отдаёт его rpc-метод `state` — цена съёма метрик не
-растёт с числом открытых вкладок. В realtime-канал снимок не публикуется:
-подписчиков у него нет, а кадры уходили бы в каждую вкладку даже тогда, когда
-она скрыта и опрос молчит.
+A single background `metrics` service ticks every five seconds for the whole
+server and keeps a fresh snapshot in memory; the `state` RPC method serves that
+snapshot, so the cost of collecting metrics does not grow with the number of
+open tabs. The snapshot is not published to the realtime channel: it has no
+subscribers there, and frames would reach every tab even while it is hidden and
+polling is silent.
 
-`sidebarFooterAction` рисует хост, и рисует только иконку, поэтому кольцо
-добавляет контент-скрипт: свой `<svg>` кладётся внутрь кнопки хоста (найденной
-по стабильному `data-testid`) абсолютом поверх её иконки и не ловит указатель —
-клик и тултип остаются кнопке. Окно — обычный DOM в `body`, оно красится от CSS-
-переменных приложения и потому следует активной палитре. Хуков React в контент-
-скрипте нет, значит `useRealtime` недоступен: скрипт опрашивает `state` тем же
-тиком в пять секунд и молчит, пока вкладка скрыта.
+The host renders `sidebarFooterAction` as an icon only, so the ring comes from a
+content script: its own `<svg>` goes inside the host button (found by a stable
+`data-testid`), absolutely positioned over the icon and transparent to pointer
+events — the click and the tooltip stay with the button. The panel is plain DOM
+in `body`, styled from the application's CSS variables, so it follows the active
+palette. A content script has no React hooks and therefore no `useRealtime`: it
+polls `state` on the same five-second tick and stays silent while the tab is
+hidden.
 
-Чужие узлы плагин не двигает и не удаляет; свои узлы, слушатели, таймеры и
-наблюдатели снимаются disposer'ом контент-скрипта.
+The plugin never moves or removes nodes it does not own; its own nodes,
+listeners, timers and observers are torn down by the content script's disposer.
 
-## Разработка
+## Development
 
 ```sh
 npm install
@@ -72,6 +74,6 @@ bb plugin build .
 bb plugin dev .
 ```
 
-## Лицензия
+## License
 
-MIT — см. [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

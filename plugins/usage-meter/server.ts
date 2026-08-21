@@ -1,40 +1,41 @@
-// bb-plugin-usage-meter — бэкенд: один опрос лимитов Claude на весь сервер.
+// bb-plugin-usage-meter — backend: one poll of Claude limits per server.
 //
-// Фоновый сервис раз в пять минут спрашивает bb.sdk.system.usageLimits() и
-// держит снимок в памяти. Все клиенты читают этот же снимок RPC-методом
-// `state`, поэтому число вкладок не увеличивает нагрузку на API.
+// A background service asks bb.sdk.system.usageLimits() every five minutes and
+// keeps the snapshot in memory. Every client reads that same snapshot through
+// the `state` RPC method, so the number of tabs adds no load on the API.
 //
-// Realtime тут не при делах: кольца рисует контент-скрипт, а подписка на канал
-// живёт только в React-хуке useRealtime, до которого контент-скрипту не
-// дотянуться. Публиковать снимок было бы некому — фронт опрашивает `state`.
+// Realtime does not apply here: the rings are drawn by a content script, and
+// the channel subscription lives only in the useRealtime React hook, out of a
+// content script's reach. There would be nobody to publish to: the frontend
+// polls `state` instead.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
-// Провайдер сам ограничивает частоту вызова: минутный опрос он через час
-// работы отбивал ответом «Claude usage is rate limited right now». Лимиты
-// меняются медленно, пяти минут хватает с запасом.
-/** Период опроса лимитов. */
+// The provider rate-limits the call itself: after an hour of polling once a
+// minute it answered "Claude usage is rate limited right now". Limits move
+// slowly, and five minutes is plenty.
+/** Limit poll period. */
 const POLL_MS = 5 * 60_000;
-/** Потолок отката: после неудачи период удваивается, но не дальше получаса. */
+/** Backoff ceiling: after a failure the period doubles, but no further than half an hour. */
 const RETRY_MAX_MS = 30 * 60_000;
 
-// Тип ответа SDK (ProviderUsageResponse) сам пакет наружу не отдаёт, но его
-// можно вывести из сигнатуры метода — это честная типизация вместо any.
+// The package does not export the SDK response type (ProviderUsageResponse),
+// but it can be inferred from the method signature — honest typing instead of any.
 type UsageLimits = Awaited<
   ReturnType<BbPluginApi["sdk"]["system"]["usageLimits"]>
 >;
 type ClaudeUsage = UsageLimits["claudeCode"];
 
 const usageWindow = z.object({
-  /** Английская подпись окна из API: "Current session", "Weekly limit", "Fable". */
+  /** The API's English window label: "Current session", "Weekly limit", "Fable". */
   label: z.string(),
   usedPercent: z.number(),
-  /** ISO-время сброса; API имеет право не знать его. */
+  /** ISO reset time; the API is allowed not to know it. */
   resetsAt: z.string().nullable(),
 });
 
 const usageState = z.object({
-  /** Статусы провайдера из SDK плюс "unknown" — снимка ещё нет. */
+  /** Provider statuses from the SDK plus "unknown" — no snapshot yet. */
   status: z.enum([
     "ok",
     "not_installed",
@@ -46,18 +47,18 @@ const usageState = z.object({
   planLabel: z.string().nullable(),
   accountEmail: z.string().nullable(),
   windows: z.array(usageWindow),
-  /** Текст ошибки от провайдера или от самого вызова, если он не прошёл. */
+  /** Error text from the provider, or from the call itself when it failed. */
   message: z.string().nullable(),
-  /** Когда снимок снят, ISO. null — ни одного успешного вызова ещё не было. */
+  /** When the snapshot was taken, ISO. null means no successful call yet. */
   fetchedAt: z.string().nullable(),
   /**
-   * Когда цифры в `windows` были свежими, ISO. При разовом сбое цифры
-   * остаются на экране, а по этому времени видно их возраст.
+   * When the figures in `windows` were fresh, ISO. After a one-off failure the
+   * figures stay on screen, and this time shows their age.
    */
   okAt: z.string().nullable(),
 });
 
-/** Снимок, который видит фронт. app.tsx импортирует только эти типы. */
+/** The snapshot the frontend sees. app.tsx imports these types only. */
 export type UsageState = z.infer<typeof usageState>;
 export type UsageWindow = z.infer<typeof usageWindow>;
 
@@ -65,7 +66,7 @@ export const rpcContract = defineRpcContract({
   state: { input: z.null(), output: usageState },
 });
 
-/** Пустой снимок до первого удачного опроса. */
+/** An empty snapshot until the first successful poll. */
 const UNKNOWN: UsageState = {
   status: "unknown",
   planLabel: null,
@@ -76,7 +77,7 @@ const UNKNOWN: UsageState = {
   okAt: null,
 };
 
-/** Ответ провайдера → снимок. Разбор строго по discriminated union из SDK. */
+/** Provider response → snapshot. Parsed strictly along the SDK's discriminated union. */
 function toState(claude: ClaudeUsage, previous: UsageState): UsageState {
   const fetchedAt = new Date().toISOString();
   if (claude.status === "ok") {
@@ -95,8 +96,8 @@ function toState(claude: ClaudeUsage, previous: UsageState): UsageState {
     };
   }
   if (claude.status === "error") {
-    // Сбой разовый: сеть, тайм-аут, ограничение частоты у провайдера. Прошлые
-    // цифры честнее пустого кольца — оставляем их вместе с их возрастом.
+    // A one-off failure: network, timeout, provider rate limiting. The previous
+    // figures are honester than an empty ring — they stay, along with their age.
     return {
       status: "error",
       planLabel: claude.planLabel ?? previous.planLabel,
@@ -107,18 +108,18 @@ function toState(claude: ClaudeUsage, previous: UsageState): UsageState {
       okAt: previous.okAt,
     };
   }
-  // not_installed / unauthenticated / expired — API не сообщает ни плана, ни
-  // почты, и старые цифры больше не про этот аккаунт: снимок обнуляется.
+  // not_installed / unauthenticated / expired — the API reports neither plan
+  // nor email, and the old figures are no longer about this account: clear it.
   return { ...UNKNOWN, status: claude.status, fetchedAt };
 }
 
 export default async function plugin(bb: BbPluginApi) {
   let current: UsageState = UNKNOWN;
-  // Ключ последней жалобы в лог: одна и та же беда пишется один раз, иначе
-  // недоступный провайдер засыпал бы лог каждую минуту.
+  // Key of the last complaint written to the log: one and the same trouble is
+  // logged once, or an unreachable provider would bury the log every minute.
   let complaint = "";
-  // Один вызов на всех: параллельные `state` до первого опроса ждут его, а не
-  // дёргают API повторно.
+  // One call for everyone: parallel `state` requests before the first poll wait
+  // for it rather than hitting the API again.
   let inFlight: Promise<UsageState> | null = null;
 
   async function refresh(signal?: AbortSignal): Promise<UsageState> {
@@ -137,17 +138,17 @@ export default async function plugin(bb: BbPluginApi) {
         current = next;
         return current;
       } catch (error) {
-        // Отмена по перезагрузке или остановке — не беда, о ней не пишут.
+        // Cancelled by a reload or a stop — no trouble, and nothing to log.
         if (signal?.aborted) return current;
-        // Сам вызов не прошёл. Держим прошлый снимок, помечаем ошибку и
-        // жалуемся не чаще одного раза на одну и ту же причину.
+        // The call itself failed. Keep the previous snapshot, mark the error and
+        // complain no more than once per distinct cause.
         const message = error instanceof Error ? error.message : String(error);
         if (message !== complaint) {
           complaint = message;
           bb.log.warn(`usageLimits failed: ${message}`);
         }
-        // fetchedAt проставляем и тут: иначе каждый клиент, увидев снимок без
-        // времени, звал бы refresh сам.
+        // fetchedAt is set here too: otherwise every client seeing a snapshot
+        // without a time would call refresh on its own.
         current = {
           ...current,
           status: "error",
@@ -163,8 +164,8 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   bb.rpc.register(rpcContract, {
-    // Отдаём снимок из памяти. Первый клиент, пришедший раньше сервиса,
-    // получает результат общего опроса, а не собственный вызов API.
+    // Serves the snapshot from memory. The first client to arrive before the
+    // service gets the result of the shared poll, not its own API call.
     state: async () => (current.fetchedAt === null ? refresh() : current),
   });
 
@@ -173,11 +174,11 @@ export default async function plugin(bb: BbPluginApi) {
       let delay = POLL_MS;
       while (!signal.aborted) {
         const next = await refresh(signal);
-        // Отбились по частоте или сеть легла — отходим подальше, чтобы не
-        // добивать провайдера; удачный опрос возвращает обычный шаг.
+        // Rate-limited, or the network went down — back off further so as not to
+        // pile on the provider; a successful poll restores the normal step.
         delay = next.status === "ok" ? POLL_MS : Math.min(delay * 2, RETRY_MAX_MS);
-        // Сон обязан просыпаться на abort, иначе перезагрузка плагина ждёт
-        // минуту и получает "degraded (service did not stop)".
+        // The sleep must wake on abort, or a plugin reload waits a minute and
+        // ends up with "degraded (service did not stop)".
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, delay);
           signal.addEventListener(

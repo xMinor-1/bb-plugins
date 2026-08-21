@@ -14,7 +14,7 @@
   },
   "bb": {
     "name": "Usage Meter",
-    "description": "Два кольца расхода лимитов подписки Claude вокруг кнопки в футере сайдбара: внешнее — пятичасовая сессия, внутреннее — недельный лимит. Каждое кольцо красится по своему значению: желтеет с 60%, краснеет выше 85%. Лимит по модели кольца не получает, но с 60% зажигает точку в углу кнопки. Наведение или клик показывают все окна лимитов, время сброса в местном времени, план и почту аккаунта. Разовый сбой опроса цифры не стирает: кольца держат прошлые значения, а попап говорит их возраст и причину.",
+    "description": "Tracks Claude subscription limits with two rings around a sidebar footer button: the outer one is the five-hour session, the inner one the weekly limit, each colouring by its own value — amber from 60%, red above 85%. The per-model limit gets no ring but lights a dot on the button from 60%. Hover or click shows every limit window with reset times in local time, plus the plan and account email. A failed poll keeps the last numbers on the rings and reports their age and cause in the popup.",
     "branding": {
       "icon": "./icon.svg"
     },

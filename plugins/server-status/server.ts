@@ -1,35 +1,35 @@
-// bb-plugin-server-status — бэкенд: метрики хоста для иконки в футере сайдбара
-// (кольцо вокруг неё) и для окна с подробностями.
+// bb-plugin-server-status — backend: host metrics for the sidebar footer icon
+// (the ring around it) and for the details panel.
 //
-// Одна фоновая служба опрашивает хост раз в 5 секунд и держит свежий снимок в
-// памяти. Наружу снимок уходит единственным путём — rpc `state`: у контент-
-// скрипта фронтенда нет React-хуков, а значит и `useRealtime`, поэтому он
-// опрашивает, а не подписывается. Публиковать тот же снимок ещё и в realtime-
-// канал незачем: подписчиков у него нет, а кадры в каждую вкладку шли бы даже
-// тогда, когда вкладка скрыта и опрос молчит.
+// One background service polls the host every 5 seconds and keeps a fresh
+// snapshot in memory. The snapshot leaves by one path only — the `state` rpc:
+// the frontend content script has no React hooks, and therefore no
+// `useRealtime`, so it polls instead of subscribing. Publishing that same
+// snapshot to the realtime channel as well would be pointless: it has no
+// subscribers, and frames would reach tabs that are hidden and not polling.
 //
-// Всё читается напрямую из Node: /proc для процессора и памяти, statfs для
-// диска. Ни зависимостей, ни вызовов внешних команд.
+// Everything is read straight from Node: /proc for CPU and memory, statfs for
+// the disk. No dependencies, no shelling out.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { readFileSync, statfsSync } from "node:fs";
 import os from "node:os";
 import { z } from "zod";
 
 const TICK_MS = 5_000;
-// Диск почти не меняется, а statfs здесь — самое дорогое чтение, поэтому он
-// опрашивается в двенадцать раз реже процессора и памяти.
+// The disk barely changes, and statfs is the most expensive read here, so it
+// is polled twelve times less often than CPU and memory.
 const DISK_TTL_MS = 60_000;
-// Первое число по процессору требует двух замеров; это окно между ними.
-// Достаточно короткое, чтобы индикатор успел заполниться до первого взгляда.
+// The first CPU figure needs two samples; this is the window between them.
+// Short enough for the indicator to fill before the first look at it.
 const WARMUP_MS = 300;
 
-// --- чтение метрик ----------------------------------------------------------
+// --- reading metrics --------------------------------------------------------
 
 type CpuSample = { total: number; idle: number };
 
-// Первая строка /proc/stat — сумма по всем ядрам, в тиках:
+// The first line of /proc/stat is the sum over all cores, in ticks:
 // user nice system idle iowait irq softirq steal guest guest_nice.
-// Загрузка — это дельта между двумя замерами, одно чтение не говорит ничего.
+// Load is the delta between two samples; a single read says nothing.
 function readCpuSample(): CpuSample | null {
   try {
     const stat = readFileSync("/proc/stat", "utf8");
@@ -38,7 +38,7 @@ function readCpuSample(): CpuSample | null {
     const fields = first.trim().split(/\s+/).slice(1).map(Number);
     if (fields.length < 5 || fields.some((n) => !Number.isFinite(n))) return null;
     const total = fields.reduce((sum, n) => sum + n, 0);
-    // iowait считаем простоем: процессор ждёт, а не работает.
+    // iowait counts as idle: the CPU is waiting, not working.
     const idle = (fields[3] ?? 0) + (fields[4] ?? 0);
     return { total, idle };
   } catch {
@@ -53,7 +53,7 @@ function cpuPercent(prev: CpuSample, next: CpuSample): number | null {
   return round1(clampPercent((busy / total) * 100));
 }
 
-// Значения /proc/meminfo — в kB (на деле кибибайты, несмотря на подпись).
+// /proc/meminfo values are in kB (kibibytes in fact, despite the label).
 function readMeminfo(): Map<string, number> {
   const values = new Map<string, number>();
   try {
@@ -62,16 +62,16 @@ function readMeminfo(): Map<string, number> {
       if (match) values.set(match[1]!, Number(match[2]) * 1024);
     }
   } catch {
-    /* не Linux или procfs не смонтирован — вызывающий откатится на os */
+    /* not Linux, or procfs is not mounted — the caller falls back to os */
   }
   return values;
 }
 
 type Usage = { percent: number; usedBytes: number; totalBytes: number };
 
-// MemAvailable — собственная оценка ядра, сколько получил бы новый процесс;
-// именно это человек и понимает под «занято». Один MemFree считает занятой
-// каждую страницу страничного кэша и на простаивающей машине даёт 95%.
+// MemAvailable is the kernel's own estimate of what a new process would get,
+// which is what a person means by "used". MemFree alone counts every
+// page-cache page as used and reports 95% on an idle machine.
 function readMemory(): Usage {
   const info = readMeminfo();
   const total = info.get("MemTotal") ?? os.totalmem();
@@ -91,9 +91,9 @@ function readSwap(): Usage | null {
 
 type DiskUsage = Usage & { availBytes: number; path: string };
 
-// Арифметика как у df(1): зарезервированные под root блоки (bfree - bavail)
-// не заняты и не доступны, поэтому процент — used / (used + available).
-// Деление на сырой total занижает результат на несколько пунктов.
+// Arithmetic as in df(1): root-reserved blocks (bfree - bavail) are neither
+// used nor available, so the percentage is used / (used + available).
+// Dividing by the raw total understates the result by several points.
 function readDisk(path: string): DiskUsage | null {
   try {
     const fs = statfsSync(path);
@@ -116,8 +116,8 @@ function readDisk(path: string): DiskUsage | null {
   }
 }
 
-// PRETTY_NAME — то, как машину называет человек («Ubuntu 24.04.4 LTS»). Файл
-// не меняется, пока сервер работает, поэтому читаем его один раз при загрузке.
+// PRETTY_NAME is what a person calls the machine ("Ubuntu 24.04.4 LTS"). The
+// file does not change while the server runs, so it is read once at startup.
 function readOsName(): string {
   try {
     const match = /^PRETTY_NAME="?(.+?)"?$/m.exec(
@@ -125,20 +125,20 @@ function readOsName(): string {
     );
     if (match?.[1]) return match[1];
   } catch {
-    /* не Linux или файла нет — откатываемся на то, что знает node */
+    /* not Linux, or the file is missing — fall back to what node knows */
   }
   return `${os.type()} ${os.release()}`;
 }
 
-// --- общие помощники --------------------------------------------------------
+// --- shared helpers ---------------------------------------------------------
 
 const clampPercent = (value: number): number =>
   Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
 
 const round1 = (value: number): number => Math.round(value * 10) / 10;
 
-// Завершается досрочно при остановке плагина: обычный setTimeout проспал бы
-// окно остановки, и плагин отрапортовал бы «degraded».
+// Ends early when the plugin stops: a plain setTimeout would sleep through the
+// stop window and the plugin would report "degraded".
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) {
@@ -155,7 +155,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-// --- контракт ---------------------------------------------------------------
+// --- contract ---------------------------------------------------------------
 
 const usageSchema = z.object({
   percent: z.number(),
@@ -164,7 +164,7 @@ const usageSchema = z.object({
 });
 
 const snapshotSchema = z.object({
-  // null, пока не пришёл второй замер процессора, и там, где нет /proc/stat.
+  // null until the second CPU sample arrives, and where /proc/stat is absent.
   cpu: z.number().nullable(),
   cores: z.number(),
   load: z.tuple([z.number(), z.number(), z.number()]),
@@ -172,10 +172,10 @@ const snapshotSchema = z.object({
   swap: usageSchema.nullable(),
   disk: usageSchema.extend({ availBytes: z.number(), path: z.string() }).nullable(),
   uptimeSeconds: z.number(),
-  // Версия ядра и человеческое имя ОС — статика, но панель их показывает.
+  // Kernel version and human OS name are static, but the panel shows them.
   kernel: z.string(),
   osName: z.string(),
-  // От этого момента фронтенд сам растит аптайм, не переспрашивая сервер.
+  // The frontend grows uptime from this moment without asking the server again.
   bootTimeMs: z.number(),
   updatedAt: z.number(),
 });
@@ -186,13 +186,13 @@ export const rpcContract = defineRpcContract({
   state: { input: z.null(), output: snapshotSchema },
 });
 
-// --- плагин -----------------------------------------------------------------
+// --- plugin -----------------------------------------------------------------
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     diskPath: {
       type: "string",
-      label: "Точка монтирования диска",
+      label: "Disk mount point",
       default: "/",
     },
   });
@@ -203,10 +203,10 @@ export default async function plugin(bb: BbPluginApi) {
 
   settings.onChange((next) => {
     diskPath = next.diskPath.trim() || "/";
-    diskCache = null; // следующий тик измерит новую точку монтирования
+    diskCache = null; // the next tick measures the new mount point
   });
 
-  // os.cpus() обходит каждое ядро, поэтому число ядер берём один раз.
+  // os.cpus() walks every core, so the core count is taken once.
   const cores = os.cpus().length;
   const osName = readOsName();
 
@@ -225,8 +225,8 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       cpu,
       cores,
-      // Средняя нагрузка — только контекст для окна, это не загрузка ЦП:
-      // на этом хосте /proc/stat показывал 11.7%, а loadavg1 — 8.09.
+      // Load average is context for the panel, not CPU load:
+      // on this host /proc/stat showed 11.7% while loadavg1 said 8.09.
       load: [round1(one), round1(five), round1(fifteen)],
       memory: readMemory(),
       swap: readSwap(),
@@ -240,13 +240,13 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   bb.rpc.register(rpcContract, {
-    // Отдаёт снимок службы; запасной путь срабатывает лишь в первые доли
-    // секунды после загрузки, пока служба не сделала первый тик.
+    // Serves the service's snapshot; the fallback only fires in the first
+    // fractions of a second after startup, before the service's first tick.
     state: () => latest ?? snapshot(null),
   });
 
-  // Одна служба на сервер, а не на клиента: все окна читают один и тот же
-  // снимок, поэтому стоимость опроса не растёт с числом вкладок.
+  // One service per server, not per client: every panel reads the same
+  // snapshot, so polling cost does not grow with the number of tabs.
   bb.background.service("metrics", {
     async start(signal) {
       let previous = readCpuSample();

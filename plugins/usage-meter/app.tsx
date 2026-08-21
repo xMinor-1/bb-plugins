@@ -147,7 +147,7 @@ function percentOf(limit: UsageWindow | null): number | null {
 const WARN = 60;
 const DANGER = 85;
 
-/** Цвет кольца по его собственному значению; null — значения нет. */
+/** Ring colour from its own value; null means there is no value. */
 function ringColor(percent: number | null): string {
   if (percent === null) return "var(--muted-foreground, #8a8a8a)";
   if (percent > DANGER) return "var(--destructive, #e5484d)";
@@ -155,22 +155,23 @@ function ringColor(percent: number | null): string {
   return "var(--muted-foreground, #8a8a8a)";
 }
 
-// Английские подписи окон из API. Названия моделей ("Fable") остаются как есть.
-const RU_LABEL: Record<string, string> = {
-  [labelKey(SESSION_LABEL)]: "Сессия",
-  [labelKey(WEEKLY_LABEL)]: "Неделя",
+// The API's own window labels are long for a narrow panel. Model names
+// ("Fable") are left exactly as they come.
+const SHORT_LABEL: Record<string, string> = {
+  [labelKey(SESSION_LABEL)]: "Session",
+  [labelKey(WEEKLY_LABEL)]: "Week",
 };
 
-const TIME_FORMAT = new Intl.DateTimeFormat("ru-RU", {
+const TIME_FORMAT = new Intl.DateTimeFormat("en-GB", {
   hour: "2-digit",
   minute: "2-digit",
 });
-const DATE_FORMAT = new Intl.DateTimeFormat("ru-RU", {
+const DATE_FORMAT = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
   month: "short",
 });
 
-/** Сегодняшняя ли дата — от неё зависит, нужна ли в подписи дата. */
+/** Whether the date is today — that decides if the label needs a date at all. */
 function isToday(at: Date): boolean {
   const now = new Date();
   return (
@@ -180,52 +181,52 @@ function isToday(at: Date): boolean {
   );
 }
 
-/** Дату без точки на конце: Intl отдаёт «24 авг.», а нам нужна «24 авг». */
+/** A date with no trailing dot: Intl gives "24 Aug." where "24 Aug" is wanted. */
 function dayText(at: Date): string {
   return DATE_FORMAT.format(at).replace(/\.$/, "");
 }
 
-/** «сброс в 17:20» для сегодняшнего сброса, «сброс 24 авг» для остальных. */
+/** "resets at 17:20" for a reset today, "resets 24 Aug" for the rest. */
 function resetText(iso: string | null): string {
   if (!iso) return "";
   const exact = new Date(iso);
   if (Number.isNaN(exact.getTime())) return "";
-  // API отдаёт время с секундами (…14:19:59.781Z). Округляем до минуты, иначе
-  // «сброс в 17:19» выглядит как ошибка на минуту.
+  // The API returns a time with seconds (…14:19:59.781Z). Round to the minute,
+  // or "resets at 17:19" looks like it is off by one.
   const at = new Date(Math.round(exact.getTime() / 60_000) * 60_000);
   return isToday(at)
-    ? `сброс в ${TIME_FORMAT.format(at)}`
-    : `сброс ${dayText(at)}`;
+    ? `resets at ${TIME_FORMAT.format(at)}`
+    : `resets ${dayText(at)}`;
 }
 
-/** «Цифры на 16:48» — возраст прошлого удачного снимка. */
+/** "Figures as of 16:48" — the age of the last successful snapshot. */
 function ageText(iso: string | null): string {
   if (!iso) return "";
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return "";
   return isToday(at)
-    ? `Цифры на ${TIME_FORMAT.format(at)}`
-    : `Цифры от ${dayText(at)}, ${TIME_FORMAT.format(at)}`;
+    ? `Figures as of ${TIME_FORMAT.format(at)}`
+    : `Figures from ${dayText(at)}, ${TIME_FORMAT.format(at)}`;
 }
 
 /**
- * Сообщения провайдера приходят по-английски («Claude usage is rate limited
- * right now.»), а интерфейс русский. Знакомые переводим, незнакомое в тело
- * строки не пускаем — оно уезжает в подсказку по наведению.
+ * Provider messages arrive as prose ("Claude usage is rate limited right
+ * now."), which is too long for a panel row. Known ones become a short phrase;
+ * an unknown one never enters the row body — it moves into the hover tooltip.
  */
 const PROVIDER_REASONS: Array<[RegExp, string]> = [
   [
     /rate limit/i,
-    "Claude ограничил частоту запросов, цифры обновятся позже",
+    "Claude is rate limiting requests, the figures will catch up later",
   ],
-  [/timed out|timeout|ETIMEDOUT/i, "Claude Code не ответил вовремя"],
+  [/timed out|timeout|ETIMEDOUT/i, "Claude Code did not answer in time"],
   [
     /ENOTFOUND|ECONNREFUSED|ECONNRESET|fetch failed|network/i,
-    "Нет связи с Claude",
+    "No connection to Claude",
   ],
 ];
 
-/** Причина сбоя по-русски; null — сообщение незнакомое или его нет. */
+/** A short cause; null when the message is unknown or absent. */
 function reasonText(message: string | null): string | null {
   if (!message) return null;
   for (const [pattern, text] of PROVIDER_REASONS) {
@@ -234,41 +235,41 @@ function reasonText(message: string | null): string | null {
   return null;
 }
 
-/** Строка попапа: что показать и что спрятать в подсказку. */
+/** A panel row: what to show, and what to hide in the tooltip. */
 interface Line {
   text: string;
-  /** Английский текст провайдера — только по наведению, не в интерфейсе. */
+  /** The provider's raw text — on hover only, never in the interface. */
   title: string | null;
 }
 
-/** Почему цифр нет — человеческим языком. */
+/** Why there are no figures, in plain words. */
 function statusLine(state: UsageState | null): Line {
   if (!state || state.status === "unknown") {
-    return { text: "Загружаю лимиты…", title: null };
+    return { text: "Loading limits…", title: null };
   }
   switch (state.status) {
     case "not_installed":
-      return { text: "Claude Code не установлен", title: null };
+      return { text: "Claude Code is not installed", title: null };
     case "unauthenticated":
-      return { text: "Claude Code не авторизован", title: null };
+      return { text: "Claude Code is not signed in", title: null };
     case "expired":
-      return { text: "Сессия Claude Code истекла, нужен повторный вход", title: null };
+      return { text: "The Claude Code session has expired, sign in again", title: null };
     case "error": {
       const reason = reasonText(state.message);
       return reason
-        ? { text: `Не удалось получить лимиты: ${reason}`, title: null }
-        : { text: "Не удалось получить лимиты", title: state.message };
+        ? { text: `Could not read the limits: ${reason}`, title: null }
+        : { text: "Could not read the limits", title: state.message };
     }
     default:
-      return { text: "Лимиты не сообщаются", title: null };
+      return { text: "Limits are not reported", title: null };
   }
 }
 
-/** Возраст прошлых цифр и причина, по которой они не обновились. */
+/** The age of the previous figures and why they did not refresh. */
 function staleLine(state: UsageState): Line {
   const reason = reasonText(state.message);
   const age = ageText(state.okAt);
-  const failure = reason ? `обновить не удалось: ${reason}` : "обновить не удалось";
+  const failure = reason ? `refresh failed: ${reason}` : "refresh failed";
   return {
     text: age ? `${age} · ${failure}` : `${failure[0].toUpperCase()}${failure.slice(1)}`,
     title: reason ? null : state.message,
@@ -646,7 +647,7 @@ class Popup {
     const panel = document.createElement("div");
     panel.setAttribute("style", PANEL_STYLE);
     panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", "Расход лимитов");
+    panel.setAttribute("aria-label", "Usage limits");
     panel.dataset.usageMeter = "popup";
     // Прячем за экраном, пока не известна высота.
     panel.style.left = "-9999px";
@@ -695,7 +696,7 @@ class Popup {
     if (!panel) return;
     panel.replaceChildren();
 
-    panel.append(element("div", TITLE_STYLE, "Расход лимитов"));
+    panel.append(element("div", TITLE_STYLE, "Usage limits"));
 
     // Цифры показываем и после сбоя: они старые, но настоящие. Пустая панель
     // остаётся только там, где показывать нечего.
@@ -747,9 +748,9 @@ class Popup {
       const label = element(
         "span",
         "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap",
-        RU_LABEL[key] ?? limit.label,
+        SHORT_LABEL[key] ?? limit.label,
       );
-      if (!RU_LABEL[key]) label.title = limit.label;
+      if (!SHORT_LABEL[key]) label.title = limit.label;
       row.append(label);
       row.append(
         element(
@@ -771,7 +772,7 @@ class Popup {
       rows.append(row);
     }
     if (state.windows.length === 0) {
-      rows.append(element("div", MUTED_STYLE, "Окон лимитов нет"));
+      rows.append(element("div", MUTED_STYLE, "No limit windows"));
     }
     panel.append(rows);
 
@@ -785,7 +786,7 @@ class Popup {
       panel.append(
         this.note(
           {
-            text: `Кольца желтеют с ${WARN}%, краснеют выше ${DANGER}%`,
+            text: `Rings turn amber from ${WARN}% and red above ${DANGER}%`,
             title: null,
           },
           "margin-top:0.375rem;font-size:0.6875rem",
@@ -848,7 +849,7 @@ class Popup {
 export default definePluginApp((app) => {
   app.slots.sidebarFooterAction({
     id: ACTION_ID,
-    title: "Расход лимитов",
+    title: "Usage limits",
     icon: "ChartColumn",
     // Мышь и тач кнопку перехватывает контент-скрипт, но клавиатурная
     // активация доходит сюда — событие открывает тот же попап.

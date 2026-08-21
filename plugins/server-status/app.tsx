@@ -1,23 +1,22 @@
-// bb-plugin-server-status — состояние сервера в футере сайдбара.
+// bb-plugin-server-status — host health in the sidebar footer.
 //
-//   иконка   — кнопка хоста рядом с шестерёнкой, палитрой и жуком
-//   кольцо   — расход оперативной памяти: приглушённое, жёлтое с 80%,
-//              красное выше 90%
-//   клик     — окно с полной сводкой: процессор, память, подкачка, диск,
-//              средняя нагрузка, аптайм, ядро и ОС
+//   icon   — a host button next to the gear, the palette and the bug
+//   ring   — RAM usage: muted, amber from 80%, red above 90%
+//   click  — a panel with the full summary: CPU, memory, swap, disk,
+//            load average, uptime, kernel and OS
 //
-// sidebarFooterAction рисует хост, и рисует только иконку, поэтому кольцо
-// добавляет контент-скрипт: свой <svg> кладётся внутрь кнопки хоста поверх её
-// иконки, а окно — обычным DOM поверх приложения. Чужие узлы не двигаются и не
-// удаляются, своё снимается disposer'ом.
+// The host renders sidebarFooterAction as an icon only, so the ring comes
+// from a content script: its own <svg> goes inside the host button over the
+// icon, and the panel is plain DOM above the application. Nodes it does not
+// own are never moved or removed; everything it owns goes on dispose.
 //
-// Геометрия кольца, толщина, скругление и анимация повторяют плагин
-// usage-meter: в футере два кольца рядом, и они обязаны читаться как одна
-// система. Отличается только логика цветов — пороги здесь по ТЗ владельца.
+// Ring geometry, thickness, corner radius and animation repeat the usage-meter
+// plugin: two rings sit side by side in the footer and have to read as one
+// system. Only the colour logic differs — the thresholds here are the owner's.
 //
-// Хуков React в контент-скрипте нет, значит useRealtime недоступен: скрипт
-// опрашивает rpc `state` тем же тиком в 5 секунд, каким снимает метрики
-// бэкенд, и молчит, пока вкладка скрыта.
+// A content script has no React hooks, so useRealtime is out of reach: the
+// script polls the `state` rpc on the same 5-second tick the backend samples
+// metrics on, and stays silent while the tab is hidden.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import type { Snapshot } from "./server";
 
@@ -25,29 +24,29 @@ const PLUGIN_ID = "server-status";
 const ACTION_ID = "status";
 const BUTTON_SELECTOR = `[data-testid="plugin-sidebar-footer-action-${PLUGIN_ID}-${ACTION_ID}"]`;
 
-// Мост между `run` хоста и контент-скриптом: они живут в разных модулях одного
-// окна, поэтому клавиатурная активация кнопки доезжает до окна событием.
+// A bridge between the host's `run` and the content script: they live in
+// different modules of one window, so keyboard activation arrives as an event.
 const TOGGLE_EVENT = "server-status:toggle";
 
-/** Тик опроса — тот же, с каким снимает метрики бэкенд. */
+/** Poll tick — the same one the backend samples metrics on. */
 const POLL_MS = 5_000;
-/** Нижняя граница между опросами: защита от частых visibilitychange. */
+/** Floor between polls: protection against frequent visibilitychange. */
 const MIN_GAP_MS = 2_000;
 
-/** Толщина кольца — как у usage-meter, иначе два кольца рядом разъедутся. */
+/** Ring thickness — as in usage-meter, or two adjacent rings drift apart. */
 const RING_STROKE = 2;
 
-/** Пороги цвета для оперативной памяти (и для полос в окне). */
+/** Colour thresholds for RAM (and for the bars in the panel). */
 const WARN = 80;
 const DANGER = 90;
 
-// Подкачка ниже этого почти не тронута — постоянная плашка была бы шумом.
-// Выше — память уже не помещается в ОЗУ, и об этом стоит сказать словами.
+// Below this, swap is barely touched — a permanent notice would be noise.
+// Above it, memory no longer fits in RAM, and that is worth saying in words.
 const SWAP_NOTE = 10;
 
 const STYLE_ID = "bb-server-status-style";
 
-// --- данные -----------------------------------------------------------------
+// --- data -------------------------------------------------------------------
 
 async function fetchSnapshot(signal: AbortSignal): Promise<Snapshot> {
   const response = await fetch(`/api/v1/plugins/${PLUGIN_ID}/rpc/state`, {
@@ -63,7 +62,7 @@ async function fetchSnapshot(signal: AbortSignal): Promise<Snapshot> {
   return envelope.result;
 }
 
-// --- цвета и уровни ---------------------------------------------------------
+// --- colours and levels -----------------------------------------------------
 
 type Level = "ok" | "warn" | "danger";
 
@@ -80,27 +79,27 @@ function levelColor(value: Level): string {
   return "var(--muted-foreground, #8a8a8a)";
 }
 
-// --- форматирование ---------------------------------------------------------
+// --- formatting -------------------------------------------------------------
 
 const GIB = 1024 ** 3;
 const TIB = 1024 ** 4;
 
-const NUM1 = new Intl.NumberFormat("ru-RU", {
+const NUM1 = new Intl.NumberFormat("en-GB", {
   minimumFractionDigits: 1,
   maximumFractionDigits: 1,
 });
 
 /**
- * Единица подписывается один раз на всю строку, поэтому её выбирает наибольшее
- * из чисел строки, а печатаются они все в ней: у тома на девять терабайт
- * «занято 9220 из 9313 ГБ» не читается — нужно «занято 9,0 из 9,1 ТБ».
+ * The unit is written once per row, so the largest number in the row picks it
+ * while every number in that row is printed in it: on a nine-terabyte volume
+ * "9220 of 9313 GB used" does not read — "9.0 of 9.1 TB used" does.
  */
 function scale(...bytes: number[]): { unit: string; format: (value: number) => string } {
   const tera = Math.max(...bytes) >= TIB;
   const divisor = tera ? TIB : GIB;
   return {
-    unit: tera ? "ТБ" : "ГБ",
-    // От сотни дробная часть — уже шум: «104», а не «104,3».
+    unit: tera ? "TB" : "GB",
+    // Past a hundred the fraction is noise: "104", not "104.3".
     format: (value: number): string => {
       const scaled = value / divisor;
       return scaled >= 100 ? String(Math.round(scaled)) : NUM1.format(scaled);
@@ -112,67 +111,61 @@ function percentText(percent: number | null): string {
   return percent === null ? "—" : `${Math.round(percent)}%`;
 }
 
-/** Русские окончания: 1 день, 2 дня, 5 дней. */
-function plural(count: number, one: string, few: string, many: string): string {
-  const tail100 = count % 100;
-  const tail10 = count % 10;
-  if (tail100 >= 11 && tail100 <= 14) return many;
-  if (tail10 === 1) return one;
-  if (tail10 >= 2 && tail10 <= 4) return few;
-  return many;
+/** One day, two days: English needs no table. */
+function plural(count: number, word: string): string {
+  return count === 1 ? word : `${word}s`;
 }
 
-function uptimeRu(seconds: number): string {
-  // «0 минут» выглядит как сбой ровно тогда, когда на аптайм и смотрят, —
-  // в первую минуту после перезагрузки.
-  if (seconds < 60) return "меньше минуты";
+function uptimeText(seconds: number): string {
+  // "0 minutes" reads as a failure at exactly the moment uptime gets looked at —
+  // in the first minute after a reboot.
+  if (seconds < 60) return "less than a minute";
   const days = Math.floor(seconds / 86_400);
   const hours = Math.floor((seconds % 86_400) / 3_600);
   const minutes = Math.floor((seconds % 3_600) / 60);
   if (days > 0) {
-    return `${days} ${plural(days, "день", "дня", "дней")} ${hours} ${plural(hours, "час", "часа", "часов")}`;
+    return `${days} ${plural(days, "day")} ${hours} ${plural(hours, "hour")}`;
   }
   if (hours > 0) {
-    return `${hours} ${plural(hours, "час", "часа", "часов")} ${minutes} ${plural(minutes, "минута", "минуты", "минут")}`;
+    return `${hours} ${plural(hours, "hour")} ${minutes} ${plural(minutes, "minute")}`;
   }
-  return `${minutes} ${plural(minutes, "минута", "минуты", "минут")}`;
+  return `${minutes} ${plural(minutes, "minute")}`;
 }
 
-const BOOT_DATE = new Intl.DateTimeFormat("ru-RU", {
+const BOOT_DATE = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
   month: "long",
   year: "numeric",
 });
-const BOOT_TIME = new Intl.DateTimeFormat("ru-RU", {
+const BOOT_TIME = new Intl.DateTimeFormat("en-GB", {
   hour: "2-digit",
   minute: "2-digit",
 });
 
-/** «1 августа 2026, 17:03» — без канцелярского «г. в» посреди строки. */
-function bootedRu(ms: number): string {
+/** "1 August 2026, 17:03" — a date a person reads, not a timestamp. */
+function bootedText(ms: number): string {
   const at = new Date(ms);
-  const date = BOOT_DATE.format(at).replace(/\s*г\.$/, "");
-  return `${date}, ${BOOT_TIME.format(at)}`;
+  return `${BOOT_DATE.format(at)}, ${BOOT_TIME.format(at)}`;
 }
 
-// Аптайм растёт от момента загрузки, который сервер сообщил один раз, поэтому
-// открытая вкладка считает сама и не переспрашивает.
+// Uptime grows from a boot moment the server reported once, so an open tab
+// counts on its own instead of asking again.
 function uptimeSeconds(snapshot: Snapshot): number {
   const grown = Math.round((Date.now() - snapshot.bootTimeMs) / 1000);
   return Number.isFinite(grown) && grown > 0 ? grown : snapshot.uptimeSeconds;
 }
 
-// --- кольцо -----------------------------------------------------------------
+// --- ring -------------------------------------------------------------------
 
-/** Периметр скруглённого прямоугольника по границе кнопки; квадрат даст круг. */
+/** Perimeter of a rounded rectangle along the button edge; a square gives a circle. */
 function ringPath(width: number, height: number): { d: string; length: number } {
   const inset = RING_STROKE / 2;
   const w = Math.max(0, width - RING_STROKE);
   const h = Math.max(0, height - RING_STROKE);
   const r = Math.min(w, h) / 2;
   const d = [
-    // Старт сверху по центру, дальше по часовой стрелке — как у любого
-    // кругового индикатора.
+    // Start at top centre, then clockwise — as on any circular
+    // indicator.
     `M${inset + w / 2} ${inset}`,
     `H${inset + w - r}`,
     `A${r} ${r} 0 0 1 ${inset + w} ${inset + r}`,
@@ -190,7 +183,7 @@ function ringPath(width: number, height: number): { d: string; length: number } 
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-/** Свой узел поверх кнопки хоста: дорожка и заполненная дуга. */
+/** An own node over the host button: a track and a filled arc. */
 class Ring {
   readonly node: HTMLSpanElement;
   private readonly svg: SVGSVGElement;
@@ -201,7 +194,7 @@ class Ring {
   constructor() {
     this.node = document.createElement("span");
     this.node.dataset.serverStatus = "ring";
-    // Указатель кольцо не ловит: клики и тултип остаются кнопке хоста.
+    // The ring takes no pointer events: clicks and the tooltip stay with the button.
     this.node.setAttribute("style", "position:absolute;inset:0;pointer-events:none");
     this.node.setAttribute("aria-hidden", "true");
 
@@ -226,7 +219,7 @@ class Ring {
     this.node.append(this.svg);
   }
 
-  /** Пересчёт геометрии под текущий размер кнопки. */
+  /** Recomputes geometry for the current button size. */
   layout(width: number, height: number): void {
     if (width <= 0 || height <= 0) return;
     const { d, length } = ringPath(width, height);
@@ -236,7 +229,7 @@ class Ring {
     this.value.setAttribute("d", d);
   }
 
-  /** Кольцо показывает расход ОЗУ; null — снимка ещё нет, только дорожка. */
+  /** The ring shows RAM usage; null means no snapshot yet, track only. */
   draw(percent: number | null): void {
     const known = percent !== null;
     const safe = known ? Math.min(100, Math.max(0, percent)) : 0;
@@ -247,16 +240,16 @@ class Ring {
   }
 }
 
-// --- окно -------------------------------------------------------------------
+// --- panel ------------------------------------------------------------------
 
-// Окно живёт в document.body поверх приложения, поэтому стили держим в своём
-// листе и снимаем его вместе со всем остальным на dispose.
+// The panel lives in document.body above the application, so its styles stay
+// in an own sheet that is removed with everything else on dispose.
 const CSS = `
 [data-server-status="panel"] {
   position: fixed;
   z-index: 2147483000;
-  /* Хватает, чтобы «Последняя перезагрузка: 1 августа 2026, 17:03» легла в
-     одну строку — окно читается, а не разгадывается. */
+  /* Wide enough for "Last reboot: 1 August 2026, 17:03" to fit on one line —
+     the panel is read, not decoded. */
   width: 21rem;
   max-width: calc(100vw - 1rem);
   max-height: calc(100vh - 1rem);
@@ -319,7 +312,7 @@ const CSS = `
   left: 0;
   border-radius: inherit;
   background: var(--muted-foreground, #8a8a8a);
-  /* Та же длительность, что у кольца: две шкалы двигаются в такт. */
+  /* The same duration as the ring: two scales move in step. */
   transition: width 300ms ease, background-color 300ms ease;
 }
 .bb-ss-fill[data-level="warn"] { background: var(--warning, #e3a008); }
@@ -360,7 +353,7 @@ function div(className: string, text?: string): HTMLDivElement {
   return node;
 }
 
-/** Одна метрика окна: название, процент, полоса и строка подробностей. */
+/** One panel metric: name, percentage, bar and a details row. */
 class MetricRow {
   readonly root: HTMLDivElement;
   private readonly mount: HTMLSpanElement;
@@ -406,8 +399,8 @@ class MetricRow {
 }
 
 /**
- * Окно с полной сводкой. Структура строится один раз, дальше меняются только
- * значения — так полосы успевают доехать анимацией, а не прыгают.
+ * The full summary panel. The structure is built once, and only the values
+ * change afterwards — that way bars animate into place instead of jumping.
  */
 class Panel {
   private node: HTMLDivElement | null = null;
@@ -434,14 +427,14 @@ class Panel {
     const node = div("");
     node.dataset.serverStatus = "panel";
     node.setAttribute("role", "dialog");
-    node.setAttribute("aria-label", "Состояние сервера");
+    node.setAttribute("aria-label", "Server status");
     node.tabIndex = -1;
 
     this.host = div("bb-ss-host");
-    this.cpu = new MetricRow("Процессор");
-    this.memory = new MetricRow("Оперативная память");
-    this.swap = new MetricRow("Файл подкачки");
-    this.disk = new MetricRow("Диск");
+    this.cpu = new MetricRow("CPU");
+    this.memory = new MetricRow("Memory");
+    this.swap = new MetricRow("Swap");
+    this.disk = new MetricRow("Disk");
     this.swapNote = div("bb-ss-note");
     this.swapNote.hidden = true;
 
@@ -451,11 +444,11 @@ class Panel {
     this.booted = div("");
     foot.append(this.loadAvg, this.uptime, this.booted);
 
-    this.stale = div("bb-ss-stale", "Последний опрос не прошёл — цифры могли устареть.");
+    this.stale = div("bb-ss-stale", "The last poll failed — these numbers may be stale.");
     this.stale.hidden = true;
 
     node.append(
-      div("bb-ss-title", "Состояние сервера"),
+      div("bb-ss-title", "Server status"),
       this.host,
       this.cpu.root,
       this.memory.root,
@@ -476,7 +469,7 @@ class Panel {
     }
     this.anchor = anchor;
     const node = this.build();
-    // Прячем за экраном, пока не известна высота.
+    // Kept off screen until the height is known.
     node.style.left = "-9999px";
     node.style.top = "0";
     document.body.append(node);
@@ -485,7 +478,7 @@ class Panel {
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      // Клик по самой кнопке разбирает её собственный обработчик.
+      // A click on the button itself is handled by its own listener.
       if (node.contains(target) || anchor.contains(target)) return;
       this.close();
     };
@@ -493,7 +486,7 @@ class Panel {
       if (event.key !== "Escape") return;
       event.stopPropagation();
       this.close();
-      // Фокус возвращаем кнопке: окно закрыли с клавиатуры.
+      // Focus goes back to the button: the panel was closed from the keyboard.
       anchor.focus?.();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
@@ -517,12 +510,12 @@ class Panel {
     this.onClose();
   };
 
-  /** Перерисовка по свежему снимку — окно может быть открыто во время опроса. */
+  /** Redraw on a fresh snapshot — the panel can be open while polling. */
   update(snapshot: Snapshot | null, stale: boolean): void {
     if (!this.node) return;
 
     if (!snapshot) {
-      this.host.textContent = "Жду первый замер…";
+      this.host.textContent = "Waiting for the first sample…";
       for (const row of [this.cpu, this.memory, this.swap, this.disk]) {
         row.hidden = true;
       }
@@ -535,12 +528,12 @@ class Panel {
       return;
     }
 
-    this.host.textContent = `${snapshot.osName} · ядро ${snapshot.kernel}`;
+    this.host.textContent = `${snapshot.osName} · kernel ${snapshot.kernel}`;
 
     this.cpu.hidden = false;
     this.cpu.update(
       snapshot.cpu,
-      `${snapshot.cores} ${plural(snapshot.cores, "ядро", "ядра", "ядер")}`,
+      `${snapshot.cores} ${plural(snapshot.cores, "core")}`,
     );
 
     const memory = snapshot.memory;
@@ -548,8 +541,8 @@ class Panel {
     this.memory.hidden = false;
     this.memory.update(
       memory.percent,
-      `занято ${inMemory.format(memory.usedBytes)} из` +
-        ` ${inMemory.format(memory.totalBytes)} ${inMemory.unit}`,
+      `${inMemory.format(memory.usedBytes)} of` +
+        ` ${inMemory.format(memory.totalBytes)} ${inMemory.unit} used`,
     );
 
     const swap = snapshot.swap;
@@ -559,20 +552,19 @@ class Panel {
       const inSwap = scale(swap.usedBytes, swap.totalBytes);
       this.swap.update(
         swap.percent,
-        `занято ${inSwap.format(swap.usedBytes)} из` +
-          ` ${inSwap.format(swap.totalBytes)} ${inSwap.unit}`,
+        `${inSwap.format(swap.usedBytes)} of` +
+          ` ${inSwap.format(swap.totalBytes)} ${inSwap.unit} used`,
       );
-      // Отдельный предупреждающий пункт: подкачка — это память, вытесненная
-      // на диск. Проценты сами по себе ничего не объясняют, поэтому под
-      // строкой появляется предупреждение словами.
+      // A separate warning row: swap is memory pushed out to disk. A percentage
+      // on its own explains nothing, so a warning in words appears underneath.
       if (swap.percent >= WARN) {
         this.swapNote.hidden = false;
         this.swapNote.textContent =
-          "Подкачка почти заполнена: оперативная память кончилась, сервер может заметно подтормаживать.";
+          "Swap is nearly full: RAM has run out and the server may slow down noticeably.";
       } else if (swap.percent >= SWAP_NOTE) {
         this.swapNote.hidden = false;
         this.swapNote.textContent =
-          "Часть памяти вытеснена на диск — сервер уже не помещается в оперативную память.";
+          "Some memory has been pushed out to disk — the server no longer fits in RAM.";
       }
     }
 
@@ -582,39 +574,39 @@ class Panel {
       const inDisk = scale(disk.usedBytes, disk.totalBytes, disk.availBytes);
       this.disk.update(
         disk.percent,
-        `занято ${inDisk.format(disk.usedBytes)} из` +
-          ` ${inDisk.format(disk.totalBytes)} ${inDisk.unit}` +
-          ` · свободно ${inDisk.format(disk.availBytes)} ${inDisk.unit}`,
-        // Корень подписывать незачем — это и так «Диск». Другую точку
-        // монтирования показываем: без неё цифры не к чему привязать.
+        `${inDisk.format(disk.usedBytes)} of` +
+          ` ${inDisk.format(disk.totalBytes)} ${inDisk.unit} used` +
+          ` · ${inDisk.format(disk.availBytes)} ${inDisk.unit} free`,
+        // Labelling the root is pointless — the row already says "Disk". Any
+        // other mount point is shown: without it the numbers have no subject.
         disk.path === "/" ? "" : disk.path,
       );
     }
 
-    // «1,5 / 1,4 / 0,9» без подписи читается как загадка: поясняем, что это
-    // три окна усреднения и с чем их сравнивать — с числом ядер.
+    // "1.5 / 1.4 / 0.9" with no caption reads as a riddle: say that these are
+    // three averaging windows, and what to compare them against — the core count.
     const load = snapshot.load.map((value) => NUM1.format(value)).join(" / ");
     this.loadAvg.textContent =
-      `Средняя нагрузка за 1, 5 и 15 минут: ${load}` +
-      ` (перегрузка начинается с ${snapshot.cores})`;
-    this.uptime.textContent = `Работает без перезагрузки: ${uptimeRu(uptimeSeconds(snapshot))}`;
-    this.booted.textContent = `Последняя перезагрузка: ${bootedRu(snapshot.bootTimeMs)}`;
+      `Load average over 1, 5 and 15 minutes: ${load}` +
+      ` (overload starts at ${snapshot.cores})`;
+    this.uptime.textContent = `Up without a reboot: ${uptimeText(uptimeSeconds(snapshot))}`;
+    this.booted.textContent = `Last reboot: ${bootedText(snapshot.bootTimeMs)}`;
     this.stale.hidden = !stale;
     this.place();
   }
 
-  /** Справа от кнопки, нижним краем по кнопке; в экран вписывается всегда. */
+  /** To the right of the button, bottom edges aligned; always fits on screen. */
   place(): void {
     const node = this.node;
     const anchor = this.anchor;
     if (!node || !anchor) return;
     const rect = anchor.getBoundingClientRect();
     const size = node.getBoundingClientRect();
-    // Если справа места нет (узкий экран) — уводим окно левее кнопки.
+    // With no room on the right (a narrow screen) the panel moves left of the button.
     const fitsRight = rect.right + 8 + size.width + 8 <= window.innerWidth;
     const preferred = fitsRight ? rect.right + 8 : rect.left - size.width - 8;
-    // На узком экране сайдбар уезжает за левый край, и кнопка вместе с ним:
-    // без нижней границы окно ушло бы следом и обрезалось краем экрана.
+    // On a narrow screen the sidebar slides past the left edge, and the button
+    // with it: without a floor the panel would follow and be clipped.
     const left = Math.min(
       Math.max(8, preferred),
       Math.max(8, window.innerWidth - size.width - 8),
@@ -628,15 +620,15 @@ class Panel {
   }
 }
 
-// --- регистрация ------------------------------------------------------------
+// --- registration -----------------------------------------------------------
 
 export default definePluginApp((app) => {
   app.slots.sidebarFooterAction({
     id: ACTION_ID,
-    title: "Состояние сервера",
+    title: "Server status",
     icon: "Activity",
-    // Мышь и тач кнопку перехватывает контент-скрипт, но клавиатурная
-    // активация доходит сюда — событие открывает то же окно.
+    // Mouse and touch on the button are intercepted by the content script, but
+    // keyboard activation lands here — the event opens the same panel.
     run: () => {
       document.dispatchEvent(new CustomEvent(TOGGLE_EVENT));
     },
@@ -658,21 +650,21 @@ export default definePluginApp((app) => {
       let snapshot: Snapshot | null = null;
       let stale = false;
       let button: HTMLElement | null = null;
-      // Инлайновый position кнопки до нас: кольцу нужен контекст
-      // позиционирования, и на снятии значение возвращается как было.
+      // The button's inline position from before us: the ring needs a positioning
+      // context, and on teardown the value goes back exactly as it was.
       let restorePosition: string | null = null;
-      // Указатель, чьё нажатие по кнопке мы уже отработали сами: его — и только
-      // его — парный click надо погасить. Хранится id, а не голый флаг: жест
-      // можно отменить (нажал на иконке, отпустил в стороне), тогда click по
-      // кнопке не придёт вовсе, и взведённый флаг съел бы следующую
-      // клавиатурную активацию.
+      // The pointer whose press on the button we already handled ourselves: its
+      // paired click — and only its — must be swallowed. An id is stored rather
+      // than a bare flag: a gesture can be cancelled (pressed on the icon,
+      // released aside), then no click on the button arrives at all and a raised
+      // flag would eat the next keyboard activation.
       let suppressedPointer: number | null = null;
       let inFlight = false;
       let lastFetch = 0;
 
       const draw = () => ring.draw(snapshot ? snapshot.memory.percent : null);
 
-      // Размер кнопки задаёт геометрию кольца: сайдбар умеет складываться.
+      // The button size drives the ring geometry: the sidebar can collapse.
       const resizeObserver = new ResizeObserver((entries) => {
         for (const entry of entries) {
           const box = entry.contentRect;
@@ -699,17 +691,17 @@ export default definePluginApp((app) => {
           restorePosition = next.style.position;
           next.style.position = "relative";
         }
-        // Свой свежесозданный узел в контейнер хоста класть можно — чужие
-        // узлы не двигаются и не удаляются.
+        // Placing a freshly created own node into the host container is allowed —
+        // nodes it does not own are never moved or removed.
         next.append(ring.node);
         ring.layout(next.offsetWidth, next.offsetHeight);
         draw();
         resizeObserver.observe(next);
       };
 
-      // Кнопку рисует хост, и к моменту старта скрипта её может не быть —
-      // ждём появления, а заодно возвращаем кольцо, если React перерисовал
-      // футер и унёс наш узел вместе со старой кнопкой.
+      // The host renders the button, and it may not exist when the script starts —
+      // wait for it, and at the same time restore the ring if React re-rendered
+      // the footer and took the node away with the old button.
       let scheduled = 0;
       const sync = () => {
         scheduled = 0;
@@ -728,8 +720,8 @@ export default definePluginApp((app) => {
         scheduled = window.requestAnimationFrame(sync);
       };
       const domObserver = new MutationObserver(() => {
-        // Дешёвая проверка на каждую мутацию документа: пока кнопка та же и
-        // кольцо на месте, ничего не делаем.
+        // A cheap check on every document mutation: while the button is the same
+        // and the ring is in place, do nothing.
         if (button?.isConnected && ring.node.parentNode === button) return;
         schedule();
       });
@@ -737,8 +729,8 @@ export default definePluginApp((app) => {
       sync();
 
       const refresh = async (force = false): Promise<void> => {
-        // Скрытая вкладка из опроса ничего не узнаёт, а каждая открытая иначе
-        // продолжала бы дёргать тот же сервер.
+        // A hidden tab learns nothing from polling, and every open one would
+        // otherwise keep poking the same server.
         if (document.visibilityState === "hidden" || inFlight || signal.aborted) return;
         const now = Date.now();
         if (!force && now - lastFetch < MIN_GAP_MS) return;
@@ -748,9 +740,9 @@ export default definePluginApp((app) => {
           snapshot = await fetchSnapshot(signal);
           stale = false;
         } catch {
-          // Сервер может перезагружать плагин: держим прошлые цифры, помечаем
-          // их как несвежие и ждём следующего тика. В консоль не шумим — раз в
-          // пять секунд это была бы стена сообщений.
+          // The server can restart the plugin: keep the previous numbers, mark
+          // them stale and wait for the next tick. Nothing goes to the console —
+          // once every five seconds that would be a wall of messages.
           stale = snapshot !== null;
         } finally {
           inFlight = false;
@@ -762,7 +754,7 @@ export default definePluginApp((app) => {
       void refresh(true);
       const timer = window.setInterval(() => void refresh(true), POLL_MS);
 
-      // Вкладку вернули из фона — цифры там уже успели протухнуть.
+      // The tab came back from the background — its numbers went stale meanwhile.
       document.addEventListener(
         "visibilitychange",
         () => {
@@ -788,8 +780,8 @@ export default definePluginApp((app) => {
         panel.open(anchor, snapshot, stale);
       };
 
-      // Нажатие мышью или пальцем: открываем окно сами и гасим клик, иначе
-      // хост вызовет `run` и окно закроется тут же следом.
+      // A mouse or finger press: open the panel ourselves and swallow the click,
+      // otherwise the host calls `run` and the panel closes right behind us.
       document.addEventListener(
         "pointerdown",
         (event) => {
@@ -800,10 +792,10 @@ export default definePluginApp((app) => {
         { capture: true, signal },
       );
 
-      // Конец жеста. Отпустили на кнопке — сейчас придёт парный click, его и
-      // гасит обработчик ниже. Отпустили мимо или жест отменили — клика по
-      // кнопке не будет, и ожидание надо снять здесь же, иначе оно достанется
-      // следующему нажатию Enter или пробела.
+      // End of the gesture. Released on the button — a paired click is coming and
+      // the listener below swallows it. Released elsewhere or cancelled — no click
+      // on the button will arrive, and the expectation has to be cleared here or
+      // it would be spent on the next Enter or Space.
       const endGesture = (event: PointerEvent) => {
         if (suppressedPointer !== event.pointerId) return;
         if (event.type === "pointerup" && buttonFrom(event.target)) return;
@@ -823,7 +815,7 @@ export default definePluginApp((app) => {
         { capture: true, signal },
       );
 
-      // Клавиатурная активация приходит из `run` слота.
+      // Keyboard activation arrives from the `run` slot.
       document.addEventListener(TOGGLE_EVENT, () => toggle(), { signal });
 
       return () => {

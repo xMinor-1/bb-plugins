@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Server Status",
-    "description": "Кольцо расхода оперативной памяти вокруг кнопки в футере сайдбара: желтеет с 80%, краснеет выше 90%, обновляется раз в пять секунд. Клик открывает окно со сводкой по серверу — процессор и ядра, память, файл подкачки, диск, средняя нагрузка, время без перезагрузки, версия ОС и ядра.",
+    "description": "Tracks host RAM usage as a ring around a sidebar footer button — amber from 80%, red above 90%, refreshed every five seconds. Click opens a server summary: CPU and cores, memory, swap, disk, load average, uptime, and OS and kernel version.",
     "branding": {
       "icon": "./icon.svg"
     },
