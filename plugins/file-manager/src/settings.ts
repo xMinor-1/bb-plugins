@@ -7,21 +7,22 @@ import type { BbPluginApi, PluginSettingDescriptors } from "@get-bb/plugin-sdk";
 import {
   MAX_CHUNK_BYTES,
   MIN_CHUNK_BYTES,
-  ROOT_PATH,
   sortDirectionSchema,
   sortFieldSchema,
   type Preferences,
 } from "../contract";
 import { fmError, mapNodeError } from "./errors";
-import { getRoot, resolveExisting } from "./root";
+import { DEFAULT_ROOT, getRoot, resolveExisting } from "./root";
 
 /** §7.1 verbatim. Four descriptor types exist; there is no `path` type. */
 export const settingsDescriptors = {
   startFolder: {
     type: "string",
     label: "Start folder",
-    description: "Absolute path under /home/coder that the panel opens by default.",
-    default: ROOT_PATH,
+    description:
+      "Absolute path under the hard root that the panel opens by default. " +
+      "The Start folder section below picks it with a folder browser.",
+    default: DEFAULT_ROOT,
   },
   showHiddenFiles: {
     type: "boolean",

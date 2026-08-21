@@ -27,8 +27,8 @@ import {
   DOWNLOAD_ROUTE,
   UPLOAD_CHUNK_ROUTE,
 } from "../../src/http-routes";
-import { STAGING_DIR_NAME, PLUGIN_ID, ROOT_PATH, UPLOAD_ID_PATTERN } from "../../contract";
-import { initRoot } from "../../src/root";
+import { STAGING_DIR_NAME, PLUGIN_ID, UPLOAD_ID_PATTERN } from "../../contract";
+import { DEFAULT_ROOT as ROOT_PATH, initRoot } from "../../src/root";
 import plugin, { PLUGIN_VERSION, fileManagerContract } from "../../server";
 
 /** Every method name the frozen contract declares. */

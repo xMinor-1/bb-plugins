@@ -57,9 +57,10 @@ describe("nav panel registration (§10)", () => {
     expect(app.navPanels[0]?.experimental_fixedTabs).toBeUndefined();
   });
 
-  it("registers no other frontend slots", () => {
+  // v0.3 added the start-folder settings section; everything else is still off.
+  it("registers no frontend slots beyond the panel and the settings section", () => {
     expect(app.homepageSections).toHaveLength(0);
-    expect(app.settingsSections).toHaveLength(0);
+    expect(app.settingsSections).toHaveLength(1);
     expect(app.threadPanelActions).toHaveLength(0);
     expect(app.composerCustomizations).toHaveLength(0);
     expect(app.contentScripts).toHaveLength(0);

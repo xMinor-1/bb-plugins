@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { ROOT_PATH } from "../../contract";
 import {
   absoluteToSubPath,
   basename,
@@ -21,9 +20,14 @@ import {
   relativeDirOf,
   splitFileName,
   subPathToAbsolute,
+  setClientRoot,
   toAbsolute,
   toRelative,
 } from "../../lib/fm-paths";
+
+/** The panel publishes the backend's root at bootstrap; tests do it by hand. */
+const ROOT_PATH = "/home/coder";
+setClientRoot(ROOT_PATH);
 
 describe("normalizePath", () => {
   it("collapses separators and dot segments", () => {

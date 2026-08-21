@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { ROOT_PATH } from "../../contract";
 import {
   FileManagerRpcError,
   batchFailureText,
@@ -78,7 +77,7 @@ describe("toFileManagerError", () => {
 describe("toast text", () => {
   it("prefers the friendly sentence for a known code", () => {
     expect(errorToastText(new Error("path_escape: /etc"))).toBe(
-      `That path is outside ${ROOT_PATH}.`,
+      "That path is outside the file manager root.",
     );
     expect(toastText).toBe(errorToastText);
   });

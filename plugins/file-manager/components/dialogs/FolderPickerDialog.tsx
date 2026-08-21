@@ -7,9 +7,9 @@
 // browser: breadcrumb, directories only, "Choose this folder".
 import { useCallback, useEffect, useState } from "react";
 
-import { ROOT_PATH, type FileEntry } from "../../contract";
+import { type FileEntry } from "../../contract";
 import { parseRpcError } from "../../lib/errors";
-import { breadcrumbs, joinPath, parentPath } from "../../lib/fm-paths";
+import { breadcrumbs, getClientRoot, joinPath, parentPath } from "../../lib/fm-paths";
 import { useFmRpc } from "../../lib/fm-rpc";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -46,7 +46,7 @@ export function FolderPickerDialog({
   title,
   description,
   initialPath,
-  root = ROOT_PATH,
+  root = getClientRoot(),
   showHidden = false,
   disabledPaths,
   confirmLabel = "Choose this folder",

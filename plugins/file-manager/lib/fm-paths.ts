@@ -1,13 +1,26 @@
 // lib/fm-paths.ts — POSIX path arithmetic for the panel.
 //
 // Browser-only: `node:path` is not available in the app bundle, and every path
-// the backend speaks is a POSIX absolute path under ROOT_PATH (§4, §6). The
+// the backend speaks is a POSIX absolute path under the hard root (§4, §6). The
 // panel route carries the *root-relative* form, URL-encoded per segment
 // (§8): decode with `decodeSubPath`, and hand the raw relative path to
 // `navigate.toPluginPanel` — the host encodes each segment itself.
-import { ROOT_PATH } from "../contract";
-
 export const SEPARATOR = "/";
+
+/**
+ * The hard root, as reported by the backend bootstrap (`state.root`). The panel
+ * cannot know it up front — it is the home directory of whoever runs bb — so
+ * FileManagerPanel publishes it here once and the helpers below default to it.
+ */
+let clientRoot = SEPARATOR;
+
+export function setClientRoot(root: string): void {
+  clientRoot = root;
+}
+
+export function getClientRoot(): string {
+  return clientRoot;
+}
 
 export function isAbsolutePath(path: string): boolean {
   return path.startsWith(SEPARATOR);
@@ -42,7 +55,7 @@ export function normalizePath(path: string): string {
  * `normalize()` (§6): "" and "~" are the root, "~/x" is root-relative, an
  * absolute input stays absolute, anything else resolves under the root.
  */
-export function toAbsolute(input: string, root: string = ROOT_PATH): string {
+export function toAbsolute(input: string, root: string = getClientRoot()): string {
   const rootPath = normalizePath(root);
   const trimmed = input.trim();
   if (trimmed === "" || trimmed === "~") return rootPath;
@@ -57,7 +70,7 @@ export function toAbsolute(input: string, root: string = ROOT_PATH): string {
  * outside the root have no relative form — they yield "" so the caller falls
  * back to the root instead of building a nonsense route.
  */
-export function toRelative(absolute: string, root: string = ROOT_PATH): string {
+export function toRelative(absolute: string, root: string = getClientRoot()): string {
   const rootPath = normalizePath(root);
   const path = normalizePath(absolute);
   if (path === rootPath) return "";
@@ -65,11 +78,11 @@ export function toRelative(absolute: string, root: string = ROOT_PATH): string {
   return path.slice(rootPath.length + 1);
 }
 
-export function isRootPath(path: string, root: string = ROOT_PATH): boolean {
+export function isRootPath(path: string, root: string = getClientRoot()): boolean {
   return normalizePath(path) === normalizePath(root);
 }
 
-export function isInsideRoot(path: string, root: string = ROOT_PATH): boolean {
+export function isInsideRoot(path: string, root: string = getClientRoot()): boolean {
   const rootPath = normalizePath(root);
   const candidate = normalizePath(path);
   return candidate === rootPath || candidate.startsWith(`${rootPath}${SEPARATOR}`);
@@ -101,12 +114,12 @@ export function encodeSubPath(relative: string): string {
 }
 
 /** Route remainder → absolute directory path. */
-export function subPathToAbsolute(subPath: string, root: string = ROOT_PATH): string {
+export function subPathToAbsolute(subPath: string, root: string = getClientRoot()): string {
   return toAbsolute(decodeSubPath(subPath), root);
 }
 
 /** Absolute directory path → the raw (unencoded) `subPath` for `toPluginPanel`. */
-export function absoluteToSubPath(absolute: string, root: string = ROOT_PATH): string {
+export function absoluteToSubPath(absolute: string, root: string = getClientRoot()): string {
   return toRelative(absolute, root);
 }
 
@@ -132,7 +145,7 @@ export function dirname(path: string): string {
 }
 
 /** Parent directory, or null at (or above) the root. */
-export function parentPath(path: string, root: string = ROOT_PATH): string | null {
+export function parentPath(path: string, root: string = getClientRoot()): string | null {
   const normalized = normalizePath(path);
   if (!isInsideRoot(normalized, root) || isRootPath(normalized, root)) return null;
   return dirname(normalized);
@@ -166,7 +179,7 @@ export interface Breadcrumb {
 /** Root-first crumb list for the current directory (§8 Toolbar/Breadcrumbs). */
 export function breadcrumbs(
   absolute: string,
-  root: string = ROOT_PATH,
+  root: string = getClientRoot(),
   rootLabel = "Home",
 ): Breadcrumb[] {
   const rootPath = normalizePath(root);

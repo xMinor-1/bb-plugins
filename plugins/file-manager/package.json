@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-file-manager",
-  "version": "0.2.0",
-  "description": "Browse, upload, download and organize files under /home/coder from a bb sidebar panel.",
+  "version": "0.3.0",
+  "description": "Browse, upload, download and organize files under your home folder from a bb sidebar panel.",
   "license": "MIT",
   "author": "Foma",
   "_repository_todo": "TODO before publishing: this points at the intended home (xMinor-1/bb-plugins, plugins/file-manager) but that repository does not carry this code yet — see PUBLISHING.md step 2. If the plugin ships as a standalone repository instead, rewrite `repository` and drop `directory`. Delete this key once the code is pushed.",
@@ -23,7 +23,7 @@
   },
   "bb": {
     "name": "File Manager",
-    "description": "Browse, upload, download, move, rename and extract files under /home/coder in a full-page panel.",
+    "description": "Browse, upload, download, move, rename and extract files under your home folder in a full-page panel.",
     "branding": {
       "icon": "FolderOpen"
     },

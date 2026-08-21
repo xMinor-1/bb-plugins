@@ -6,9 +6,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createFakePluginHost, type FakePluginHost } from "@get-bb/plugin-sdk/testing";
 
-import { MAX_CHUNK_BYTES, MIN_CHUNK_BYTES, PLUGIN_ID, ROOT_PATH } from "../../contract";
+import { MAX_CHUNK_BYTES, MIN_CHUNK_BYTES, PLUGIN_ID } from "../../contract";
 import { isFileManagerError } from "../../src/errors";
-import { initRoot } from "../../src/root";
+import { DEFAULT_ROOT, initRoot } from "../../src/root";
 import { createSettings, settingsDescriptors, type SettingsModule } from "../../src/settings";
 
 const MIB = 1024 * 1024;
@@ -63,7 +63,7 @@ describe("settingsDescriptors", () => {
     ]);
     expect(settingsDescriptors.startFolder).toMatchObject({
       type: "string",
-      default: ROOT_PATH,
+      default: DEFAULT_ROOT,
     });
     expect(settingsDescriptors.showHiddenFiles).toMatchObject({
       type: "boolean",
@@ -167,7 +167,7 @@ describe("resolveStartFolder", () => {
 
   it("falls back when the folder is missing, is a file, or is the stock default", async () => {
     await writeFile(path.join(root, "a.txt"), "a");
-    for (const startFolder of [path.join(root, "ghost"), path.join(root, "a.txt"), ROOT_PATH]) {
+    for (const startFolder of [path.join(root, "ghost"), path.join(root, "a.txt"), DEFAULT_ROOT]) {
       const { settings, host } = await build({ startFolder });
       await expect(settings.resolveStartFolder()).resolves.toBe(root);
       await host.harness.dispose();

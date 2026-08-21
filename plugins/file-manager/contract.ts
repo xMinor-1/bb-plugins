@@ -11,9 +11,6 @@ import { z } from "zod";
 export const PLUGIN_ID = "file-manager";
 /** navPanel `path` — the panel lives at /plugins/file-manager/files/* */
 export const PANEL_PATH = "files";
-/** Hard root. Nothing outside this prefix is ever readable or writable. */
-export const ROOT_PATH = "/home/coder";
-
 export const RPC_BASE = `/api/v1/plugins/${PLUGIN_ID}/rpc`;
 export const HTTP_BASE = `/api/v1/plugins/${PLUGIN_ID}/http`;
 export const TOKEN_URL = `/api/v1/plugins/${PLUGIN_ID}/token`;
@@ -86,7 +83,7 @@ export const errorCodeSchema = z.enum([
 ]);
 export type FileManagerErrorCode = z.infer<typeof errorCodeSchema>;
 
-/** One directory entry. `path` is always absolute and inside ROOT_PATH. */
+/** One directory entry. `path` is always absolute and inside the hard root. */
 export const entrySchema = z.strictObject({
   /** Base name as it appears on disk. */
   name: z.string(),
@@ -101,7 +98,7 @@ export const entrySchema = z.strictObject({
   modifiedAtMs: z.number(),
   isHidden: z.boolean(),
   isSymlink: z.boolean(),
-  /** True when the symlink resolves outside ROOT_PATH. Not navigable. */
+  /** True when the symlink resolves outside the hard root. Not navigable. */
   escapesRoot: z.boolean(),
   /** True when the name matches a supported archive extension. */
   archiveFormat: archiveFormatSchema.nullable(),

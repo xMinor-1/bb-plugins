@@ -4,14 +4,19 @@
 // input: every path that reaches node:fs must come out of resolveExisting,
 // resolveLink or resolveNew, all of which realpath BEFORE the prefix test.
 import { lstat, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { Stats } from "node:fs";
 
-import { ROOT_PATH, STAGING_DIR_NAME } from "../contract";
+import { STAGING_DIR_NAME } from "../contract";
 import { fmError, mapNodeError } from "./errors";
 
-/** The configured root before realpath resolution. */
-export const DEFAULT_ROOT = ROOT_PATH;
+/**
+ * The configured root before realpath resolution: the home directory of the
+ * user running bb. Hard-coding one host's home ("/home/coder") made the plugin
+ * fail to start anywhere else — macOS homes live under /Users.
+ */
+export const DEFAULT_ROOT = homedir();
 
 /**
  * The realpath'ed hard root. Resolved once at factory time by initRoot(); the

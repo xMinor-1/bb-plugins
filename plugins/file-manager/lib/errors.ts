@@ -6,7 +6,7 @@
 // carrying that message plus the transport-level `code`. Recovering the
 // *domain* code therefore means splitting the message on the first ": " and
 // checking the prefix against the frozen enum — that is `parseRpcError`.
-import { ROOT_PATH, errorCodeSchema, type FileManagerErrorCode } from "../contract";
+import { errorCodeSchema, type FileManagerErrorCode } from "../contract";
 
 const ERROR_CODES: ReadonlySet<string> = new Set<string>(errorCodeSchema.options);
 
@@ -127,7 +127,7 @@ export function toFileManagerError(error: unknown): FileManagerRpcError {
 const CODE_TEXT: Record<FileManagerErrorCode, string> = {
   invalid_path: "That path is not valid.",
   invalid_name: "That name is not allowed.",
-  path_escape: `That path is outside ${ROOT_PATH}.`,
+  path_escape: "That path is outside the file manager root.",
   not_found: "That item no longer exists.",
   not_a_directory: "That path is not a folder.",
   not_a_file: "That path is not a file.",

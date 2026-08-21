@@ -2,9 +2,10 @@
 
 A bb plugin that adds a full-page file manager for the machine that runs your
 bb server. Browse, upload, download, move, rename and extract files under
-`/home/coder` without leaving bb and without a shell.
+your home folder without leaving bb and without a shell.
 
-Everything the panel touches lives under one hard root — `/home/coder` — and
+Everything the panel touches lives under one hard root — the home directory of
+the user running bb — and
 every path is re-resolved and clamped on the server before a single byte moves.
 
 ## What it does
@@ -29,6 +30,8 @@ every path is re-resolved and clamped on the server before a single byte moves.
   second open panel or a finishing background job updates the listing without
   polling.
 - **Hidden files** — dot-files toggle, remembered as a setting.
+- **Pick where it opens** — the plugin's settings page carries a folder
+  browser for the start folder, so it is chosen rather than typed.
 
 The panel appears in the bb sidebar as **File Manager** and is routed at
 `/plugins/file-manager/files/*`. While uploads are running, the sidebar row
@@ -121,7 +124,7 @@ Change them in bb's settings UI, from the panel, or with
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `startFolder` | string | `/home/coder` | Absolute path under the root the panel opens by default. Re-validated on every read; a deleted or out-of-root path falls back to the root. |
+| `startFolder` | string | home folder | Absolute path under the root the panel opens by default. Re-validated on every read; a deleted or out-of-root path falls back to the root. |
 | `showHiddenFiles` | boolean | `false` | Show dot-files and dot-directories. |
 | `confirmOnDelete` | boolean | `true` | Ask before deleting. |
 | `sortField` | `name` \| `size` \| `modified` \| `kind` | `name` | Default sort column. |
@@ -131,10 +134,35 @@ Change them in bb's settings UI, from the panel, or with
 Toggles made in the panel are written back through the plugin's own
 `savePreferences` method, so they persist without a reload.
 
+### Choosing the start folder
+
+bb's settings form only knows four descriptor types — string, select, boolean
+and project — so `startFolder` renders there as a plain text field. The plugin
+adds its own **Start folder** section right below that form, on its detail page
+in Tools:
+
+- the absolute path the panel will actually open, plus its short name (`Home`
+  at the root);
+- **Browse…** — the same folder browser the panel uses for *Move to…* and
+  *Copy to…*, so a folder is picked, never typed;
+- **Reset to the home folder** — disabled when the start folder already is the root;
+- a saved / saving indicator, and the backend's own message inline when it
+  rejects a path (outside the root, deleted, or not a folder).
+
+Every one of those buttons writes the same `startFolder` setting through the
+same `savePreferences` method, so the section, the panel's *Set as start
+folder* action and `bb plugin config file-manager set startFolder <path>` are
+interchangeable.
+
+A start folder that stops working — deleted, renamed, or moved outside the root
+— never breaks the panel: the backend logs it and falls back to the root.
+The settings section says so in place, and shows which saved path it could not
+open.
+
 ## Uploads
 
 Files are cut into chunks and sent one chunk per request. The server appends
-each chunk to a `.part` file in `/home/coder/.bb-file-manager/uploads/` and
+each chunk to a `.part` file in `<root>/.bb-file-manager/uploads/` and
 renames it into place only when the full byte count has arrived, so a partial
 upload never appears as a real file in the destination folder.
 
@@ -165,12 +193,12 @@ with a visible notice rather than freezing the panel.
 ## Security model
 
 This plugin gives anyone who can reach your bb UI read and write access to
-everything under `/home/coder`. Treat installing it as equivalent to handing
+everything under the home folder. Treat installing it as equivalent to handing
 out shell access to that directory tree.
 
 Within that boundary:
 
-- **One hard root.** `ROOT = realpath("/home/coder")` is resolved once at load.
+- **One hard root.** `ROOT = realpath(homedir())` is resolved once at load.
   Every incoming path is normalized, resolved with `realpath` over its existing
   prefix, and rejected unless it is `ROOT` itself or starts with `ROOT + "/"`.
   Rejections raise `path_escape`. There is no setting that widens the root.
@@ -191,7 +219,7 @@ Within that boundary:
   Responses are `application/octet-stream` with `no-store, no-transform` and
   `X-Content-Type-Options: nosniff`.
 - **Upload staging is contained.** In-flight parts live in
-  `/home/coder/.bb-file-manager/uploads/`, and that directory is filtered out of
+  `<root>/.bb-file-manager/uploads/`, and that directory is filtered out of
   every listing, including with hidden files shown.
 - **Archive extraction is defensive.** Extractors run with
   `--no-same-owner --no-same-permissions` into a per-job staging directory;
@@ -225,7 +253,8 @@ every save.
 | `server.ts` | backend entry: settings, RPC registration, HTTP routes, upload GC schedule |
 | `src/` | path safety, listing, mutations, uploads, archives, jobs |
 | `contract.ts` | the RPC contract shared by both sides; it is frozen and edited by nobody |
-| `app.tsx`, `components/`, `hooks/`, `lib/` | the panel |
+| `app.tsx`, `components/`, `hooks/`, `lib/` | the panel and the settings section |
+| `components/SettingsSection.tsx`, `lib/start-folder.ts` | the `settingsSection` slot and the start-folder logic it shares with the panel |
 | `lib/fm-tree.ts`, `hooks/useTree.ts` | the folder tree: a pure reducer plus the lazy loader around it |
 | `components/ui/` | vendored bb UI kit (`npx shadcn add @bb/<name>`) — not hand-edited |
 | `test/backend/`, `test/frontend/` | unit suites for each side |

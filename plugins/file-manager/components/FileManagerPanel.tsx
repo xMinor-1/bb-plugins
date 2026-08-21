@@ -17,7 +17,7 @@ import {
 import { useBbNavigate, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
-import { PANEL_PATH, ROOT_PATH, type FileEntry } from "../contract";
+import { PANEL_PATH, type FileEntry } from "../contract";
 import { useClipboard } from "../hooks/useClipboard";
 import { useDirectory, type SortDirection, type SortField } from "../hooks/useDirectory";
 import { useJobs } from "../hooks/useJobs";
@@ -29,9 +29,11 @@ import { batchFailureText, errorToastText, parseRpcError, type BatchFailure } fr
 import {
   absoluteToSubPath,
   dirname,
+  getClientRoot,
   isSameOrDescendant,
   isSamePath,
   parentPath as parentOf,
+  setClientRoot,
   subPathToAbsolute,
 } from "../lib/fm-paths";
 import {
@@ -41,6 +43,11 @@ import {
   type TreeEntryRow,
 } from "../lib/fm-tree";
 import { useFmRpc, type RpcOutput } from "../lib/fm-rpc";
+import {
+  saveStartFolder,
+  START_FOLDER_SAVED_TEXT,
+  START_FOLDER_SAVE_FAILED_TEXT,
+} from "../lib/start-folder";
 import type { UploadRequest } from "../lib/upload-manager";
 import { ActivityTray } from "./ActivityTray";
 import { BackgroundContextMenu } from "./BackgroundContextMenu";
@@ -190,7 +197,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
   const [stateError, setStateError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
-  const root = state?.root ?? ROOT_PATH;
+  const root = state?.root ?? getClientRoot();
   const currentPath = useMemo(() => subPathToAbsolute(subPath, root), [subPath, root]);
   const currentPathRef = useRef(currentPath);
   currentPathRef.current = currentPath;
@@ -227,6 +234,9 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
       try {
         const result = await rpc.call("getState", null);
         if (cancelled) return;
+        // The panel learns the hard root here: it is the home directory of the
+        // user running bb, so path helpers cannot default to a fixed value.
+        setClientRoot(result.root);
         setState(result);
         setShowHidden(result.preferences.showHiddenFiles);
         setConfirmOnDelete(result.preferences.confirmOnDelete);
@@ -431,7 +441,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
 
   const navigateTo = useCallback((absolute: string) => {
     navigateRef.current.toPluginPanel(PANEL_PATH, {
-      subPath: absoluteToSubPath(absolute, ROOT_PATH),
+      subPath: absoluteToSubPath(absolute),
     });
   }, []);
 
@@ -631,14 +641,16 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
     [jobs, rpc],
   );
 
+  // Same write the settings section performs (lib/start-folder.ts) — the panel
+  // just reports it as a toast instead of inline text.
   const setStartFolder = useCallback(
     (path: string) => {
       void (async () => {
         try {
-          await rpc.call("savePreferences", { startFolder: path });
-          toast.success("Start folder saved");
+          await saveStartFolder(rpc, path);
+          toast.success(START_FOLDER_SAVED_TEXT);
         } catch (failure) {
-          toast.error(errorToastText(failure, "Could not save the start folder."));
+          toast.error(errorToastText(failure, START_FOLDER_SAVE_FAILED_TEXT));
         }
       })();
     },
