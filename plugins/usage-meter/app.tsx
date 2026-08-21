@@ -1,29 +1,29 @@
-// bb-plugin-usage-meter — два кольца расхода лимитов Claude в футере сайдбара.
+// bb-plugin-usage-meter — two rings of Claude limit usage in the sidebar footer.
 //
-//   внешнее кольцо — пятичасовая сессия, окно "Current session"
-//   внутреннее     — недельный лимит, окно "Weekly limit": радиус меньше,
-//                    штрих тоньше, между кольцами видимый зазор
-//   наведение      — попап со всеми окнами, планом и почтой аккаунта
-//   клик           — тот же попап, но закреплённый (для тач-устройств)
+//   outer ring — the five-hour session, the "Current session" window
+//   inner ring — the weekly limit, the "Weekly limit" window: smaller radius,
+//                thinner stroke, a visible gap between the two
+//   hover      — a popup with every window, the plan and the account email
+//   click      — the same popup, pinned (for touch devices)
 //
-// Каждое кольцо красится по своему значению: приглушённое до 60%, жёлтое с
-// 60%, красное выше 85%. Лимит по модели (Fable) кольцом не рисуется — на
-// кнопке 32×32 третье кольцо уже не читается, поэтому он живёт строкой в
-// попапе, а на кнопке получает точку в правом верхнем углу, как только
-// переваливает за жёлтый порог: иначе исчерпанное окно ничем себя не выдаёт.
+// Each ring colours by its own value: muted below 60%, amber from 60%, red
+// above 85%. The per-model limit (Fable) gets no ring — a third ring stops
+// being readable on a 32×32 button, so it lives as a row in the popup and
+// takes a dot in the top right corner of the button as soon as it passes the
+// amber threshold: otherwise an exhausted window gives away nothing.
 //
-// Разовый сбой опроса цифры не стирает: бэкенд держит прошлые окна, кольца
-// продолжают их показывать, а попап отдельной строкой говорит возраст цифр и
-// причину. Пустые кольца остаются только там, где снимка нет вовсе.
+// A one-off polling failure does not erase the figures: the backend keeps the
+// previous windows, the rings go on showing them, and a separate popup row
+// gives their age and the cause. Rings stay empty only with no snapshot at all.
 //
-// sidebarFooterAction рисует хост, и рисует только иконку, поэтому кольца
-// добавляет контент-скрипт: свой <svg> кладётся внутрь кнопки хоста поверх её
-// иконки, а попап — обычным DOM поверх приложения. Иконка хоста остаётся на
-// месте: свой узел лежит абсолютом и не ловит указатель.
+// The host renders sidebarFooterAction as an icon only, so the rings come from
+// a content script: its own <svg> goes inside the host button over the icon,
+// and the popup is plain DOM above the application. The host icon stays where
+// it is: the added node is absolutely positioned and takes no pointer events.
 //
-// Внешнее кольцо повторяет геометрию соседнего плагина server-status: тот же
-// путь по границе кнопки, та же толщина, та же анимация. В футере эти кнопки
-// стоят рядом, и два индикатора обязаны читаться как одна система.
+// The outer ring repeats the geometry of the neighbouring server-status plugin:
+// the same path along the button edge, the same thickness, the same animation.
+// These buttons sit side by side in the footer and must read as one system.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import type { UsageState } from "./server";
 import {
@@ -52,37 +52,37 @@ import { UsagePage } from "./components/UsagePage";
 const ACTION_ID = "usage";
 const BUTTON_SELECTOR = `[data-testid="plugin-sidebar-footer-action-${PLUGIN_ID}-${ACTION_ID}"]`;
 
-// Мост между `run` хоста и контент-скриптом: они живут в разных модулях одного
-// окна, поэтому клавиатурная активация кнопки доезжает до попапа событием.
+// A bridge between the host's `run` and the content script: they live in
+// different modules of one window, so keyboard activation reaches the popup as an event.
 const TOGGLE_EVENT = "usage-meter:toggle";
 
-/** Свой опрос снимка. Данные общие, так что чаще, чем бэкенд, смысла нет. */
+/** Own snapshot poll. The data is shared, so polling faster than the backend is pointless. */
 const POLL_MS = 60_000;
-/** Нижняя граница между опросами: защита от частых visibilitychange. */
+/** Floor between polls: protection against frequent visibilitychange. */
 const MIN_GAP_MS = 10_000;
-/** Задержка перед попапом по наведению — курсор мимо кнопки его не открывает. */
+/** Delay before the hover popup — a cursor merely passing the button does not open it. */
 const HOVER_MS = 250;
-/** Фора на перевод курсора с кнопки в попап. */
+/** Grace period for moving the cursor from the button into the popup. */
 const CLOSE_GRACE_MS = 250;
 
-// --- геометрия колец --------------------------------------------------------
+// --- ring geometry ----------------------------------------------------------
 
-/** Толщина внешнего кольца. Ровно такая же у server-status — не менять в одиночку. */
+/** Outer ring thickness. Exactly the same in server-status — never change one alone. */
 const OUTER_STROKE = 2;
-/** Внутреннее тоньше: пара должна читаться как «главное и уточняющее». */
+/** The inner one is thinner: the pair must read as "main and qualifier". */
 const INNER_STROKE = 1.5;
-/** Чистый зазор между штрихами колец, в пикселях кнопки. */
+/** Clear gap between the ring strokes, in button pixels. */
 const RING_GAP = 2;
 /**
- * Отступ центральной линии кольца от границы кнопки. Внешнее прижато к краю,
- * как у server-status; внутреннее отодвинуто на свою толщину плюс зазор,
- * поэтому на кнопке 32×32 его штрих идёт по 4…5.5 px от края и не достаёт до
- * иконки хоста (та занимает середину 16×16, то есть от 8 px).
+ * Inset of a ring centre line from the button edge. The outer one hugs the
+ * edge as in server-status; the inner one is moved in by its own thickness
+ * plus the gap, so on a 32×32 button its stroke runs 4…5.5 px from the edge
+ * and never reaches the host icon (which owns the middle 16×16, from 8 px).
  */
 const OUTER_INSET = OUTER_STROKE / 2;
 const INNER_INSET = OUTER_STROKE + RING_GAP + INNER_STROKE / 2;
 
-// --- данные -----------------------------------------------------------------
+// --- data -------------------------------------------------------------------
 
 async function fetchState(signal: AbortSignal): Promise<UsageState> {
   const response = await fetch(`/api/v1/plugins/${PLUGIN_ID}/rpc/state`, {
@@ -110,11 +110,11 @@ function ringColor(percent: number | null): string {
   return "var(--muted-foreground, #8a8a8a)";
 }
 
-// --- кольца -----------------------------------------------------------------
+// --- rings ------------------------------------------------------------------
 
 /**
- * Периметр скруглённого прямоугольника внутри кнопки; квадратная кнопка даст
- * круг. `inset` — расстояние от границы кнопки до центральной линии штриха.
+ * Perimeter of a rounded rectangle inside the button; a square button gives a
+ * circle. `inset` is the distance from the button edge to the stroke centre line.
  */
 function ringPath(
   width: number,
@@ -125,8 +125,8 @@ function ringPath(
   const h = height - 2 * inset;
   const r = Math.min(w, h) / 2;
   const d = [
-    // Старт сверху по центру, дальше по часовой стрелке — как у любого
-    // кругового индикатора.
+    // Start at top centre, then clockwise — as on any circular
+    // indicator.
     `M${inset + w / 2} ${inset}`,
     `H${inset + w - r}`,
     `A${r} ${r} 0 0 1 ${inset + w} ${inset + r}`,
@@ -144,12 +144,12 @@ function ringPath(
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-/** Приглушённость незаполненной дорожки — общая с server-status. */
+/** Dimming of the unfilled track — shared with server-status. */
 const TRACK_OPACITY = "0.22";
 
-/** Одно кольцо: серая дорожка и заполненная дуга поверх неё. */
+/** One ring: a grey track and a filled arc over it. */
 class Ring {
-  /** Оба пути живут в своей группе, чтобы прятаться и появляться разом. */
+  /** Both paths live in their own group so they hide and appear together. */
   readonly group: SVGGElement;
   private readonly track: SVGPathElement;
   private readonly value: SVGPathElement;
@@ -172,12 +172,12 @@ class Ring {
     this.group.append(this.track, this.value);
   }
 
-  /** Пересчёт геометрии под текущий размер кнопки. */
+  /** Recomputes geometry for the current button size. */
   layout(width: number, height: number): void {
     const w = width - 2 * this.inset;
     const h = height - 2 * this.inset;
-    // Сложенный сайдбар может дать кнопку уже внутреннего кольца — тогда его
-    // просто нет, вместо вывернутого наизнанку пути.
+    // A collapsed sidebar can give a button narrower than the inner ring — then
+    // it is simply absent, rather than drawn as an inside-out path.
     if (w <= 0 || h <= 0) {
       this.length = 0;
       this.group.style.display = "none";
@@ -191,17 +191,17 @@ class Ring {
   }
 
   /**
-   * `percent` — значение своего окна, null — окна нет или снимок нерабочий.
-   * `track` — показывать ли серую дорожку: у неизвестного снимка она стоит
-   * пустым местом под будущие цифры, у чужого набора окон кольца нет вовсе.
+   * `percent` — the value of its own window, null — no window or a dead snapshot.
+   * `track` — whether to show the grey track: on an unknown snapshot it stands
+   * as a placeholder for figures to come; on a foreign set of windows there are no rings.
    */
   draw(percent: number | null, track: boolean): void {
     this.track.setAttribute("stroke-opacity", track ? TRACK_OPACITY : "0");
     this.value.setAttribute("stroke", ringColor(percent));
     const filled = ((percent ?? 0) / 100) * this.length;
     this.value.setAttribute("stroke-dasharray", `${filled} ${this.length}`);
-    // Нулевое значение рисовать нечем: круглый колпачок штриха оставил бы
-    // точку на 12 часах, и пустое кольцо выглядело бы битым.
+    // A zero value has nothing to draw: a round stroke cap would leave a dot
+    // at twelve o'clock, and an empty ring would look broken.
     this.value.setAttribute(
       "stroke-opacity",
       percent !== null && percent > 0 ? "1" : "0",
@@ -209,29 +209,29 @@ class Ring {
   }
 }
 
-/** Радиус точки-метки для окна без кольца и её обводки цветом фона. */
+/** Radius of the marker dot for a ringless window, and of its background-coloured outline. */
 const BADGE_RADIUS = 2.6;
 const BADGE_HALO = 1.6;
 
-/** Пара колец одним слоем поверх кнопки хоста. */
+/** The pair of rings as one layer over the host button. */
 class Gauge {
   readonly node: HTMLSpanElement;
   private readonly svg: SVGSVGElement;
   private readonly outer = new Ring(OUTER_STROKE, OUTER_INSET);
   private readonly inner = new Ring(INNER_STROKE, INNER_INSET);
   /**
-   * Метка окна, которому кольца не досталось. Сидит на внешнем кольце в правом
-   * верхнем углу — там, где значки обычно и висят, — и отделена от кольца
-   * обводкой цветом сайдбара.
+   * Marker for the window that got no ring. It sits on the outer ring in the
+   * top right corner — where badges usually hang — and is separated from the
+   * ring by an outline in the sidebar colour.
    */
   private readonly badge: SVGCircleElement;
-  /** Место для метки известно только после раскладки. */
+  /** The marker place is known only after layout. */
   private badgeReady = false;
 
   constructor() {
     this.node = document.createElement("span");
     this.node.dataset.usageMeter = "rings";
-    // Указатель кольца не ловят: клики и тултип остаются кнопке хоста.
+    // The rings take no pointer events: clicks and the tooltip stay with the button.
     this.node.setAttribute(
       "style",
       "position:absolute;inset:0;pointer-events:none",
@@ -252,7 +252,7 @@ class Gauge {
     this.badge.style.display = "none";
     this.badge.style.transition = "fill 300ms ease";
 
-    // Метка идёт последней: она поверх обоих колец.
+    // The marker goes last: it sits above both rings.
     this.svg.append(this.outer.group, this.inner.group, this.badge);
     this.node.append(this.svg);
   }
@@ -262,8 +262,8 @@ class Gauge {
     this.svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     this.outer.layout(width, height);
     this.inner.layout(width, height);
-    // Точка на внешнем кольце под 45° вправо-вверх: у квадратной кнопки это
-    // угол окружности, у вытянутой — верхняя правая скруглённая четверть.
+    // A point on the outer ring at 45° up and to the right: on a square button
+    // that is the corner of the circle, on an elongated one the top right quarter.
     const w = width - 2 * OUTER_INSET;
     const h = height - 2 * OUTER_INSET;
     this.badgeReady = w > 2 * BADGE_RADIUS && h > 2 * BADGE_RADIUS;
@@ -278,9 +278,9 @@ class Gauge {
   }
 
   /**
-   * Значения окон сессии и недели плюс `extra` — максимум окон без кольца.
-   * Пока снимка нет (`known` = false), оба кольца стоят серыми и пустыми, а
-   * причина уезжает в попап.
+   * Values of the session and week windows plus `extra` — the highest ringless window.
+   * While there is no snapshot (`known` = false) both rings stand grey and
+   * empty, and the cause moves into the popup.
    */
   draw(
     session: number | null,
@@ -290,15 +290,15 @@ class Gauge {
   ): void {
     this.outer.draw(session, session !== null || !known);
     this.inner.draw(weekly, weekly !== null || !known);
-    // Метка зажигается ровно на том пороге, на котором желтеют кольца: до него
-    // окно без кольца никого не беспокоит, после — молчать про него нельзя.
+    // The marker lights at exactly the threshold where the rings turn amber:
+    // below it a ringless window bothers nobody, above it silence is not an option.
     const show = this.badgeReady && extra !== null && extra >= WARN;
     this.badge.style.display = show ? "" : "none";
     if (show) this.badge.setAttribute("fill", ringColor(extra));
   }
 }
 
-// --- попап ------------------------------------------------------------------
+// --- popup ------------------------------------------------------------------
 
 const PANEL_STYLE = [
   "position:fixed",
@@ -326,9 +326,9 @@ const TITLE_STYLE = [
 const MUTED_STYLE = "color:var(--muted-foreground, #9a9a9a)";
 
 /**
- * Метка-кольцо в строке попапа. Пропорции кнопки в миниатюре не читаются —
- * у метки свои радиусы, лишь бы внешнее было толще и шире внутреннего, а
- * зазор между ними оставался видимым.
+ * A ring badge in a popup row. Button proportions do not read at that size —
+ * the badge has its own radii, as long as the outer one stays thicker and
+ * wider than the inner and the gap between them stays visible.
  */
 const GLYPH_SIZE = 15;
 const GLYPH_RINGS = [
@@ -344,8 +344,8 @@ function element(tag: string, style: string, text?: string): HTMLElement {
 }
 
 /**
- * Метка строки: та же пара колец в миниатюре, где своё кольцо выделено цветом,
- * а соседнее остаётся дорожкой. По ней видно, какая строка какое кольцо.
+ * Row badge: the same pair of rings in miniature, with its own ring picked out
+ * in colour while the neighbour stays a track. It shows which row is which ring.
  */
 function ringGlyph(which: "outer" | "inner", percent: number | null): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
@@ -374,8 +374,8 @@ function ringGlyph(which: "outer" | "inner", percent: number | null): SVGSVGElem
 }
 
 /**
- * Метка строки окна без кольца: та же точка, что зажглась на кнопке. По ней
- * видно, какое именно окно её зажгло.
+ * Row badge for a window without a ring: the same dot that lit up on the
+ * button. It shows which window lit it.
  */
 function dotGlyph(percent: number | null): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
@@ -393,12 +393,12 @@ function dotGlyph(percent: number | null): SVGSVGElement {
   return svg;
 }
 
-/** Тултипы хост открывает порталом прямо в body — вот их обёртка. */
+/** The host portals tooltips straight into body — this is their wrapper. */
 const HOST_TOOLTIP = "[data-radix-popper-content-wrapper]";
 
 /**
- * Верхний край тултипа хоста, который пересёкся бы с панелью в этом месте;
- * null — мешать некому.
+ * Top edge of the host tooltip that would overlap the panel in this position;
+ * null — nothing is in the way.
  */
 function tooltipOver(box: {
   left: number;
@@ -419,21 +419,21 @@ function tooltipOver(box: {
   return ceiling;
 }
 
-/** Панель со всеми окнами лимитов, планом и почтой. */
+/** Panel with every limit window, the plan and the email. */
 class Popup {
   private panel: HTMLDivElement | null = null;
   private anchor: HTMLElement | null = null;
   private cleanup: Array<() => void> = [];
   private closeTimer: number | null = null;
   /**
-   * Потолок для нижнего края панели: тултип кнопки хоста висит над ней и шире
-   * её, а попап стоит справа — углом они пересекаются. Разъехавшись один раз,
-   * панель держится выше до самого закрытия: иначе она прыгала бы туда-сюда
-   * вслед за тултипом.
+   * Ceiling for the bottom edge of the panel: the host button tooltip hangs
+   * above it and is wider, and the popup stands to the right — their corners
+   * overlap. Once moved apart, the panel stays higher until it closes: otherwise
+   * it would jump back and forth following the tooltip.
    */
   private ceiling: number | null = null;
   private placeFrame = 0;
-  /** Попап, открытый наведением, сам закрывается; закреплённый — нет. */
+  /** A popup opened by hover closes itself; a pinned one does not. */
   pinned = false;
 
   get isOpen(): boolean {
@@ -483,7 +483,7 @@ class Popup {
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-label", "Usage limits");
     panel.dataset.usageMeter = "popup";
-    // Прячем за экраном, пока не известна высота.
+    // Kept off screen until the height is known.
     panel.style.left = "-9999px";
     panel.style.top = "0";
     document.body.append(panel);
@@ -492,7 +492,7 @@ class Popup {
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      // Клик по самой кнопке разбирает её собственный обработчик.
+      // A click on the button itself is handled by its own listener.
       if (panel.contains(target) || anchor.contains(target)) return;
       this.close();
     };
@@ -504,8 +504,8 @@ class Popup {
     window.addEventListener("resize", this.close);
     panel.addEventListener("pointerenter", this.cancelClose);
     panel.addEventListener("pointerleave", this.armClose);
-    // Тултип кнопки появляется со своей задержкой, уже после попапа, и портал
-    // кладёт его прямо в body. Ждём его, чтобы уступить место.
+    // The button tooltip appears on its own delay, after the popup, and the
+    // portal puts it straight into body. Wait for it, then give way.
     const portals = new MutationObserver(() => {
       if (this.placeFrame !== 0) return;
       this.placeFrame = window.requestAnimationFrame(() => {
@@ -524,7 +524,7 @@ class Popup {
     this.render(state);
   }
 
-  /** Перерисовка по свежему снимку — попап может быть открыт во время опроса. */
+  /** Redraw on a fresh snapshot — the popup can be open while polling. */
   render(state: UsageState | null): void {
     const panel = this.panel;
     if (!panel) return;
@@ -532,8 +532,8 @@ class Popup {
 
     panel.append(element("div", TITLE_STYLE, "Usage limits"));
 
-    // Цифры показываем и после сбоя: они старые, но настоящие. Пустая панель
-    // остаётся только там, где показывать нечего.
+    // Figures are shown after a failure too: they are old but real. An empty
+    // panel remains only where there is nothing to show.
     const figures = hasFigures(state);
     if (!state || (state.status !== "ok" && !figures)) {
       panel.append(this.note(statusLine(state), "margin-top:0.375rem"));
@@ -563,9 +563,9 @@ class Popup {
         "div",
         "display:flex;gap:0.375rem;align-items:center;min-width:0",
       );
-      // Окна, у которых есть кольцо, помечены им же; окно без кольца — той же
-      // точкой, что зажглась на кнопке; остальные — отступом той же ширины,
-      // чтобы проценты стояли одной колонкой.
+      // Windows that have a ring are marked with it; a ringless window with the
+      // same dot that lit on the button; the rest with an indent of the same
+      // width, so the percentages stand in one column.
       const percent = percentOf(limit);
       const ring = ringOf(limit.label);
       if (ring) {
@@ -577,8 +577,8 @@ class Popup {
         row.append(element("span", `width:${GLYPH_SIZE}px;flex:none`));
       }
 
-      // Подпись окна задаёт API, и длинная («Claude Opus 4.6 extended thinking
-      // window») обязана обрезаться внутри панели, а не вылезать наружу.
+      // The API sets the window label, and a long one ("Claude Opus 4.6 extended
+      // thinking window") has to be truncated inside the panel, not spill out.
       const label = element(
         "span",
         "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap",
@@ -610,12 +610,12 @@ class Popup {
     }
     panel.append(rows);
 
-    // Цифры прошлые: без этой строки кольца выдавали бы старое за свежее.
+    // These are the previous figures: without this row the rings would pass off old as fresh.
     if (state.status !== "ok") {
       panel.append(this.note(staleLine(state), "margin-top:0.375rem"));
     }
-    // Пороги названы словами: у соседней кнопки в футере они другие, и по
-    // одному цвету догадаться, с какого процента он загорается, нельзя.
+    // The thresholds are named in words: the neighbouring footer button uses
+    // different ones, and a colour alone does not say at what percentage it lights.
     if (rings) {
       panel.append(
         this.note(
@@ -662,14 +662,14 @@ class Popup {
     return link;
   }
 
-  /** Приглушённая строка снизу панели; незнакомый текст уходит в подсказку. */
+  /** A muted row at the bottom of the panel; unfamiliar text goes into the tooltip. */
   private note(line: Line, extra: string): HTMLElement {
     const node = element("div", `${MUTED_STYLE};${extra}`, line.text);
     if (line.title) node.title = line.title;
     return node;
   }
 
-  /** Справа от кнопки, нижним краем по кнопке; в экран вписывается всегда. */
+  /** To the right of the button, bottom edges aligned; always fits on screen. */
   private place(): void {
     const panel = this.panel;
     const anchor = this.anchor;
@@ -691,8 +691,8 @@ class Popup {
       bottom: top + size.height,
     });
     if (tip !== null) this.ceiling = Math.min(this.ceiling ?? tip, tip);
-    // Панель поднимается над тултипом. Если выше места нет, прижимаемся к
-    // верху экрана: перекрытие лучше панели, уехавшей за край.
+    // The panel rises above the tooltip. With no room above, it sticks to the
+    // top of the screen: an overlap beats a panel that has left the edge.
     if (this.ceiling !== null) {
       top = Math.max(8, Math.min(top, this.ceiling - size.height - 8));
     }
@@ -700,7 +700,7 @@ class Popup {
     panel.style.top = `${top}px`;
   }
 
-  /** Курсор ушёл с кнопки: попап по наведению закрывается, закреплённый живёт. */
+  /** The cursor left the button: a hover popup closes, a pinned one lives on. */
   leave(): void {
     this.armClose();
   }
@@ -710,7 +710,7 @@ class Popup {
   }
 }
 
-// --- регистрация ------------------------------------------------------------
+// --- registration -----------------------------------------------------------
 
 export default definePluginApp((app) => {
   // The page the rings are the short version of: the same limits on top, and
@@ -730,8 +730,8 @@ export default definePluginApp((app) => {
     id: ACTION_ID,
     title: "Usage limits",
     icon: "ChartColumn",
-    // Мышь и тач кнопку перехватывает контент-скрипт, но клавиатурная
-    // активация доходит сюда — событие открывает тот же попап.
+    // Mouse and touch on the button are intercepted by the content script, but
+    // keyboard activation lands here — the event opens the same popup.
     run: () => {
       document.dispatchEvent(new CustomEvent(TOGGLE_EVENT));
     },
@@ -744,8 +744,8 @@ export default definePluginApp((app) => {
       const popup = new Popup();
       let state: UsageState | null = null;
       let button: HTMLElement | null = null;
-      // Инлайновый position кнопки до нас: кольцам нужен контекст
-      // позиционирования, и на снятии значение возвращается как было.
+      // The button inline position from before us: the rings need a positioning
+      // context, and on teardown the value goes back exactly as it was.
       let restorePosition: string | null = null;
       let hoverTimer: number | null = null;
       let suppressClick = false;
@@ -753,8 +753,8 @@ export default definePluginApp((app) => {
       let inFlight = false;
 
       const draw = () => {
-        // Снимок «известен», пока в нём есть цифры — свежие или прошлые. Пустые
-        // дорожки под будущие цифры остаются только для обнулённого снимка.
+        // A snapshot is "known" while it holds figures — fresh or previous. Empty
+        // tracks for figures to come remain only for a cleared snapshot.
         const known = state?.status === "ok" || hasFigures(state);
         gauge.draw(
           percentOf(findWindow(state, SESSION_LABEL)),
@@ -764,7 +764,7 @@ export default definePluginApp((app) => {
         );
       };
 
-      // Размер кнопки задаёт геометрию колец: сайдбар умеет складываться.
+      // The button size drives the ring geometry: the sidebar can collapse.
       const resizeObserver = new ResizeObserver((entries) => {
         for (const entry of entries) {
           const box = entry.contentRect;
@@ -795,17 +795,17 @@ export default definePluginApp((app) => {
           restorePosition = next.style.position;
           next.style.position = "relative";
         }
-        // Свой свежесозданный узел в контейнер хоста класть можно — чужие
-        // узлы не двигаются и не удаляются.
+        // Placing a freshly created own node into the host container is allowed —
+        // nodes it does not own are never moved or removed.
         next.append(gauge.node);
         gauge.layout(next.offsetWidth, next.offsetHeight);
         draw();
         resizeObserver.observe(next);
       };
 
-      // Кнопку рисует хост, и к моменту старта скрипта её может не быть —
-      // ждём появления, а заодно возвращаем кольца, если React перерисовал
-      // футер и унёс наш узел вместе со старой кнопкой.
+      // The host renders the button, and it may not exist when the script starts —
+      // wait for it, and at the same time restore the rings if React re-rendered
+      // the footer and took the node away with the old button.
       let scheduled = 0;
       const sync = () => {
         scheduled = 0;
@@ -824,8 +824,8 @@ export default definePluginApp((app) => {
         scheduled = window.requestAnimationFrame(sync);
       };
       const domObserver = new MutationObserver(() => {
-        // Дешёвая проверка на каждую мутацию документа: пока кнопка та же и
-        // кольца на месте, ничего не делаем.
+        // A cheap check on every document mutation: while the button is the same
+        // and the rings are in place, do nothing.
         if (button?.isConnected && gauge.node.parentNode === button) return;
         schedule();
       });
@@ -833,8 +833,8 @@ export default definePluginApp((app) => {
       sync();
 
       const refresh = async (force = false): Promise<void> => {
-        // Скрытая вкладка из опроса ничего не узнаёт, а каждая открытая иначе
-        // продолжала бы дёргать тот же сервер.
+        // A hidden tab learns nothing from polling, and every open one would
+        // otherwise keep poking the same server.
         if (document.visibilityState === "hidden" || inFlight || signal.aborted) {
           return;
         }
@@ -845,8 +845,8 @@ export default definePluginApp((app) => {
         try {
           state = await fetchState(signal);
         } catch {
-          // Сеть моргнула или сервер перезагружается: показываем прошлый
-          // снимок и ждём следующего опроса, в консоль не шумим.
+          // The network blinked or the server is restarting: show the previous
+          // snapshot and wait for the next poll, without noise in the console.
           return;
         } finally {
           inFlight = false;
@@ -858,7 +858,7 @@ export default definePluginApp((app) => {
       void refresh(true);
       const timer = window.setInterval(() => void refresh(true), POLL_MS);
 
-      // Вкладку вернули из фона — цифры там уже могли протухнуть.
+      // The tab came back from the background — its figures may have gone stale.
       document.addEventListener(
         "visibilitychange",
         () => {
@@ -890,8 +890,8 @@ export default definePluginApp((app) => {
         popup.open(anchor, state, true);
       };
 
-      // Нажатие мышью или пальцем: закрепляем попап сами и гасим клик, иначе
-      // хост вызовет `run` и попап закроется тут же следом.
+      // A mouse or finger press: pin the popup ourselves and swallow the click,
+      // otherwise the host calls `run` and the popup closes right behind us.
       document.addEventListener(
         "pointerdown",
         (event) => {
@@ -914,11 +914,11 @@ export default definePluginApp((app) => {
         { capture: true, signal },
       );
 
-      // Клавиатурная активация приходит из `run` слота.
+      // Keyboard activation arrives from the `run` slot.
       document.addEventListener(TOGGLE_EVENT, () => toggle(), { signal });
 
-      // Наведение открывает тот же попап без нажатия. Только мышь: у тача
-      // «наведение» — это начало тапа, а тап уже разобран выше.
+      // Hover opens the same popup without a press. Mouse only: on touch,
+      // "hover" is the start of a tap, and a tap is already handled above.
       document.addEventListener(
         "pointerover",
         (event) => {
@@ -942,7 +942,7 @@ export default definePluginApp((app) => {
         (event) => {
           const out = buttonFrom(event.target);
           if (!out) return;
-          // Переход между потрохами самой кнопки — не уход.
+          // A move between the button own innards is not a leave.
           const to = event.relatedTarget;
           if (to instanceof Node && out.contains(to)) return;
           cancelHover();
