@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-usage-meter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -14,7 +14,7 @@
   },
   "bb": {
     "name": "Usage Meter",
-    "description": "Two rings around a sidebar footer button track the Claude subscription limits — the outer one the five-hour session, the inner one the week, each colouring by its own value, with the per-model limit as a dot and every window, reset time and plan in the popup. The Usage page behind them says where the limits went: the same summary Claude Code's own VS Code extension gives — long context, subagent-heavy sessions, sessions running in parallel, eight-hour sessions, cache misses, and the skills, subagents, plugins and MCP servers behind them — computed from the local transcripts with the same weighted-cost formula and the same thresholds, over the last 24 hours or the last 7 days. Beside it, the figures the extension has no counterpart for: workflow runs and background /go runs with their agents, duration and status, skills with how often they ran and how heavy their instructions are, and tokens by project, model and bb thread.",
+    "description": "Two rings on a sidebar footer button track the Claude subscription limits: the session outside, the week inside, with every window and reset time in the popup. The Usage page behind them shows where the limits went — the same breakdown Claude Code's VS Code extension gives, plus workflow runs, background /go runs, skills, projects and bb threads.",
     "branding": {
       "icon": "./icon.svg"
     },
