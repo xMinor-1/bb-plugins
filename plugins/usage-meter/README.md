@@ -1,6 +1,9 @@
 # Usage Meter
 
-Claude subscription limits, as two rings around a sidebar footer button.
+Claude subscription limits, as two rings around a sidebar footer button — and a
+**Usage** page that says where those limits went.
+
+## The rings
 
 - **Outer ring** — the five-hour session, the `Current session` window.
 - **Inner ring** — the weekly limit, the `Weekly limit` window. Smaller radius,
@@ -28,6 +31,80 @@ footer and should read as one system. The neighbour's colour thresholds are its
 own (80% and 90% of RAM usage) — different quantities, under no obligation to
 match.
 
+## The Usage page
+
+The rings answer "how much is left". The page answers "what spent it", from the
+transcripts Claude Code writes on this machine (`~/.claude/projects`, about two
+gigabytes of them here). Two sliding windows, **Day** (last 24h) and **Week**
+(last 7d); the choice lives in the URL, so a link to a window survives a reload.
+
+Top half — the same summary the Claude Code extension for VS Code shows, and
+deliberately so: the same weighted-cost formula, the same five behaviours, the
+same 10% threshold, the same sentences and the same advice. Nothing is
+paraphrased and nothing is re-scaled.
+
+Two of the five statements have some give in them, and it is worth naming.
+`sessions active for 8+ hours` and `subagent-heavy sessions` are counted per
+session, and a session forked or resumed leaves the same calls in two
+transcripts under two different session ids — the copy **rewrites** the id, so
+which of them is the original is not in the data at all. Both this plugin and
+the extension therefore break the tie arbitrarily: the plugin by the timestamp
+of each file's first timestamped line and then by byte order of the path, the
+extension by whatever order `readdir` returns. On the local history that is
+worth up to about four percentage points on those two sentences, so seeing 40%
+here and 37% there is the tie-break, not a bug. The other three statements are
+counted per call and do not move.
+
+| Statement | When it is shown |
+| --- | --- |
+| `…% of your usage was at >150k context` | calls whose cache read + cache write + uncached input passed 150k |
+| `…% of your usage came from subagent-heavy sessions` | sessions with 3+ sidechain calls, or where sidechains cost more than half |
+| `…% of your usage was while 4+ sessions ran in parallel` | five-minute buckets holding 4+ distinct sessions |
+| `…% of your usage came from sessions active for 8+ hours` | sessions that touched 8+ distinct hours |
+| `…% of your usage hit a >100k-token cache miss` | calls with more than 100k uncached input |
+| `…% of your usage came from /skill`, `… subagents under "name"`, `… the plugin "name"`, `… the MCP server "name"` | the top row of each attribution table, once it clears 10% |
+
+The percentage is a share of weighted cost, not of raw tokens: a cache read
+counts 1, uncached input 10, a cache write 12.5, an output token 50, and the
+call is multiplied by its model tier. Raw tokens would drown everything in
+cache reads — they are 97% of the volume here — and every skill would round to
+zero. The behaviours are not a breakdown: one call feeds several of them, and
+the shares can add up to more than 100%. The page says so above them, in the
+extension's own words.
+
+Bottom half is ours, and the extension has no counterpart for it:
+
+- **Skills** — how often each ran (the `Skill` tool, a slash command, or the
+  moment its `SKILL.md` was injected), how heavy the injected instructions
+  were, and the tokens Claude Code itself attributes to the skill.
+- **Processes** — workflow runs and background `/go` runs by usage, each with
+  its agent count, duration, status or exit code, taken from the run's own
+  metadata.
+- **Projects and threads** — tokens by working folder, by model, and by bb
+  thread. Sessions map to threads through bb's own events, which do not live
+  long, so older sessions honestly stay under `Without a bb thread`.
+- **Usage over the window** — a hand-drawn SVG chart, stacked by main session /
+  workflow agents / subagents, bucketed by the hour for a day and by six hours
+  for a week, on the local clock.
+
+Those figures are counted in **tokens**, and the columns say so: mixing them
+silently with the weighted percentages above would make the whole page
+untrustworthy.
+
+Two more things the page says out loud rather than leaving to be discovered:
+
+- Each of those tables keeps twelve rows, and a table that had more prints
+  `… N more` underneath — the same line the attribution tables use. Twelve rows
+  adding up to 97% is a cut list, and it should not have to be guessed at.
+- The buckets of the chart sit on the local clock while the window ends at
+  "now", so its first and last bar cover only part of their interval. They are
+  drawn as narrow as the time they actually cover, and their tooltip says
+  `partial interval, 23m of 6h`. Dropping them instead would have been tidier
+  to look at and wrong: the bars would no longer add up to the total above.
+
+Ways in: the **Usage** row in the sidebar (with the session percentage beside
+it), or `More details →` at the bottom of the rings' popup.
+
 ## Install
 
 ```sh
@@ -36,10 +113,12 @@ bb plugin install git:https://github.com/xMinor-1/bb-plugins.git --plugin usage-
 
 ## How it works
 
-`server.ts` polls once for the whole server. A background service calls
-`bb.sdk.system.usageLimits()` and keeps the snapshot in memory; the `state` RPC
-method serves that same snapshot, so the number of open tabs adds no load on the
-API. Realtime does not apply here: the channel subscription lives only in the
+`server.ts` runs two background services: one polls the limits, one reads the
+transcripts.
+
+The limit poll calls `bb.sdk.system.usageLimits()` and keeps the snapshot in
+memory; the `state` RPC method serves that same snapshot, so the number of open
+tabs adds no load on the API. Realtime does not apply here: the channel subscription lives only in the
 `useRealtime` React hook, and the rings are drawn by a content script that
 cannot reach hooks. So the snapshot is simply polled — every 60 seconds and when
 the tab comes back into view.
@@ -69,6 +148,22 @@ never moved or removed — the application blocks that; everything it does own
 | The host button's own tooltip | The popup notices it and moves higher so it does not cover it |
 | A zero value | The arc hides entirely: a round stroke cap would leave a dot at twelve o'clock |
 | A collapsed sidebar | A ring with no room is skipped rather than drawn as an inside-out path |
+
+### The transcript scan
+
+`usage-scan.ts` walks `~/.claude/projects`, deduplicates the calls and keeps a
+cache of its own next to the plugin's database. The `usage` RPC method answers
+from that cache, and the page never touches the transcripts itself.
+
+| Detail | Handling |
+| --- | --- |
+| One API call is written as several lines, each carrying a full copy of `usage` | Deduplicated by `message.id`, globally: the same call in a forked transcript is not counted twice |
+| The first pass reads about two gigabytes | It runs in the background, hands control back after every chunk, and the page shows its progress instead of an empty screen |
+| Afterwards | Only the tails of files that changed are read — a pass costs about a second |
+| A transcript that a fork copied disappears | The cache is rebuilt from scratch, in the background, rather than losing the calls that only lived there |
+| Two files hold the same call and neither is the original | The tie goes to the file whose first timestamped line is older, then to byte order of the path — an arbitrary rule, and the only kind available (see above) |
+| bb thread names | `bb.db` is opened read-only, and a missing or unreadable database only costs the names, not the figures |
+| Message bodies | Never read into the summary: counts, names and paths only — from `SKILL.md` just its size, from a workflow run everything but the script |
 
 ## Development
 

@@ -25,9 +25,30 @@
 // путь по границе кнопки, та же толщина, та же анимация. В футере эти кнопки
 // стоят рядом, и два индикатора обязаны читаться как одна система.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
-import type { UsageState, UsageWindow } from "./server";
+import type { UsageState } from "./server";
+import {
+  DANGER,
+  PANEL_PATH,
+  PLUGIN_ID,
+  SESSION_LABEL,
+  SHORT_LABEL,
+  WARN,
+  WEEKLY_LABEL,
+  extraMax,
+  findWindow,
+  hasFigures,
+  labelKey,
+  percentOf,
+  resetText,
+  ringOf,
+  staleLine,
+  statusLine,
+  type Line,
+} from "./lib/limits";
+import { openUsagePanel, usagePanelHref } from "./lib/panel-link";
+import { UsageAccessory } from "./components/UsageAccessory";
+import { UsagePage } from "./components/UsagePage";
 
-const PLUGIN_ID = "usage-meter";
 const ACTION_ID = "usage";
 const BUTTON_SELECTOR = `[data-testid="plugin-sidebar-footer-action-${PLUGIN_ID}-${ACTION_ID}"]`;
 
@@ -77,203 +98,16 @@ async function fetchState(signal: AbortSignal): Promise<UsageState> {
   return envelope.result as UsageState;
 }
 
-/** Подписи окон из API, по которым ищутся кольца. */
-const SESSION_LABEL = "Current session";
-const WEEKLY_LABEL = "Weekly limit";
-
-/** Регистр и лишние пробелы в подписи окна нам не важны. */
-function labelKey(label: string): string {
-  return label.trim().toLowerCase();
-}
-
-/** Какое кольцо у этого окна; null — окно без кольца (лимит по модели). */
-function ringOf(label: string): "outer" | "inner" | null {
-  const key = labelKey(label);
-  if (key === labelKey(SESSION_LABEL)) return "outer";
-  if (key === labelKey(WEEKLY_LABEL)) return "inner";
-  return null;
-}
-
 /**
- * Есть ли в снимке цифры, которым можно верить. При разовом сбое опроса бэкенд
- * оставляет прошлые окна (см. `toState` в server.ts) — они старые, но настоящие,
- * и честнее пустого кольца. Обнулённый снимок (`not_installed`,
- * `unauthenticated`, `expired`, `unknown`) приходит без окон.
+ * Ring colour from its own value; null means there is no value. Lives here and
+ * not in lib/limits.ts because it speaks in CSS variables with fallbacks: this
+ * is an SVG attribute in a content script, not a Tailwind class.
  */
-function hasFigures(state: UsageState | null): state is UsageState {
-  if (!state || state.windows.length === 0) return false;
-  return state.status === "ok" || state.status === "error";
-}
-
-/**
- * Окно по подписи. Набор окон задаёт API, и он имеет право отличаться:
- * ненайденное окно — не ошибка, просто кольцо для него не рисуется.
- */
-function findWindow(
-  state: UsageState | null,
-  label: string,
-): UsageWindow | null {
-  if (!hasFigures(state)) return null;
-  const wanted = labelKey(label);
-  return state.windows.find((w) => labelKey(w.label) === wanted) ?? null;
-}
-
-/**
- * Наибольшее из окон, которым кольца не досталось (сейчас это лимит по модели).
- * По нему кнопка получает точку-метку: без неё исчерпанное окно молчит.
- */
-function extraMax(state: UsageState | null): number | null {
-  if (!hasFigures(state)) return null;
-  let top: number | null = null;
-  for (const limit of state.windows) {
-    if (ringOf(limit.label) !== null) continue;
-    const percent = percentOf(limit);
-    if (percent !== null && (top === null || percent > top)) top = percent;
-  }
-  return top;
-}
-
-function percentOf(limit: UsageWindow | null): number | null {
-  if (!limit || !Number.isFinite(limit.usedPercent)) return null;
-  return Math.min(100, Math.max(0, limit.usedPercent));
-}
-
-/**
- * Пороги цвета. У соседнего server-status они свои (80% и 90%), и совпадать не
- * обязаны: там расход ОЗУ, где тревожно только под потолком, а здесь купленный
- * лимит, который на 60% уже стоит замечать. Чтобы одинаковая дуга у двух
- * соседних кнопок не читалась как одинаковая тревога, пороги названы в попапе.
- */
-const WARN = 60;
-const DANGER = 85;
-
-/** Ring colour from its own value; null means there is no value. */
 function ringColor(percent: number | null): string {
   if (percent === null) return "var(--muted-foreground, #8a8a8a)";
   if (percent > DANGER) return "var(--destructive, #e5484d)";
   if (percent >= WARN) return "var(--warning, #e3a008)";
   return "var(--muted-foreground, #8a8a8a)";
-}
-
-// The API's own window labels are long for a narrow panel. Model names
-// ("Fable") are left exactly as they come.
-const SHORT_LABEL: Record<string, string> = {
-  [labelKey(SESSION_LABEL)]: "Session",
-  [labelKey(WEEKLY_LABEL)]: "Week",
-};
-
-const TIME_FORMAT = new Intl.DateTimeFormat("en-GB", {
-  hour: "2-digit",
-  minute: "2-digit",
-});
-const DATE_FORMAT = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "short",
-});
-
-/** Whether the date is today — that decides if the label needs a date at all. */
-function isToday(at: Date): boolean {
-  const now = new Date();
-  return (
-    at.getFullYear() === now.getFullYear() &&
-    at.getMonth() === now.getMonth() &&
-    at.getDate() === now.getDate()
-  );
-}
-
-/** A date with no trailing dot: Intl gives "24 Aug." where "24 Aug" is wanted. */
-function dayText(at: Date): string {
-  return DATE_FORMAT.format(at).replace(/\.$/, "");
-}
-
-/** "resets at 17:20" for a reset today, "resets 24 Aug" for the rest. */
-function resetText(iso: string | null): string {
-  if (!iso) return "";
-  const exact = new Date(iso);
-  if (Number.isNaN(exact.getTime())) return "";
-  // The API returns a time with seconds (…14:19:59.781Z). Round to the minute,
-  // or "resets at 17:19" looks like it is off by one.
-  const at = new Date(Math.round(exact.getTime() / 60_000) * 60_000);
-  return isToday(at)
-    ? `resets at ${TIME_FORMAT.format(at)}`
-    : `resets ${dayText(at)}`;
-}
-
-/** "Figures as of 16:48" — the age of the last successful snapshot. */
-function ageText(iso: string | null): string {
-  if (!iso) return "";
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "";
-  return isToday(at)
-    ? `Figures as of ${TIME_FORMAT.format(at)}`
-    : `Figures from ${dayText(at)}, ${TIME_FORMAT.format(at)}`;
-}
-
-/**
- * Provider messages arrive as prose ("Claude usage is rate limited right
- * now."), which is too long for a panel row. Known ones become a short phrase;
- * an unknown one never enters the row body — it moves into the hover tooltip.
- */
-const PROVIDER_REASONS: Array<[RegExp, string]> = [
-  [
-    /rate limit/i,
-    "Claude is rate limiting requests, the figures will catch up later",
-  ],
-  [/timed out|timeout|ETIMEDOUT/i, "Claude Code did not answer in time"],
-  [
-    /ENOTFOUND|ECONNREFUSED|ECONNRESET|fetch failed|network/i,
-    "No connection to Claude",
-  ],
-];
-
-/** A short cause; null when the message is unknown or absent. */
-function reasonText(message: string | null): string | null {
-  if (!message) return null;
-  for (const [pattern, text] of PROVIDER_REASONS) {
-    if (pattern.test(message)) return text;
-  }
-  return null;
-}
-
-/** A panel row: what to show, and what to hide in the tooltip. */
-interface Line {
-  text: string;
-  /** The provider's raw text — on hover only, never in the interface. */
-  title: string | null;
-}
-
-/** Why there are no figures, in plain words. */
-function statusLine(state: UsageState | null): Line {
-  if (!state || state.status === "unknown") {
-    return { text: "Loading limits…", title: null };
-  }
-  switch (state.status) {
-    case "not_installed":
-      return { text: "Claude Code is not installed", title: null };
-    case "unauthenticated":
-      return { text: "Claude Code is not signed in", title: null };
-    case "expired":
-      return { text: "The Claude Code session has expired, sign in again", title: null };
-    case "error": {
-      const reason = reasonText(state.message);
-      return reason
-        ? { text: `Could not read the limits: ${reason}`, title: null }
-        : { text: "Could not read the limits", title: state.message };
-    }
-    default:
-      return { text: "Limits are not reported", title: null };
-  }
-}
-
-/** The age of the previous figures and why they did not refresh. */
-function staleLine(state: UsageState): Line {
-  const reason = reasonText(state.message);
-  const age = ageText(state.okAt);
-  const failure = reason ? `refresh failed: ${reason}` : "refresh failed";
-  return {
-    text: age ? `${age} · ${failure}` : `${failure[0].toUpperCase()}${failure.slice(1)}`,
-    title: reason ? null : state.message,
-  };
 }
 
 // --- кольца -----------------------------------------------------------------
@@ -793,7 +627,39 @@ class Popup {
         ),
       );
     }
+    panel.append(this.pageLink());
     this.place();
+  }
+
+  /**
+   * The way out of the popup and into the Usage page. A real anchor, so
+   * middle-clicking and copying the address work; an ordinary click is taken
+   * over by the in-app navigation when React has left an opener behind.
+   */
+  private pageLink(): HTMLElement {
+    const link = document.createElement("a");
+    link.href = usagePanelHref();
+    link.textContent = "More details →";
+    link.setAttribute(
+      "style",
+      [
+        "display:inline-block",
+        "margin-top:0.5rem",
+        "color:var(--primary, var(--foreground, #e5e5e5))",
+        "text-decoration:none",
+        "font-size:0.75rem",
+      ].join(";"),
+    );
+    link.addEventListener("click", (event) => {
+      // Modified clicks belong to the browser: a new tab is a legitimate answer.
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      this.close();
+      openUsagePanel();
+    });
+    return link;
   }
 
   /** Приглушённая строка снизу панели; незнакомый текст уходит в подсказку. */
@@ -847,6 +713,19 @@ class Popup {
 // --- регистрация ------------------------------------------------------------
 
 export default definePluginApp((app) => {
+  // The page the rings are the short version of: the same limits on top, and
+  // under them what the local transcripts say the limits were spent on.
+  app.slots.navPanel({
+    id: "usage",
+    title: "Usage",
+    icon: "ChartColumn",
+    path: PANEL_PATH,
+    component: UsagePage,
+    // Also the bridge the content script's "More details" link uses; see
+    // lib/panel-link.ts.
+    experimental_sidebarAccessory: UsageAccessory,
+  });
+
   app.slots.sidebarFooterAction({
     id: ACTION_ID,
     title: "Usage limits",

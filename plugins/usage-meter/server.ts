@@ -10,6 +10,11 @@
 // polls `state` instead.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import {
+  usageScannerForPlugin,
+  type ScanStatus,
+  type UsageSummary,
+} from "./usage-scan";
 
 // The provider rate-limits the call itself: after an hour of polling once a
 // minute it answered "Claude usage is rate limited right now". Limits move
@@ -18,6 +23,26 @@ import { z } from "zod";
 const POLL_MS = 5 * 60_000;
 /** Backoff ceiling: after a failure the period doubles, but no further than half an hour. */
 const RETRY_MAX_MS = 30 * 60_000;
+
+// The Usage page reads local transcripts, which the limit API knows nothing
+// about. That is a separate, slower source: ~2 GB of .jsonl under
+// ~/.claude/projects, a full pass over them takes about ten seconds, and after
+// that only the tails of changed files are read.
+/** How often the scanner catches up with the transcripts. */
+const SCAN_MS = 60_000;
+/** Rows kept in each breakdown of the summary. */
+const TOP_ROWS = 12;
+/**
+ * How long a built summary is served again unchanged. Building one costs about
+ * fifty milliseconds, and while the first scan runs every open tab asks every
+ * couple of seconds — they should share one answer, not each get their own.
+ */
+const SUMMARY_TTL_MS = 3_000;
+/** Sliding windows of the page, exactly the ones Claude Code itself uses. */
+const WINDOW_MS: Record<"day" | "week", number> = {
+  day: 24 * 60 * 60_000,
+  week: 7 * 24 * 60 * 60_000,
+};
 
 // The package does not export the SDK response type (ProviderUsageResponse),
 // but it can be inferred from the method signature — honest typing instead of any.
@@ -62,8 +87,24 @@ const usageState = z.object({
 export type UsageState = z.infer<typeof usageState>;
 export type UsageWindow = z.infer<typeof usageWindow>;
 
+/**
+ * The summary and the scan status go over the wire as they are: both are plain
+ * JSON built by usage-scan.ts, and mirroring their several dozen fields in zod
+ * would buy nothing but a second place to keep them in step. The schema still
+ * types the frontend call.
+ */
+const usageSummary = z.custom<UsageSummary>(() => true);
+const scanStatus = z.custom<ScanStatus>(() => true);
+
 export const rpcContract = defineRpcContract({
   state: { input: z.null(), output: usageState },
+  /** Everything the Usage page shows for one sliding window. */
+  usage: {
+    input: z.object({ window: z.enum(["day", "week"]) }),
+    output: usageSummary,
+  },
+  /** Just the progress of the transcript scan — cheap enough to poll while it runs. */
+  scanStatus: { input: z.null(), output: scanStatus },
 });
 
 /** An empty snapshot until the first successful poll. */
@@ -114,6 +155,11 @@ function toState(claude: ClaudeUsage, previous: UsageState): UsageState {
 }
 
 export default async function plugin(bb: BbPluginApi) {
+  // The scanner keeps its cache next to the plugin's own database and reads
+  // bb.db read-only for thread names.
+  const scanner = usageScannerForPlugin(bb);
+  bb.onDispose(() => scanner.close());
+
   let current: UsageState = UNKNOWN;
   // Key of the last complaint written to the log: one and the same trouble is
   // logged once, or an unreachable provider would bury the log every minute.
@@ -163,10 +209,29 @@ export default async function plugin(bb: BbPluginApi) {
     return inFlight;
   }
 
+  // One summary per window, briefly reused: see SUMMARY_TTL_MS.
+  const summaries = new Map<"day" | "week", { at: number; value: UsageSummary }>();
+  function summaryFor(window: "day" | "week"): UsageSummary {
+    const to = Date.now();
+    const cached = summaries.get(window);
+    if (cached && to - cached.at < SUMMARY_TTL_MS) return cached.value;
+    const value = scanner.summary({ from: to - WINDOW_MS[window], to, topN: TOP_ROWS });
+    summaries.set(window, { at: to, value });
+    return value;
+  }
+
   bb.rpc.register(rpcContract, {
     // Serves the snapshot from memory. The first client to arrive before the
     // service gets the result of the shared poll, not its own API call.
     state: async () => (current.fetchedAt === null ? refresh() : current),
+    // Aggregates come from what the scanner has already read, so the page
+    // answers during the first cold pass too — with the part that is in.
+    usage: ({ window }) => summaryFor(window),
+    scanStatus: () => scanner.status(),
+  });
+
+  bb.background.service("usage-scan", {
+    start: (signal) => scanner.runForever(signal, SCAN_MS),
   });
 
   bb.background.service("poll", {
