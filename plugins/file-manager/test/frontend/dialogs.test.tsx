@@ -25,6 +25,9 @@ vi.mock("sonner", () => ({
 }));
 
 const app = await loadPluginApp(() => import("../../app"));
+// Imported through the thunk-installed runtime like the app itself: it binds
+// `@get-bb/plugin-sdk/app` at import time.
+const { FolderPickerDialog } = await import("../../components/dialogs/FolderPickerDialog");
 const { resetUploadManager } = await import("../../hooks/useUploads");
 const { resetPanelSnapshot } = await import("../../components/panel-bus");
 
@@ -428,5 +431,36 @@ describe("FolderPickerDialog", () => {
       expect(slot.queryByTestId("fm-folder-picker")).toBeNull();
     });
     expect(callsTo(slot, "moveEntries")).toHaveLength(0);
+  });
+
+  it("chooses once per opening, however fast the confirm button is clicked", async () => {
+    // Closing plays an exit animation, so the real browser keeps the button in
+    // the DOM after the first click; a second one would move (or save) twice.
+    // Mounted with `open` pinned true — that is what the closing dialog still
+    // looks like to the click handler.
+    const chosen: string[] = [];
+    const slot = renderSlot<Record<string, never>, FileManagerContract>(
+      {
+        component: () => (
+          <FolderPickerDialog
+            open
+            title="Start folder"
+            root={ROOT}
+            confirmLabel="Use this folder"
+            onOpenChange={() => undefined}
+            onChoose={(path) => void chosen.push(path)}
+          />
+        ),
+      },
+      {},
+      { rpc: baseRpc() as PluginRpcTestHandlers<FileManagerContract> },
+    );
+
+    const picker = await slot.findByTestId("fm-folder-picker");
+    const confirm = within(picker).getByText("Use this folder");
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    expect(chosen).toEqual([ROOT]);
   });
 });

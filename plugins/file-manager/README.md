@@ -124,7 +124,7 @@ Change them in bb's settings UI, from the panel, or with
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `startFolder` | string | home folder | Absolute path under the root the panel opens by default. Re-validated on every read; a deleted or out-of-root path falls back to the root. |
+| `startFolder` | string | home folder | Absolute path under the root the panel opens by default. Shown in the form as **Start folder (typed path)**, and set with a folder browser by the **Start folder** section below it. Re-validated on every read; a deleted or out-of-root path falls back to the root. |
 | `showHiddenFiles` | boolean | `false` | Show dot-files and dot-directories. |
 | `confirmOnDelete` | boolean | `true` | Ask before deleting. |
 | `sortField` | `name` \| `size` \| `modified` \| `kind` | `name` | Default sort column. |
@@ -137,9 +137,10 @@ Toggles made in the panel are written back through the plugin's own
 ### Choosing the start folder
 
 bb's settings form only knows four descriptor types — string, select, boolean
-and project — so `startFolder` renders there as a plain text field. The plugin
-adds its own **Start folder** section right below that form, on its detail page
-in Tools:
+and project — so `startFolder` renders there as a plain text field, labelled
+**Start folder (typed path)** for the CLI and for typing a path by hand. The
+plugin adds its own **Start folder** section right below that form, on its
+detail page in Tools:
 
 - the absolute path the panel will actually open, plus its short name (`Home`
   at the root);
@@ -152,12 +153,14 @@ in Tools:
 Every one of those buttons writes the same `startFolder` setting through the
 same `savePreferences` method, so the section, the panel's *Set as start
 folder* action and `bb plugin config file-manager set startFolder <path>` are
-interchangeable.
+interchangeable. Whoever writes it last wins, and nobody is left showing a
+stale answer: bb broadcasts the change to every open page, and the section
+re-reads the effective folder from the backend then — and again whenever the
+page comes back to the foreground.
 
 A start folder that stops working — deleted, renamed, or moved outside the root
-— never breaks the panel: the backend logs it and falls back to the root.
-The settings section says so in place, and shows which saved path it could not
-open.
+— never breaks the panel: the backend logs it and falls back to the root, and
+the section shows the folder that will actually open.
 
 ## Uploads
 

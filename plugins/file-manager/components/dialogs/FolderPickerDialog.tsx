@@ -5,7 +5,7 @@
 // `pickHostFolder` throws `unsupported_platform` off macOS and the frontend
 // SDK does not expose `sdk.hosts` at all. So this is a small `listDir`-backed
 // browser: breadcrumb, directories only, "Choose this folder".
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type FileEntry } from "../../contract";
 import { parseRpcError } from "../../lib/errors";
@@ -57,11 +57,19 @@ export function FolderPickerDialog({
   const [folders, setFolders] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * One choice per opening. Closing plays an exit animation, so Radix keeps the
+   * confirm button in the DOM for a few hundred milliseconds after the first
+   * click — long enough for an impatient second one to land on it and run the
+   * caller's handler (a second savePreferences, a second move) all over again.
+   */
+  const chosenRef = useRef(false);
 
   useEffect(() => {
     if (open) {
       setPath(initialPath ?? root);
       setError(null);
+      chosenRef.current = false;
     }
   }, [open, initialPath, root]);
 
@@ -181,6 +189,8 @@ export function FolderPickerDialog({
             className="bg-primary text-primary-foreground hover:bg-primary/90"
             disabled={disabled}
             onClick={() => {
+              if (chosenRef.current) return;
+              chosenRef.current = true;
               onChoose(path);
               onOpenChange(false);
             }}

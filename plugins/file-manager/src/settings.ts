@@ -18,10 +18,16 @@ import { DEFAULT_ROOT, getRoot, resolveExisting } from "./root";
 export const settingsDescriptors = {
   startFolder: {
     type: "string",
-    label: "Start folder",
+    // Deliberately not just "Start folder": the Start folder section below is
+    // the same setting with a folder browser attached, and two identically
+    // labelled editors on one page read as two different settings. This field
+    // is the typed/CLI form of it (`bb plugin config file-manager set
+    // startFolder …`); both write the same key, so whichever is used last wins
+    // and the other refreshes itself.
+    label: "Start folder (typed path)",
     description:
       "Absolute path under the hard root that the panel opens by default. " +
-      "The Start folder section below picks it with a folder browser.",
+      "The Start folder section below sets the same value with a folder browser.",
     default: DEFAULT_ROOT,
   },
   showHiddenFiles: {

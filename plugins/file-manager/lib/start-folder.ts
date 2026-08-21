@@ -5,7 +5,7 @@
 // the RPC call, the wording of the toasts and the little bit of arithmetic that
 // turns a stored path into something a human can read — so none of it lives in
 // a component.
-import { getClientRoot, isSamePath, toAbsolute, toRelative } from "./fm-paths";
+import { getClientRoot, toRelative } from "./fm-paths";
 import type { FileManagerRpc } from "./fm-rpc";
 
 export const START_FOLDER_SAVED_TEXT = "Start folder saved";
@@ -36,21 +36,15 @@ export function startFolderLabel(
 }
 
 /**
- * True when the *stored* setting points somewhere the backend could not use, so
- * `getState` handed back the root instead.
+ * True when a raw `startFolder` value delivered by the host is a *change* — the
+ * cue the settings section uses to re-read its `getState` snapshot.
  *
- * The backend never throws on a bad `startFolder` — it logs and falls back to
- * the root (§7.1), which is what keeps a stale value from bricking the panel.
- * The only visible trace is exactly this: a stored path that is not the root
- * while the effective one is. Comparison goes through `toAbsolute` so the
- * `~`-relative forms the CLI accepts do not read as a mismatch.
+ * The host's copy of the settings is a react-query it refetches whenever the
+ * server broadcasts `plugins-changed`, so a new value means somebody else (the
+ * text field, the panel action, the CLI, another window) wrote the setting. The
+ * first delivery is the query resolving, not a write, and `undefined` is
+ * "not loaded yet" — neither is a reason to re-read anything.
  */
-export function isStartFolderFallback(
-  storedValue: unknown,
-  effective: string,
-  root: string = getClientRoot(),
-): boolean {
-  if (typeof storedValue !== "string" || storedValue.trim() === "") return false;
-  if (!isSamePath(effective, root)) return false;
-  return !isSamePath(toAbsolute(storedValue, root), root);
+export function isExternalSettingChange(previous: unknown, next: unknown): boolean {
+  return typeof previous === "string" && previous !== next;
 }
