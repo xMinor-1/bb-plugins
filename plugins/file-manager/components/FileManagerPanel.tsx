@@ -1355,6 +1355,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
                 <EmptyState
                   kind={emptyKind}
                   query={query}
+                  root={root}
                   onClearSearch={() => setQuery("")}
                   onNewFolder={writable ? () => setDialog({ kind: "new-folder" }) : undefined}
                   onUpload={writable ? openFilePicker : undefined}

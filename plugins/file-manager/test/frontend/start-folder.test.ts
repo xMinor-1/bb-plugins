@@ -11,6 +11,7 @@ import {
   isExternalSettingChange,
   saveStartFolder,
   startFolderLabel,
+  startFolderNotInUse,
   START_FOLDER_SAVED_TEXT,
   START_FOLDER_SAVE_FAILED_TEXT,
 } from "../../lib/start-folder";
@@ -108,5 +109,39 @@ describe("isExternalSettingChange", () => {
     // The host types settings values as `string | boolean`; only strings can be
     // a start folder, and anything else is not a change worth re-reading for.
     expect(isExternalSettingChange(true, ROOT)).toBe(false);
+  });
+});
+
+describe("startFolderNotInUse", () => {
+  it("reports the configured folder when the backend fell back to the root", () => {
+    // src/settings.ts#resolveStartFolder never throws over a broken start
+    // folder: it logs and answers with the root. That is the whole signal.
+    expect(startFolderNotInUse(`${ROOT}/gone`, ROOT, ROOT)).toBe(`${ROOT}/gone`);
+    expect(startFolderNotInUse("/etc", ROOT, ROOT)).toBe("/etc");
+  });
+
+  it("normalizes the setting the way the backend does before comparing", () => {
+    // src/root.ts#normalize: "", "~", "~/x" and a bare relative path all mean
+    // something under the root, so none of them is a disagreement by itself.
+    expect(startFolderNotInUse("~", ROOT, ROOT)).toBeNull();
+    expect(startFolderNotInUse("", ROOT, ROOT)).toBeNull();
+    expect(startFolderNotInUse(`${ROOT}/`, ROOT, ROOT)).toBeNull();
+    expect(startFolderNotInUse("~/gone", ROOT, ROOT)).toBe(`${ROOT}/gone`);
+    expect(startFolderNotInUse("gone", ROOT, ROOT)).toBe(`${ROOT}/gone`);
+  });
+
+  it("says nothing when the backend resolved a real folder", () => {
+    // The host's cached setting lags behind by a refetch and the backend
+    // realpaths what it stores, so the two disagree constantly while
+    // everything works. A resolved folder that is not the root proves it.
+    expect(startFolderNotInUse(`${ROOT}/link`, `${ROOT}/real`, ROOT)).toBeNull();
+    expect(startFolderNotInUse(`${ROOT}/Work`, `${ROOT}/Work`, ROOT)).toBeNull();
+  });
+
+  it("says nothing before the host has delivered a setting", () => {
+    expect(startFolderNotInUse(undefined, ROOT, ROOT)).toBeNull();
+    expect(startFolderNotInUse(null, ROOT, ROOT)).toBeNull();
+    expect(startFolderNotInUse(true, ROOT, ROOT)).toBeNull();
+    expect(startFolderNotInUse("   ", ROOT, ROOT)).toBeNull();
   });
 });

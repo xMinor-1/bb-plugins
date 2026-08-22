@@ -6,6 +6,7 @@
 // the toolbar and the drop target stay live behind it.
 import { Button } from "./ui/button";
 import { Icon, type IconName } from "./ui/icon";
+import { rootPhrase } from "../lib/fm-paths";
 import { cn } from "../lib/utils";
 
 export type EmptyStateKind = "empty" | "no-results" | "escapes-root" | "not-writable";
@@ -14,6 +15,12 @@ export interface EmptyStateProps {
   kind: EmptyStateKind;
   /** Echoed back in the "no results" copy. */
   query?: string;
+  /**
+   * The hard root, named in the "escapes-root" copy. It is the home directory
+   * of whoever runs bb, so only the backend knows it: the panel passes
+   * `state.root`, and the default reads the value the panel published.
+   */
+  root?: string;
   onClearSearch?: () => void;
   onNewFolder?: () => void;
   onUpload?: () => void;
@@ -23,7 +30,8 @@ export interface EmptyStateProps {
 interface Copy {
   icon: IconName;
   title: string;
-  body: string;
+  /** A function when the sentence has to name the root the backend reported. */
+  body: string | ((root: string) => string);
 }
 
 const COPY: Record<EmptyStateKind, Copy> = {
@@ -40,7 +48,7 @@ const COPY: Record<EmptyStateKind, Copy> = {
   "escapes-root": {
     icon: "AlertTriangle",
     title: "Outside the home folder",
-    body: "This link points outside /home/coder, so it cannot be opened here.",
+    body: (root: string) => `This link points outside ${root}, so it cannot be opened here.`,
   },
   "not-writable": {
     icon: "Lock",
@@ -52,6 +60,7 @@ const COPY: Record<EmptyStateKind, Copy> = {
 export function EmptyState({
   kind,
   query,
+  root,
   onClearSearch,
   onNewFolder,
   onUpload,
@@ -61,7 +70,9 @@ export function EmptyState({
   const body =
     kind === "no-results" && query !== undefined && query !== ""
       ? `Nothing in this folder matches “${query}”.`
-      : copy.body;
+      : typeof copy.body === "function"
+        ? copy.body(rootPhrase(root))
+        : copy.body;
 
   return (
     <div

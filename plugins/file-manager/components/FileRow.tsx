@@ -9,6 +9,7 @@ import { memo, type DragEvent, type MouseEvent } from "react";
 import type { FileEntry } from "../contract";
 import { cn } from "../lib/utils";
 import { formatBytes, formatDateTime, formatExactBytes, formatModified } from "../lib/format";
+import { rootPhrase } from "../lib/fm-paths";
 import { INDENT_STEP_PX, MAX_INDENT_DEPTH, MAX_TREE_ROWS } from "../lib/fm-tree";
 import { Checkbox } from "./ui/checkbox";
 import { Icon, type IconName } from "./ui/icon";
@@ -114,8 +115,10 @@ function FileRowImpl({
   const size = directory ? "—" : formatBytes(entry.sizeBytes);
   const indentPx = Math.min(depth, MAX_INDENT_DEPTH) * INDENT_STEP_PX;
 
+  // `rootPhrase()` reads the root the panel published from `getState`; rows
+  // only ever render after that bootstrap, so the memo never holds a stale one.
   const title = entry.escapesRoot
-    ? `${entry.name} → outside /home/coder`
+    ? `${entry.name} → outside ${rootPhrase()}`
     : childrenTruncated
       ? `${entry.name} — showing the first ${String(MAX_TREE_ROWS)} items`
       : entry.name;

@@ -13,9 +13,13 @@
 //   - the backend's answer wins (it realpaths), and a rejection leaves the old
 //     value on screen,
 //   - a write by somebody else (the text field above, the panel, the CLI) is
-//     picked up: the section re-reads when the page returns to the foreground,
+//     picked up: the section re-reads when the host delivers a new value for
+//     the raw setting, and when the page returns to the foreground,
+//   - a start folder the backend could not use is said out loud, and *only*
+//     then — a lagging host cache or a realpath'ed answer is not a fallback,
 //   - nothing here throws when the rpc is unavailable — this is a settings
 //     page, not the panel, and a dead section must not take the page with it.
+import { createElement } from "react";
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
@@ -410,17 +414,45 @@ describe("SettingsSection — one value, several writers", () => {
   // settings queries from it, so the *other* editors refresh themselves; what
   // this section owes them is to re-read its own `getState` snapshot instead of
   // showing a value somebody replaced minutes ago.
-  it("shows what getState reports, never the host's cached setting", async () => {
+  it("renders the folder getState reports, never the host's cached setting", async () => {
     // §7.1: an unusable `startFolder` never throws — the backend logs it and
-    // hands back the root. The cached raw value can disagree with that for a
-    // refetch, so it is not rendered and not reasoned about.
+    // hands back the root. The value on screen is always the backend's.
     const slot = await mountSection(baseRpc({}, ROOT), { startFolder: `${ROOT}/gone` });
 
     expect(slot.getByTestId("fm-settings-start-folder").textContent).toBe(ROOT);
-    const text = slot.getByTestId("fm-settings-section").textContent ?? "";
-    expect(text).not.toContain("gone");
-    // 0.3.0 accused successful saves of falling back by comparing the two.
-    expect(text).not.toContain("could not be opened");
+    expect(slot.getByTestId("fm-settings-section").textContent).toContain("Home");
+  });
+
+  it("re-reads when the host delivers a value somebody else wrote", async () => {
+    // The server broadcasts `plugins-changed` on every effective settings
+    // write and the app invalidates its settings query from it, so a *new*
+    // raw value is how another writer reaches this section. `useSettings()`
+    // hands back the very object passed here, so mutating it and re-rendering
+    // is exactly that delivery.
+    const settings: Record<string, string | boolean> = { startFolder: WORK };
+    let stored = WORK;
+    const slot = await mountSection(baseRpc({ getState: () => stateWith(stored) }), settings);
+    // The first delivery is the query resolving, not a write.
+    expect(callsTo(slot, "getState")).toHaveLength(1);
+
+    stored = PROJECTS; // e.g. the "Start folder (typed path)" field above
+    settings.startFolder = PROJECTS;
+    slot.lifecycle.rerender(createElement(section.component, {}));
+
+    await waitFor(() => {
+      expect(slot.getByTestId("fm-settings-start-folder").textContent).toBe(PROJECTS);
+    });
+    expect(callsTo(slot, "getState")).toHaveLength(2);
+  });
+
+  it("re-reads only once per new value, not on every re-render", async () => {
+    const settings: Record<string, string | boolean> = { startFolder: WORK };
+    const slot = await mountSection(baseRpc(), settings);
+
+    slot.lifecycle.rerender(createElement(section.component, {}));
+    slot.lifecycle.rerender(createElement(section.component, {}));
+
+    expect(callsTo(slot, "getState")).toHaveLength(1);
   });
 
   it("re-reads the state when the page comes back to the foreground", async () => {
@@ -505,6 +537,80 @@ describe("SettingsSection — one value, several writers", () => {
   });
 });
 
+describe("SettingsSection — when the saved folder is not the one in use", () => {
+  // 0.3.0 shipped a hint that guessed from the host's cached setting and
+  // accused saves that had just succeeded; removing it left the user with no
+  // sign at all that their start folder had disappeared. The signal here is
+  // the backend's own answer: `resolveStartFolder()` falls back to the root
+  // and says nothing, so "the panel opens the root while the setting names
+  // something else" is the one shape a fallback can take.
+  it("names the folder the backend is not using", async () => {
+    const slot = await mountSection(baseRpc({}, ROOT), { startFolder: `${ROOT}/gone` });
+
+    const hint = await slot.findByTestId("fm-settings-fallback");
+    expect(hint.textContent).toContain(`${ROOT}/gone`);
+    expect(hint.textContent).toContain("is not in use");
+    expect(hint.textContent).toContain(ROOT);
+  });
+
+  it("stays quiet when the backend resolved the folder, realpath and all", async () => {
+    // The backend stores the realpath'ed form, so the setting and the answer
+    // routinely differ while everything works.
+    const slot = await mountSection(baseRpc({}, PROJECTS_REAL), { startFolder: PROJECTS });
+
+    expect(slot.getByTestId("fm-settings-start-folder").textContent).toBe(PROJECTS_REAL);
+    expect(slot.queryByTestId("fm-settings-fallback")).toBeNull();
+  });
+
+  it("stays quiet when the setting is the root itself", async () => {
+    const slot = await mountSection(baseRpc({}, ROOT), { startFolder: ROOT });
+
+    expect(slot.queryByTestId("fm-settings-fallback")).toBeNull();
+  });
+
+  it("stays quiet before the host has delivered any setting", async () => {
+    const slot = await mountSection(baseRpc({}, ROOT));
+
+    expect(slot.queryByTestId("fm-settings-fallback")).toBeNull();
+  });
+
+  it("does not accuse a Reset the host's cache has not caught up with yet", async () => {
+    // The regression 0.3.0 shipped: Reset writes the root, the section renders
+    // the backend's answer immediately, and the host's cached setting still
+    // holds the old folder for a refetch. Comparing them there says the save
+    // that just succeeded failed.
+    const settings: Record<string, string | boolean> = { startFolder: WORK };
+    let stored = WORK;
+    const slot = await mountSection(
+      baseRpc({
+        getState: () => stateWith(stored),
+        savePreferences: (input) => {
+          stored = input.startFolder ?? stored;
+          return { startFolder: stored, preferences: PREFERENCES, chunkSizeBytes: CHUNK_BYTES };
+        },
+      }),
+      settings,
+    );
+
+    fireEvent.click(button(slot, "fm-settings-reset"));
+    await waitFor(() => {
+      expect(slot.getByTestId("fm-settings-start-folder").textContent).toBe(ROOT);
+    });
+
+    expect(toasts.success).toEqual(["Start folder saved"]);
+    expect(slot.queryByTestId("fm-settings-fallback")).toBeNull();
+
+    // …and it stays quiet once the host catches up, because by then the
+    // setting and the answer agree.
+    settings.startFolder = ROOT;
+    slot.lifecycle.rerender(createElement(section.component, {}));
+    await waitFor(() => {
+      expect(callsTo(slot, "getState")).toHaveLength(2);
+    });
+    expect(slot.queryByTestId("fm-settings-fallback")).toBeNull();
+  });
+});
+
 describe("SettingsSection — the shape the host renders it in", () => {
   it("leaves the heading and the blurb to the host", async () => {
     // PluginSettingsSections.tsx draws `title` as an <h3> and `description` as
@@ -562,6 +668,70 @@ describe("SettingsSection — degraded hosts", () => {
     // Nothing can be written while the state is unknown.
     expect(button(slot, "fm-settings-browse").disabled).toBe(true);
     expect(button(slot, "fm-settings-reset").disabled).toBe(true);
+  });
+
+  it("keeps the controls alive when a background re-read fails", async () => {
+    // A refresh fires on its own schedule (a broadcast, a window focus). Its
+    // failure says nothing about the snapshot already in hand, and disabling
+    // the folder browser over it answers a failed read by taking away the
+    // user's only way to write.
+    let reads = 0;
+    const slot = await mountSection(
+      baseRpc({
+        getState: () => {
+          reads += 1;
+          if (reads === 1) return stateWith(WORK);
+          throw new Error("io_error: /tmp");
+        },
+      }),
+    );
+
+    fireEvent.focus(window);
+    const alert = await slot.findByRole("alert");
+    expect(alert.textContent).toBe("The filesystem reported an error.");
+
+    expect(slot.getByTestId("fm-settings-start-folder").textContent).toBe(WORK);
+    expect(button(slot, "fm-settings-browse").disabled).toBe(false);
+    expect(button(slot, "fm-settings-reset").disabled).toBe(false);
+  });
+
+  it("does not let Try again overtake a save in flight", async () => {
+    // Try again used to call the loader directly, around the guard the
+    // scheduled refreshes go through: a getState issued during a save answers
+    // with the pre-save value and lands after it.
+    const save = deferredSave();
+    let reads = 0;
+    const slot = await mountSection(
+      baseRpc({
+        savePreferences: save.handler,
+        getState: () => {
+          reads += 1;
+          if (reads === 1) return stateWith(WORK);
+          throw new Error("io_error: /tmp");
+        },
+      }),
+    );
+
+    fireEvent.focus(window); // the background re-read fails → Try again appears
+    await slot.findByTestId("fm-settings-retry");
+    expect(callsTo(slot, "getState")).toHaveLength(2);
+
+    fireEvent.click(button(slot, "fm-settings-reset"));
+    await waitFor(() => {
+      expect(callsTo(slot, "savePreferences")).toHaveLength(1);
+    });
+
+    fireEvent.click(button(slot, "fm-settings-retry"));
+    expect(callsTo(slot, "getState")).toHaveLength(2);
+
+    save.release(ROOT);
+    await waitFor(() => {
+      expect(slot.getByTestId("fm-settings-start-folder").textContent).toBe(ROOT);
+    });
+    // The save proved the backend answers, so the stale read failure goes with
+    // it instead of sitting on top of a value that was just written.
+    expect(slot.queryByTestId("fm-settings-retry")).toBeNull();
+    expect(slot.getByRole("status").textContent).toBe("Saved");
   });
 
   it("recovers through Try again once getState works", async () => {

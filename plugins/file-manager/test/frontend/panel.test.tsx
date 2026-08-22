@@ -183,6 +183,39 @@ describe("FileManagerPanel listing", () => {
     expect(slot.queryAllByTestId("fm-row")).toHaveLength(0);
   });
 
+  it("names the backend's own root when a path leaves it, never a fixed one", async () => {
+    // The root is the home directory of whoever runs bb (src/root.ts), so
+    // every sentence about it has to come from `getState`; 0.3.0 shipped two
+    // that said "/home/coder" to everybody.
+    const slot = mount({
+      ...rpcFor({}),
+      listDir: () => {
+        throw new Error("path_escape: /etc");
+      },
+    });
+
+    const empty = await slot.findByTestId("fm-empty-state");
+    expect(empty.getAttribute("data-empty-kind")).toBe("escapes-root");
+    expect(empty.textContent).toContain(`This link points outside ${ROOT},`);
+  });
+
+  it("names the root in the row tooltip of a link that leaves it", async () => {
+    const escaping = makeEntry({
+      name: "outside",
+      kind: "symlink",
+      targetKind: "directory",
+      isSymlink: true,
+      escapesRoot: true,
+    });
+    const slot = mount(rpcFor({ [ROOT]: listing(ROOT, [escaping]) }));
+
+    await slot.findByText("outside");
+    const row = slot
+      .getAllByTestId("fm-row")
+      .find((candidate) => candidate.getAttribute("data-fm-path") === escaping.path)!;
+    expect(row.getAttribute("title")).toBe(`outside → outside ${ROOT}`);
+  });
+
   it("renders an ErrorBanner with the domain code when listDir fails, and retries on demand", async () => {
     let fail = true;
     const slot = mount({

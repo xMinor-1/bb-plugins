@@ -18,6 +18,7 @@ import {
   normalizePath,
   parentPath,
   relativeDirOf,
+  rootPhrase,
   splitFileName,
   subPathToAbsolute,
   setClientRoot,
@@ -134,6 +135,21 @@ describe("containment", () => {
     expect(isDescendant("/home/coder/ab", "/home/coder/ab")).toBe(false);
     expect(isSameOrDescendant("/home/coder/ab", "/home/coder/ab")).toBe(true);
     expect(isSamePath("/home/coder/ab/", "/home/coder/ab")).toBe(true);
+  });
+});
+
+describe("rootPhrase", () => {
+  it("names the root the backend reported", () => {
+    expect(rootPhrase(ROOT_PATH)).toBe(ROOT_PATH);
+    expect(rootPhrase("/Users/someone/")).toBe("/Users/someone");
+    expect(rootPhrase()).toBe(ROOT_PATH);
+  });
+
+  it("says the words while the root is still unknown", () => {
+    // `setClientRoot` has not run before the panel's bootstrap answers, and
+    // "outside /" would claim the wrong boundary in every direction.
+    expect(rootPhrase("/")).toBe("the home folder");
+    expect(rootPhrase("")).toBe("the home folder");
   });
 });
 

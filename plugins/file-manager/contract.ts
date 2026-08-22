@@ -1,7 +1,22 @@
 // contract.ts — frozen wire contract between the File Manager backend and panel.
 // Any change here is a breaking change: bump the plugin version and update both
 // sides in the same commit.
-import { defineRpcContract } from "@get-bb/plugin-sdk";
+import type { PluginRpcContract } from "@get-bb/plugin-sdk";
+
+/**
+ * Type-only identity helper, deliberately local.
+ *
+ * The SDK exports `defineRpcContract`, but importing it as a *value* pulls
+ * `@get-bb/plugin-sdk` into the frontend bundle graph (app.tsx imports this
+ * file for its constants). bb only shims the `/app` subpath, and a catalog
+ * install runs `npm install --omit=dev` before bundling — so a value import
+ * here breaks installs unless the SDK is a runtime dependency, which
+ * `bb plugin types --check` then rejects. The SDK helper is `c => c`; the
+ * type-only import below is erased at build time and costs nothing.
+ */
+const defineRpcContract = <const Contract extends PluginRpcContract>(
+  contract: Contract,
+): Contract => contract;
 import { z } from "zod";
 
 /* ------------------------------------------------------------------ */

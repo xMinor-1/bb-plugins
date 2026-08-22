@@ -241,7 +241,7 @@ async function moveOne(source: string, target: string): Promise<void> {
     return;
   } catch (error) {
     const mapped = mapNodeError(error, source);
-    // §7 risk 7: a future bind-mount under /home/coder would make rename fail
+    // §7 risk 7: a future bind-mount under the root would make rename fail
     // with EXDEV. Fall back to copy + remove, which is not atomic but correct.
     if (mapped.code !== "cross_device") throw mapped;
   }

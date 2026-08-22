@@ -14,10 +14,11 @@
 //   * the §5.2 upload GC schedule exists and runs.
 //
 // `initRoot()` is module state (src/root.ts), so the factory's own
-// `await initRoot()` pins the root at /home/coder; the suite re-points it at a
-// temp tree immediately afterwards, exactly like the other backend suites.
+// `await initRoot()` pins the root at the home directory of whoever runs the
+// suite; it re-points that at a temp tree immediately afterwards, exactly like
+// the other backend suites.
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readdir, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createFakePluginHost, type FakePluginHost } from "@get-bb/plugin-sdk/testing";
@@ -36,7 +37,7 @@ const CONTRACT_METHODS = Object.keys(fileManagerContract).sort();
 
 let host: FakePluginHost;
 let root = "";
-/** True when this suite is what created /home/coder/.bb-file-manager. */
+/** True when this suite is what created `<home>/.bb-file-manager`. */
 let createdRealStaging = false;
 
 async function pathExists(candidate: string): Promise<boolean> {
@@ -179,12 +180,30 @@ describe("end-to-end through the host", () => {
       archiveSupport: { zip: boolean; tar: boolean; sevenZip: boolean };
     };
     expect(state.root).toBe(root);
-    // The stored default (/home/coder) is outside the temp root, so §7.1's
+    // The stored default (the home folder) is outside the temp root, so §7.1's
     // "fall back, never throw" rule must have kicked in.
     expect(state.startFolder).toBe(root);
     expect(state.pluginVersion).toBe(PLUGIN_VERSION);
     expect(state.chunkSizeBytes).toBe(16 * 1024 * 1024);
     expect(state.archiveSupport.tar).toBe(true);
+  });
+
+  it("reports the version the manifest declares, not one of its own", async () => {
+    // `PLUGIN_VERSION` in server.ts and `version` in package.json are kept in
+    // sync by hand: the manifest is what bb installs and what the release tag
+    // is cut from, while PLUGIN_VERSION is what the panel and the load line in
+    // the logs show. Asserting PLUGIN_VERSION against itself — as this suite
+    // did — cannot catch a bump that only landed in one of the two.
+    const manifest = JSON.parse(
+      await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+
+    expect(PLUGIN_VERSION).toBe(manifest.version);
+
+    const state = (await host.harness.behavior.callRpc("getState", null)) as {
+      pluginVersion: string;
+    };
+    expect(state.pluginVersion).toBe(manifest.version);
   });
 
   it("creates, lists, renames and deletes through the wire", async () => {

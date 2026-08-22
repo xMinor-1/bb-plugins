@@ -5,7 +5,7 @@
 // the RPC call, the wording of the toasts and the little bit of arithmetic that
 // turns a stored path into something a human can read — so none of it lives in
 // a component.
-import { getClientRoot, toRelative } from "./fm-paths";
+import { getClientRoot, isSamePath, toAbsolute, toRelative } from "./fm-paths";
 import type { FileManagerRpc } from "./fm-rpc";
 
 export const START_FOLDER_SAVED_TEXT = "Start folder saved";
@@ -47,4 +47,42 @@ export function startFolderLabel(
  */
 export function isExternalSettingChange(previous: unknown, next: unknown): boolean {
   return typeof previous === "string" && previous !== next;
+}
+
+/**
+ * The one fact about the start folder a user cannot see for themselves: the
+ * backend is not using the folder the setting names.
+ *
+ * Both halves come from something that knows. `resolved` is `getState`'s
+ * `startFolder` — what `resolveStartFolder()` says the panel will actually
+ * open (src/settings.ts). `rawSetting` is the host's copy of the stored
+ * setting. The backend never throws over a broken start folder: it logs and
+ * hands back the root, so a fallback has exactly one shape — `resolved` is the
+ * root while the setting names something else. Returns the configured path in
+ * absolute form when that shape is on screen, and null otherwise.
+ *
+ * Deliberately narrow, because the two values disagree harmlessly all the
+ * time:
+ *
+ *   - a resolved folder that is not the root proves the setting worked,
+ *     whatever the host's cached copy still says, so nothing is reported then;
+ *   - `~/x`, `x` and `/…/x` are the same folder to the backend
+ *     (src/root.ts#normalize), so the setting is compared after `toAbsolute`,
+ *     which mirrors that rule.
+ *
+ * The caller owes it one thing: `resolved` must come from a `getState` read.
+ * A value patched in from the caller's own save is newer than the host's
+ * cached setting, and comparing the two accuses the save that just succeeded —
+ * which is precisely what 0.3.0 did.
+ */
+export function startFolderNotInUse(
+  rawSetting: unknown,
+  resolved: string,
+  root: string,
+): string | null {
+  if (typeof rawSetting !== "string" || rawSetting.trim() === "") return null;
+  if (!isSamePath(resolved, root)) return null;
+  const configured = toAbsolute(rawSetting, root);
+  if (isSamePath(configured, root)) return null;
+  return configured;
 }

@@ -27,6 +27,21 @@ export function isAbsolutePath(path: string): boolean {
 }
 
 /**
+ * The root as it should read inside a sentence shown to a user.
+ *
+ * There is no fixed answer to name: the root is the home directory of whoever
+ * runs bb, so the only truthful source is `state.root` from the backend. Until
+ * that arrives `clientRoot` is still "/", and "outside /" would be a lie in
+ * every direction — so the words stand in for the path until the backend says
+ * which one it is.
+ */
+export function rootPhrase(root: string = getClientRoot()): string {
+  const normalized = normalizePath(root);
+  if (normalized === "" || normalized === SEPARATOR) return "the home folder";
+  return normalized;
+}
+
+/**
  * Lexical normalization: collapses repeated separators, drops `.`, resolves
  * `..` where it can, and strips the trailing separator (except for "/").
  * Never touches the filesystem — this is presentation-side only; the backend

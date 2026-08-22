@@ -56,7 +56,7 @@ function rawMessageOf(error: unknown): string {
 }
 
 /**
- * Split `"not_found: /home/coder/x"` into its parts. Messages without a known
+ * Split `"not_found: /home/you/x"` into its parts. Messages without a known
  * code prefix are returned verbatim with `code: null`, so this is safe to call
  * on validation failures, network errors and thrown strings alike.
  */

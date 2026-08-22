@@ -26,6 +26,7 @@ import {
   isExternalSettingChange,
   saveStartFolder,
   startFolderLabel,
+  startFolderNotInUse,
   START_FOLDER_SAVED_TEXT,
   START_FOLDER_SAVE_FAILED_TEXT,
 } from "../lib/start-folder";
@@ -50,13 +51,25 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
    * `getState` snapshot is stale and has to be read again.
    *
    * The value itself stays off the screen: it is a cache that can lag behind
-   * both the filesystem and the backend by a refetch, so comparing it against
-   * `getState` — as this section did in 0.3.0 — only produces confident
-   * nonsense ("the saved path could not be opened" about a path that is fine).
+   * both the filesystem and the backend by a refetch, so it is never rendered
+   * as *the* start folder. It is compared against `getState` for one thing
+   * only — `startFolderNotInUse`, the single disagreement that can only mean
+   * the backend fell back — and only while `state` is a read rather than a
+   * value this section patched in from its own save. 0.3.0 compared them
+   * without either guard and produced confident nonsense ("the saved path
+   * could not be opened" about a path that was fine).
    */
   const rawStartFolder = useSettings().values?.startFolder;
 
   const [state, setState] = useState<PanelState | null>(null);
+  /**
+   * True while `state` is a `getState` answer rather than a value patched in
+   * from this section's own save. Only a read may be compared with the host's
+   * cached setting: right after a save that cache still holds the previous
+   * value. Our write makes the server broadcast `plugins-changed`, the host
+   * refetches, and the re-read that follows puts this back to true.
+   */
+  const [stateIsRead, setStateIsRead] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -98,6 +111,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
       const result = await rpc.call("getState", null);
       if (superseded()) return;
       setState(result);
+      setStateIsRead(true);
       setLoadError(null);
     } catch (failure) {
       if (superseded()) return;
@@ -149,7 +163,24 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
   const root = state?.root ?? null;
   const startFolder = state?.startFolder ?? null;
   const atRoot = state !== null && isSamePath(state.startFolder, state.root);
-  const ready = state !== null && loadError === null;
+  /**
+   * Having a snapshot is the whole requirement. A *background* re-read that
+   * failed says nothing about the snapshot already in hand — the folder
+   * browser and Reset work off `state`, and disabling them would answer a
+   * failed refresh by removing the user's way out of it. The failure is
+   * reported next to the value instead, with its own retry.
+   */
+  const ready = state !== null;
+
+  /**
+   * "Your start folder is not the one being used" — the only honest signal
+   * available here, and only from a snapshot that was read rather than
+   * patched. See `startFolderNotInUse` for why it is this narrow.
+   */
+  const notInUse =
+    state === null || !stateIsRead
+      ? null
+      : startFolderNotInUse(rawStartFolder, state.startFolder, state.root);
 
   const choose = useCallback(
     (path: string): void => {
@@ -166,6 +197,12 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
           setState((previous) =>
             previous === null ? previous : { ...previous, startFolder: resolved },
           );
+          setStateIsRead(false);
+          // A round-trip just succeeded, so "could not read the settings" is
+          // over: the only field this backend can change at runtime is the one
+          // the answer carries. Leaving it up would hide the save behind a
+          // stale failure and keep a retry on screen for nothing.
+          setLoadError(null);
           toast.success(START_FOLDER_SAVED_TEXT);
         } catch (failure) {
           if (!activeRef.current || saveGenRef.current !== generation) return;
@@ -255,12 +292,16 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
               <span className="text-xs text-destructive" role="alert">
                 {loadError}
               </span>
+              {/* `refresh`, never `load` directly: a getState issued while a
+                  save is in flight answers with the pre-save value and would
+                  land after it. The save is about to say what the setting is,
+                  and the host's broadcast re-reads right behind it. */}
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 data-testid="fm-settings-retry"
-                onClick={() => void load()}
+                onClick={() => refresh()}
               >
                 Try again
               </Button>
@@ -276,6 +317,17 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
           )}
         </div>
       </div>
+
+      {/* Not a live region: the two the section already has (the save status
+          and the error) are about something the user just did, while this is
+          standing copy about the stored value — a third one competing for the
+          same announcement is noise. */}
+      {notInUse === null || root === null ? null : (
+        <p className="text-xs leading-relaxed text-warning-text" data-testid="fm-settings-fallback">
+          The saved start folder <span className="font-mono">{notInUse}</span> is not in use: the
+          panel opens {root}.
+        </p>
+      )}
 
       {/* The same browser the panel opens for "Move to…" / "Copy to…" (§8.6):
           one picker, one listDir path, no second implementation.
