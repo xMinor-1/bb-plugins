@@ -85,40 +85,44 @@ function resolvedMode(): "light" | "dark" {
 
 // --- artwork ----------------------------------------------------------------
 
-// The button wears the square from icon.svg, split along the diagonal: day
-// above the cut, night below it. The half that is on is filled and holds its
-// symbol punched through, the other half is an empty outline with its symbol
-// drawn small — so the fill moves from one half to the other on every flip.
-// BB renders branding.icon as a CSS mask over a span inside its own button, so
-// swapping that one mask keeps the host's chrome untouched. Keep the night
-// face here identical to icon.svg — that file is the still version bb shows in
-// the plugin catalog.
+// The button wears the square from icon.svg, cut from the top-right corner to
+// the bottom-left one: day above the cut, night below it. The half that is on
+// is filled and holds its symbol punched through, the other half is an empty
+// outline with its symbol drawn small — so the fill moves from one half to the
+// other on every flip. BB renders branding.icon as a CSS mask over a span
+// inside its own button, so swapping that one mask keeps the host's chrome
+// untouched. Keep the night face here identical to icon.svg — that file is the
+// still version bb shows in the plugin catalog.
 //
 // A mask image reads alpha, so the symbol on the filled half is cut out
 // through an SVG mask instead of being painted in a lighter colour. The
-// drawing fills the whole canvas: bb scales the entire viewBox down into 16 px
-// of chrome, so empty margin is size the icon loses next to its neighbours.
+// drawing fills the whole canvas, and the span is scaled up past the host's
+// 16 px, which puts the square level with the rings other footer plugins draw.
+const ICON_SCALE = 1.65;
+
 const ICON_SUN_CUT =
-  '<circle cx="16.4" cy="7.6" r="2.5" fill="#000"/>' +
+  '<circle cx="7.6" cy="7.6" r="2.5" fill="#000"/>' +
   '<g stroke="#000" stroke-width="1.3" stroke-linecap="round">' +
-  '<path d="M19.54 8.9L20.28 9.21M17.7 10.74L18.01 11.48M15.1 10.74L14.79 11.48M13.26 8.9L12.52 9.21M13.26 6.3L12.52 5.99M15.1 4.46L14.79 3.72M17.7 4.46L18.01 3.72M19.54 6.3L20.28 5.99"/>' +
+  '<path d="M10.74 8.9L11.48 9.21M8.9 10.74L9.21 11.48M6.3 10.74L5.99 11.48M4.46 8.9L3.72 9.21M4.46 6.3L3.72 5.99M6.3 4.46L5.99 3.72M8.9 4.46L9.21 3.72M10.74 6.3L11.48 5.99"/>' +
   "</g>";
 const ICON_SUN_SMALL =
-  '<circle cx="17.2" cy="6.8" r="1.9" fill="#000"/>' +
+  '<circle cx="6.8" cy="6.8" r="1.9" fill="#000"/>' +
   '<g stroke="#000" stroke-width="1.25" stroke-linecap="round">' +
-  '<path d="M19.69 7.83L20.25 8.06M18.23 9.29L18.46 9.85M16.17 9.29L15.94 9.85M14.71 7.83L14.15 8.06M14.71 5.77L14.15 5.54M16.17 4.31L15.94 3.75M18.23 4.31L18.46 3.75M19.69 5.77L20.25 5.54"/>' +
+  '<path d="M9.29 7.83L9.85 8.06M7.83 9.29L8.06 9.85M5.77 9.29L5.54 9.85M4.31 7.83L3.75 8.06M4.31 5.77L3.75 5.54M5.77 4.31L5.54 3.75M7.83 4.31L8.06 3.75M9.29 5.77L9.85 5.54"/>' +
   "</g>";
+// Both crescents are mirrored about their own centre, so the moon opens toward
+// the diagonal rather than away from it.
 const ICON_MOON_CUT =
-  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(2 10.8) scale(0.4667)"/>';
+  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(32.8 0) scale(-1 1) translate(10.8 10.8) scale(0.4667)"/>';
 const ICON_MOON_SMALL =
-  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(2.933 13.333) scale(0.3222)"/>';
+  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(34.4 0) scale(-1 1) translate(13.333 13.333) scale(0.3222)"/>';
 
 // The diagonal runs corner to corner with a gap either side, so each half is
 // clipped a unit short of it. The outline half also needs the cut drawn in, or
 // its third side is missing.
 const ICON_HALVES = {
-  day: { clip: '<polygon points="1,0 24,0 24,23"/>', cut: "M2.2 0.2L23.8 21.8" },
-  night: { clip: '<polygon points="0,1 23,24 0,24"/>', cut: "M0.2 2.2L21.8 23.8" },
+  day: { clip: '<polygon points="0,0 23,0 0,23"/>', cut: "M21.8 0.2L0.2 21.8" },
+  night: { clip: '<polygon points="24,1 24,24 1,24"/>', cut: "M23.8 2.2L2.2 23.8" },
 } as const;
 
 function iconUrl(lit: "day" | "night", punched: string, drawn: string): string {
@@ -164,6 +168,9 @@ function paintIcon(): void {
   const url = resolvedMode() === "dark" ? ICON_NIGHT : ICON_DAY;
   icon.style.setProperty("mask-image", url);
   icon.style.setProperty("-webkit-mask-image", url);
+  // Scaling instead of resizing: the span keeps its 16 px slot, so the footer
+  // row never reflows around a bigger icon.
+  icon.style.setProperty("transform", `scale(${ICON_SCALE})`);
 }
 
 type ThemeState = {
