@@ -1,16 +1,18 @@
 // Theme button in the sidebar footer.
-//   short click        — next palette
+//   short click        — flip light ⇄ dark
 //   hold / right-click — menu: light / dark / system + the palette list
 //   hover and wait     — the same menu, without pressing anything (mouse only)
 //
 // sidebarFooterAction is rendered by the host, so the long-press is attached by
 // a content script to the host's own button markup (stable data-testid), and
-// the menu is drawn as plain DOM on top of the app.
+// the menu is drawn as plain DOM on top of the app. The same content script
+// repaints the button's artwork, so the switch on it shows the appearance the
+// click would leave behind.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
 const PLUGIN_ID = "theme-toggle";
-const ACTION_ID = "cycle-theme";
+const ACTION_ID = "toggle-theme";
 const BUTTON_SELECTOR = `[data-testid="plugin-sidebar-footer-action-${PLUGIN_ID}-${ACTION_ID}"]`;
 const HOLD_MS = 400;
 // Hovering opens the same menu, so the button answers a resting cursor without
@@ -71,6 +73,60 @@ function writeMode(mode: Mode): void {
         : "light"
       : mode;
   document.documentElement.classList.toggle("dark", resolved === "dark");
+}
+
+function resolvedMode(): "light" | "dark" {
+  const mode = readMode();
+  if (mode !== "system") return mode;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+// --- artwork ----------------------------------------------------------------
+
+// The button wears the switch from icon.svg, and it slides: knob left with a
+// crescent while the dark appearance is on, sun and knob right while it is
+// light. BB renders branding.icon as a CSS mask over a span inside its own
+// button, so swapping that one mask keeps the host's chrome untouched.
+// Keep the night face here identical to icon.svg — that file is the still
+// version bb shows in the plugin catalog.
+const ICON_SHELL =
+  '<rect x="1.5" y="5" width="21" height="14" rx="7" fill="none" stroke="#000" stroke-width="1.7"/>';
+const ICON_KNOB_LEFT = '<circle cx="8.5" cy="12" r="4.6" fill="#000"/>';
+const ICON_KNOB_RIGHT = '<circle cx="15.5" cy="12" r="4.6" fill="#000"/>';
+const ICON_MOON =
+  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(13.15 7.8) scale(0.344)"/>' +
+  '<path d="M20.25 8.8Q20.5 9.4 21.05 9.6 20.5 9.8 20.25 10.4 20 9.8 19.45 9.6 20 9.4 20.25 8.8Z" fill="#000"/>';
+const ICON_SUN =
+  '<circle cx="6.65" cy="12" r="1.7" fill="#000"/>' +
+  '<g stroke="#000" stroke-width="1" stroke-linecap="round">' +
+  '<path d="M6.65 9.6V9M6.65 14.4V15M4.25 12h-.6M9.05 12h.6M4.95 10.3l-.42-.42M8.35 13.7l.42.42M8.35 10.3l.42-.42M4.95 13.7l-.42.42"/>' +
+  "</g>";
+
+function iconUrl(body: string): string {
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+    body +
+    "</svg>";
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+
+const ICON_NIGHT = iconUrl(ICON_SHELL + ICON_KNOB_LEFT + ICON_MOON);
+const ICON_DAY = iconUrl(ICON_SHELL + ICON_SUN + ICON_KNOB_RIGHT);
+
+// bb marks the masked span with the asset it painted; without it the host fell
+// back to a named icon, and there is nothing to repaint.
+const ICON_SELECTOR = "[data-plugin-icon-asset]";
+
+function paintIcon(): void {
+  const icon = document
+    .querySelector(BUTTON_SELECTOR)
+    ?.querySelector<HTMLElement>(ICON_SELECTOR);
+  if (!icon) return;
+  const url = resolvedMode() === "dark" ? ICON_NIGHT : ICON_DAY;
+  icon.style.setProperty("mask-image", url);
+  icon.style.setProperty("-webkit-mask-image", url);
 }
 
 type ThemeState = {
@@ -178,7 +234,7 @@ class ThemeMenu {
   private cleanup: Array<() => void> = [];
   private closeTimer: number | null = null;
   // A hover-opened menu was not asked for, so a click on the button should
-  // still cycle the palette; a held-open one swallows that click instead.
+  // still flip the appearance; a held-open one swallows that click instead.
   openedByHover = false;
 
   get isOpen(): boolean {
@@ -314,18 +370,14 @@ class ThemeMenu {
 export default definePluginApp((app) => {
   app.slots.sidebarFooterAction({
     id: ACTION_ID,
-    title: "Theme: click for the next palette, hold to choose",
+    title: "Theme: click for light or dark, hold to choose",
+    // Only reached if the artwork fails to load: bb prefers branding.icon.
     icon: "Palette",
-    run: async () => {
-      try {
-        const state = await callRpc("cycle");
-        const name =
-          state.themes.find((t) => t.id === state.activeId)?.name ??
-          state.activeId;
-        toast.success(`Palette: ${name}`);
-      } catch (error) {
-        toast.error(`Could not change the palette: ${String(error)}`);
-      }
+    run: () => {
+      // A click is a plain day/night flip, so it leaves "system" behind and
+      // starts from whatever that was showing. The whole app changing colour
+      // is the confirmation; no toast on top of it.
+      writeMode(resolvedMode() === "dark" ? "light" : "dark");
     },
   });
 
@@ -339,6 +391,58 @@ export default definePluginApp((app) => {
       // Set while the cursor rests on the button after a press: without it the
       // menu would pop up again on its own right after every click.
       let hoverBlocked = false;
+
+      // The artwork follows the appearance. Repainting is idempotent and only
+      // costs a lookup, so every plausible trigger calls it: the host redrawing
+      // its footer, the setting changing here or in another tab, the system
+      // switching over, and the cursor arriving on the button — the last one
+      // covers a sidebar that remounted out of the observer's reach.
+      const footerObserver = new MutationObserver(() => paintIcon());
+      let observedFooter: HTMLElement | null = null;
+      let findTimer: number | null = null;
+
+      const sync = (): void => {
+        const button = document.querySelector<HTMLElement>(BUTTON_SELECTOR);
+        // The footer list outlives the button, which the host re-keys whenever
+        // the plugin reloads, so the list is what we watch.
+        const footer = button?.parentElement?.parentElement ?? null;
+        if (footer && footer !== observedFooter) {
+          footerObserver.disconnect();
+          footerObserver.observe(footer, { childList: true, subtree: true });
+          observedFooter = footer;
+        }
+        paintIcon();
+      };
+
+      // The sidebar may render after the plugin mounts; give it a while.
+      let attempts = 0;
+      const waitForButton = (): void => {
+        findTimer = null;
+        sync();
+        if (observedFooter || ++attempts > 40) return;
+        findTimer = window.setTimeout(waitForButton, 500);
+      };
+      waitForButton();
+
+      // writeMode dispatches this synthetically, so both halves land here.
+      window.addEventListener(
+        "storage",
+        (event) => {
+          if (event.key === null || event.key === MODE_KEY) paintIcon();
+        },
+        { signal },
+      );
+      window
+        .matchMedia("(prefers-color-scheme: dark)")
+        .addEventListener("change", () => paintIcon(), { signal });
+      // bb's own settings write the same key without a storage event, so also
+      // watch the class the CSS keys off: every real appearance change, from
+      // wherever it came, ends up there.
+      const rootObserver = new MutationObserver(() => paintIcon());
+      rootObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
 
       const buttonFrom = (target: EventTarget | null): HTMLElement | null =>
         target instanceof Element
@@ -372,7 +476,7 @@ export default definePluginApp((app) => {
             const wasHover = menu.openedByHover;
             menu.close();
             // The hover menu opened by itself, so let the click do its usual
-            // job — cycle the palette. A held-open menu swallows it.
+            // job — flip light/dark. A held-open menu swallows it.
             suppressClick = !wasHover;
             return;
           }
@@ -400,9 +504,9 @@ export default definePluginApp((app) => {
         (event) => {
           if (event.pointerType !== "mouse") return;
           const button = buttonFrom(event.target);
-          if (!button || hoverBlocked || menu.isOpen || hoverTimer !== null) {
-            return;
-          }
+          if (!button) return;
+          sync();
+          if (hoverBlocked || menu.isOpen || hoverTimer !== null) return;
           hoverTimer = window.setTimeout(() => {
             hoverTimer = null;
             void menu.open(button, true);
@@ -426,7 +530,7 @@ export default definePluginApp((app) => {
       );
 
       // The hold already opened the menu — swallow the host's click, otherwise
-      // it cycles the palette on top of that.
+      // it flips the appearance on top of that.
       document.addEventListener(
         "click",
         (event) => {
@@ -454,6 +558,9 @@ export default definePluginApp((app) => {
       return () => {
         cancelHold();
         cancelHover();
+        if (findTimer !== null) window.clearTimeout(findTimer);
+        footerObserver.disconnect();
+        rootObserver.disconnect();
         menu.close();
       };
     },

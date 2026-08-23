@@ -2,7 +2,7 @@
 
 Theme switching one click away, in the bb sidebar footer.
 
-- **Click** — cycle to the next palette.
+- **Click** — flip light ⇄ dark.
 - **Hover and wait (600 ms)** — the menu opens on its own, no click needed.
   Mouse only, and it closes again once the cursor leaves.
 - **Hold (400 ms) or right-click** — the same menu, for touch and for people
@@ -10,6 +10,10 @@ Theme switching one click away, in the bb sidebar footer.
 
 The menu lists light / dark / system appearance and every palette on the host,
 including ones contributed by other plugins.
+
+The button wears a day/night switch that slides with the appearance: knob left
+under a crescent while it is dark, sun and knob right while it is light — so the
+button shows the state it is in, not only the one it would move to.
 
 ## Install
 
@@ -19,12 +23,11 @@ bb plugin install git:https://github.com/xMinor-1/bb-plugins.git --plugin theme-
 
 ## How it works
 
-`server.ts` exposes three RPC methods over `bb.sdk.theme`:
+`server.ts` exposes two RPC methods over `bb.sdk.theme`:
 
 | Method | What it does |
 | --- | --- |
 | `state` | active palette plus the full list (built-in, custom, plugin-provided) |
-| `cycle` | switches to the next palette |
 | `select` | applies a palette by id |
 
 The two settings live in different places, so the plugin touches both:
@@ -38,6 +41,12 @@ The two settings live in different places, so the plugin touches both:
 by a content script to the host's button (matched by its stable `data-testid`),
 and the menu is plain DOM positioned next to that button. It styles itself from
 the app's CSS custom properties, so it follows whichever palette is active.
+
+The same content script paints the switch. bb renders `branding.icon` as a CSS
+mask over a span inside its own button, so the plugin swaps that one mask
+between the two faces and leaves the host's chrome alone; `icon.svg` is the
+night face and stays the still version bb shows in the plugin catalog. If the
+markup ever moves, nothing is repainted and the button keeps that still icon.
 
 ## Development
 

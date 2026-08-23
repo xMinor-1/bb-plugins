@@ -1,4 +1,4 @@
-// bb-plugin-theme-toggle — bb palette plus light/dark mode from one button.
+// bb-plugin-theme-toggle — light/dark plus the bb palette from one button.
 //
 // The palette lives on the server (bb.sdk.theme); light/dark is a client-side
 // setting (localStorage `bb.theme`), so app.tsx owns that half.
@@ -22,7 +22,6 @@ const themeList = z.object({
 
 export const rpcContract = defineRpcContract({
   state: { input: z.null(), output: themeList },
-  cycle: { input: z.null(), output: themeList },
   select: { input: z.object({ themeId: z.string() }), output: themeList },
 });
 
@@ -50,11 +49,6 @@ export default async function plugin(bb: BbPluginApi) {
     async state() {
       const { activeId, themes } = await read();
       return { activeId, themes };
-    },
-    async cycle() {
-      const { activeId, themes } = await read();
-      const at = themes.findIndex((t) => t.id === activeId);
-      return apply(themes[(at + 1) % themes.length]!.id);
     },
     async select({ themeId }) {
       return apply(themeId);

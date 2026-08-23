@@ -1,14 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Theme Toggle">
-  <!-- A sun/moon switch. BB draws plugin artwork as a CSS mask, which keys off
-       alpha coverage only: the fill is an opaque literal, the shapes carry the
-       drawing, and nothing sits behind them — a filled background would mask
-       into one solid square. -->
-  <path d="M19 15h26a17 17 0 0 1 0 34H19a17 17 0 0 1 0-34zm0 4.8a12.2 12.2 0 1 0 0 24.4h26a12.2 12.2 0 0 0 0-24.4z" fill="#000"/>
-  <path d="M47.6 23.2a9.4 9.4 0 1 0 0 17.6 10.6 10.6 0 0 1 0-17.6z" fill="#000"/>
-  <g fill="#000">
-    <circle cx="20.5" cy="32" r="3.6"/>
-    <g stroke="#000" stroke-width="2.1" stroke-linecap="round">
-      <path d="M20.5 25.2v1.5M20.5 37.3v1.5M13.7 32h1.5M25.8 32h1.5M15.7 27.2l1.1 1.1M24.2 35.7l1.1 1.1M25.3 27.2l-1.1 1.1M16.8 35.7l-1.1 1.1"/>
-    </g>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Theme Toggle">
+  <!-- A day/night switch resting on its night face: knob left, crescent right.
+       BB draws plugin artwork as a CSS mask, which keys off alpha coverage
+       only, so the fill is an opaque literal, the shapes carry the drawing,
+       and nothing sits behind them — a filled background would mask into one
+       solid square.
+
+       app.tsx repaints the button with the same shell and the day face (sun
+       left, knob right) whenever the light appearance is on; the two drawings
+       live side by side there and must stay in step with this file. -->
+  <rect x="1.5" y="5" width="21" height="14" rx="7" fill="none" stroke="#000" stroke-width="1.7"/>
+  <circle cx="8.5" cy="12" r="4.6" fill="#000"/>
+  <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(13.15 7.8) scale(0.344)"/>
+  <path d="M20.25 8.8Q20.5 9.4 21.05 9.6 20.5 9.8 20.25 10.4 20 9.8 19.45 9.6 20 9.4 20.25 8.8Z" fill="#000"/>
 </svg>
