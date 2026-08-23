@@ -12,8 +12,10 @@ The menu lists light / dark / system appearance and every palette on the host,
 including ones contributed by other plugins.
 
 The button wears a day/night switch that slides with the appearance: knob left
-under a crescent while it is dark, sun and knob right while it is light — so the
-button shows the state it is in, not only the one it would move to.
+next to a crescent while it is dark, sun and knob right while it is light — so
+the button shows the state it is in, not only the one it would move to. The
+switch is drawn as a solid capsule with the knob and the glyph punched through
+it, so it carries the same visual weight as the icons beside it.
 
 ## Install
 
@@ -47,6 +49,12 @@ mask over a span inside its own button, so the plugin swaps that one mask
 between the two faces and leaves the host's chrome alone; `icon.svg` is the
 night face and stays the still version bb shows in the plugin catalog. If the
 markup ever moves, nothing is repainted and the button keeps that still icon.
+
+Two things the artwork depends on. A mask reads alpha, so the knob and the
+glyph are cut out through an SVG `mask` rather than painted in a lighter
+colour. And the viewBox hugs the drawing: bb fits the whole box into 16 px of
+chrome, so empty margin in the file is size the icon loses next to its
+neighbours.
 
 ## Development
 

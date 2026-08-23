@@ -91,29 +91,45 @@ function resolvedMode(): "light" | "dark" {
 // button, so swapping that one mask keeps the host's chrome untouched.
 // Keep the night face here identical to icon.svg — that file is the still
 // version bb shows in the plugin catalog.
-const ICON_SHELL =
-  '<rect x="1.5" y="5" width="21" height="14" rx="7" fill="none" stroke="#000" stroke-width="1.7"/>';
-const ICON_KNOB_LEFT = '<circle cx="8.5" cy="12" r="4.6" fill="#000"/>';
-const ICON_KNOB_RIGHT = '<circle cx="15.5" cy="12" r="4.6" fill="#000"/>';
+//
+// The switch body is one opaque capsule and everything on it is punched out
+// through an SVG mask: a mask image reads alpha, so a lighter fill would add
+// to the shape instead of cutting into it. The viewBox hugs the drawing, since
+// bb scales the whole box down into 16 px of chrome.
+const ICON_MASK_ID = "bb-theme-toggle-cut";
+const ICON_VIEW_BOX = "0 0 24.4 16.4";
+
+const ICON_KNOB_LEFT = '<circle cx="8.2" cy="8.2" r="4.8" fill="#000"/>';
+const ICON_KNOB_RIGHT = '<circle cx="16.2" cy="8.2" r="4.8" fill="#000"/>';
 const ICON_MOON =
-  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(13.15 7.8) scale(0.344)"/>' +
-  '<path d="M20.25 8.8Q20.5 9.4 21.05 9.6 20.5 9.8 20.25 10.4 20 9.8 19.45 9.6 20 9.4 20.25 8.8Z" fill="#000"/>';
+  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(13.32 3.88) scale(0.36)"/>' +
+  '<path d="M21.9 4.85Q22.15 5.45 22.75 5.7 22.15 5.95 21.9 6.55 21.65 5.95 21.05 5.7 21.65 5.45 21.9 4.85Z" fill="#000"/>';
 const ICON_SUN =
-  '<circle cx="6.65" cy="12" r="1.7" fill="#000"/>' +
-  '<g stroke="#000" stroke-width="1" stroke-linecap="round">' +
-  '<path d="M6.65 9.6V9M6.65 14.4V15M4.25 12h-.6M9.05 12h.6M4.95 10.3l-.42-.42M8.35 13.7l.42.42M8.35 10.3l.42-.42M4.95 13.7l-.42.42"/>' +
+  '<circle cx="5.9" cy="8.2" r="2.15" fill="#000"/>' +
+  '<g stroke="#000" stroke-width="1.15" stroke-linecap="round">' +
+  '<path d="M5.9 5.3V4.65M5.9 11.1v.65M3 8.2h-.65M8.8 8.2h.65M3.85 6.15l-.46-.46M7.95 10.25l.46.46M7.95 6.15l.46-.46M3.85 10.25l-.46.46"/>' +
   "</g>";
 
-function iconUrl(body: string): string {
+function iconUrl(holes: string): string {
   const svg =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
-    body +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ICON_VIEW_BOX}">` +
+    `<defs><mask id="${ICON_MASK_ID}" maskUnits="userSpaceOnUse" x="0" y="0" width="24.4" height="16.4">` +
+    '<rect width="24.4" height="16.4" fill="#fff"/>' +
+    holes +
+    "</mask></defs>" +
+    `<rect width="24.4" height="16.4" rx="8.2" fill="#000" mask="url(#${ICON_MASK_ID})"/>` +
     "</svg>";
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+  // encodeURIComponent leaves brackets alone, and an unescaped one inside a
+  // data URI ends the CSS url() token early — the declaration is then dropped
+  // and the button silently keeps the face it had.
+  const encoded = encodeURIComponent(svg)
+    .replace(/\(/g, "%28")
+    .replace(/\)/g, "%29");
+  return `url("data:image/svg+xml,${encoded}")`;
 }
 
-const ICON_NIGHT = iconUrl(ICON_SHELL + ICON_KNOB_LEFT + ICON_MOON);
-const ICON_DAY = iconUrl(ICON_SHELL + ICON_SUN + ICON_KNOB_RIGHT);
+const ICON_NIGHT = iconUrl(ICON_KNOB_LEFT + ICON_MOON);
+const ICON_DAY = iconUrl(ICON_SUN + ICON_KNOB_RIGHT);
 
 // bb marks the masked span with the asset it painted; without it the host fell
 // back to a named icon, and there is nothing to repaint.
