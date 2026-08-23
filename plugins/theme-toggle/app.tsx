@@ -85,40 +85,61 @@ function resolvedMode(): "light" | "dark" {
 
 // --- artwork ----------------------------------------------------------------
 
-// The button wears the switch from icon.svg, and it slides: knob left with a
-// crescent while the dark appearance is on, sun and knob right while it is
-// light. BB renders branding.icon as a CSS mask over a span inside its own
-// button, so swapping that one mask keeps the host's chrome untouched.
-// Keep the night face here identical to icon.svg — that file is the still
-// version bb shows in the plugin catalog.
+// The button wears the square from icon.svg, split along the diagonal: day
+// above the cut, night below it. The half that is on is filled and holds its
+// symbol punched through, the other half is an empty outline with its symbol
+// drawn small — so the fill moves from one half to the other on every flip.
+// BB renders branding.icon as a CSS mask over a span inside its own button, so
+// swapping that one mask keeps the host's chrome untouched. Keep the night
+// face here identical to icon.svg — that file is the still version bb shows in
+// the plugin catalog.
 //
-// The switch body is one opaque capsule and everything on it is punched out
-// through an SVG mask: a mask image reads alpha, so a lighter fill would add
-// to the shape instead of cutting into it. The viewBox hugs the drawing, since
-// bb scales the whole box down into 16 px of chrome.
-const ICON_MASK_ID = "bb-theme-toggle-cut";
-const ICON_VIEW_BOX = "0 0 24.4 16.4";
-
-const ICON_KNOB_LEFT = '<circle cx="8.2" cy="8.2" r="4.8" fill="#000"/>';
-const ICON_KNOB_RIGHT = '<circle cx="16.2" cy="8.2" r="4.8" fill="#000"/>';
-const ICON_MOON =
-  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(13.32 3.88) scale(0.36)"/>' +
-  '<path d="M21.9 4.85Q22.15 5.45 22.75 5.7 22.15 5.95 21.9 6.55 21.65 5.95 21.05 5.7 21.65 5.45 21.9 4.85Z" fill="#000"/>';
-const ICON_SUN =
-  '<circle cx="5.9" cy="8.2" r="2.15" fill="#000"/>' +
-  '<g stroke="#000" stroke-width="1.15" stroke-linecap="round">' +
-  '<path d="M5.9 5.3V4.65M5.9 11.1v.65M3 8.2h-.65M8.8 8.2h.65M3.85 6.15l-.46-.46M7.95 10.25l.46.46M7.95 6.15l.46-.46M3.85 10.25l-.46.46"/>' +
+// A mask image reads alpha, so the symbol on the filled half is cut out
+// through an SVG mask instead of being painted in a lighter colour. The
+// drawing fills the whole canvas: bb scales the entire viewBox down into 16 px
+// of chrome, so empty margin is size the icon loses next to its neighbours.
+const ICON_SUN_CUT =
+  '<circle cx="16.4" cy="7.6" r="2.5" fill="#000"/>' +
+  '<g stroke="#000" stroke-width="1.3" stroke-linecap="round">' +
+  '<path d="M19.54 8.9L20.28 9.21M17.7 10.74L18.01 11.48M15.1 10.74L14.79 11.48M13.26 8.9L12.52 9.21M13.26 6.3L12.52 5.99M15.1 4.46L14.79 3.72M17.7 4.46L18.01 3.72M19.54 6.3L20.28 5.99"/>' +
   "</g>";
+const ICON_SUN_SMALL =
+  '<circle cx="17.2" cy="6.8" r="1.9" fill="#000"/>' +
+  '<g stroke="#000" stroke-width="1.25" stroke-linecap="round">' +
+  '<path d="M19.69 7.83L20.25 8.06M18.23 9.29L18.46 9.85M16.17 9.29L15.94 9.85M14.71 7.83L14.15 8.06M14.71 5.77L14.15 5.54M16.17 4.31L15.94 3.75M18.23 4.31L18.46 3.75M19.69 5.77L20.25 5.54"/>' +
+  "</g>";
+const ICON_MOON_CUT =
+  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(2 10.8) scale(0.4667)"/>';
+const ICON_MOON_SMALL =
+  '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" fill="#000" transform="translate(2.933 13.333) scale(0.3222)"/>';
 
-function iconUrl(holes: string): string {
+// The diagonal runs corner to corner with a gap either side, so each half is
+// clipped a unit short of it. The outline half also needs the cut drawn in, or
+// its third side is missing.
+const ICON_HALVES = {
+  day: { clip: '<polygon points="1,0 24,0 24,23"/>', cut: "M2.2 0.2L23.8 21.8" },
+  night: { clip: '<polygon points="0,1 23,24 0,24"/>', cut: "M0.2 2.2L21.8 23.8" },
+} as const;
+
+function iconUrl(lit: "day" | "night", punched: string, drawn: string): string {
+  const idle = lit === "day" ? "night" : "day";
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ICON_VIEW_BOX}">` +
-    `<defs><mask id="${ICON_MASK_ID}" maskUnits="userSpaceOnUse" x="0" y="0" width="24.4" height="16.4">` +
-    '<rect width="24.4" height="16.4" fill="#fff"/>' +
-    holes +
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+    '<clipPath id="s"><rect width="24" height="24" rx="5"/></clipPath>' +
+    `<clipPath id="a">${ICON_HALVES[lit].clip}</clipPath>` +
+    `<clipPath id="b">${ICON_HALVES[idle].clip}</clipPath>` +
+    '<defs><mask id="c" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">' +
+    '<rect width="24" height="24" fill="#fff"/>' +
+    punched +
     "</mask></defs>" +
-    `<rect width="24.4" height="16.4" rx="8.2" fill="#000" mask="url(#${ICON_MASK_ID})"/>` +
-    "</svg>";
+    '<g clip-path="url(#s)">' +
+    '<g clip-path="url(#a)"><rect width="24" height="24" rx="5" fill="#000" mask="url(#c)"/></g>' +
+    '<g clip-path="url(#b)">' +
+    '<rect x="1" y="1" width="22" height="22" rx="4" fill="none" stroke="#000" stroke-width="2"/>' +
+    `<path d="${ICON_HALVES[idle].cut}" fill="none" stroke="#000" stroke-width="2"/>` +
+    "</g>" +
+    drawn +
+    "</g></svg>";
   // encodeURIComponent leaves brackets alone, and an unescaped one inside a
   // data URI ends the CSS url() token early — the declaration is then dropped
   // and the button silently keeps the face it had.
@@ -128,8 +149,8 @@ function iconUrl(holes: string): string {
   return `url("data:image/svg+xml,${encoded}")`;
 }
 
-const ICON_NIGHT = iconUrl(ICON_KNOB_LEFT + ICON_MOON);
-const ICON_DAY = iconUrl(ICON_SUN + ICON_KNOB_RIGHT);
+const ICON_NIGHT = iconUrl("night", ICON_MOON_CUT, ICON_SUN_SMALL);
+const ICON_DAY = iconUrl("day", ICON_SUN_CUT, ICON_MOON_SMALL);
 
 // bb marks the masked span with the asset it painted; without it the host fell
 // back to a named icon, and there is nothing to repaint.
