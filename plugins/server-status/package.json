@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-server-status",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "engines": {
     "bb": ">=0.39",
@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Server Status",
-    "description": "Tracks host RAM usage as a ring around a sidebar footer button — amber from 80%, red above 90%, refreshed every five seconds. Click opens a server summary: CPU and cores, memory, swap, disk, load average, uptime, and OS and kernel version.",
+    "description": "Tracks host RAM usage as a ring around a sidebar footer button \u2014 amber from 80%, red above 90%, refreshed every five seconds. Click opens a server summary: CPU and cores, memory, swap, disk, load average, uptime, and OS and kernel version.",
     "branding": {
       "icon": "./icon.svg"
     },

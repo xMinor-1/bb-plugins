@@ -1539,8 +1539,8 @@ Frontend contract assumptions it may rely on without asking:
 8. **`bb connect` tunnel limits are unknown.** If the panel is driven remotely
    through getbb.app rather than loopback, the proxy may impose its own body or
    duration limits; adaptive chunk sizing is the mitigation.
-9. **`author.name` for the marketplace entry is unknown** (`gh api user` returns
-   `name: null`; `LICENSE` says "Dmitriy Fomin"). Ask before submitting.
+9. **`author.name` for the marketplace entry is `Foma`** — decided by the owner
+   and applied across every entry and `LICENSE` in this repository.
 10. **`npx shadcn add @bb/*` needs network** to `raw.githubusercontent.com` at
     tag `desktop-v0.39.0`; the offline extraction fallback in §13 is the
     supported path if that tag or the network is unavailable.

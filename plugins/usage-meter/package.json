@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-usage-meter",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -14,7 +14,7 @@
   },
   "bb": {
     "name": "Usage Meter",
-    "description": "Two rings on a sidebar footer button track the Claude subscription limits: the session outside, the week inside, with every window and reset time in the popup. The Usage page behind them shows where the limits went — the same breakdown Claude Code's VS Code extension gives, plus workflow runs, background /go runs, skills, projects and bb threads.",
+    "description": "Two rings on a sidebar footer button track the Claude subscription limits: the session outside, the week inside, with every window and reset time in the popup. The Usage page behind them shows where the limits went \u2014 the same breakdown Claude Code's VS Code extension gives, plus workflow runs, background /go runs, skills, projects and bb threads.",
     "branding": {
       "icon": "./icon.svg"
     },
