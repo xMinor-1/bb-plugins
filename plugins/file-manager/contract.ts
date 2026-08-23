@@ -123,6 +123,17 @@ export type FileEntry = z.infer<typeof entrySchema>;
 export const preferencesSchema = z.strictObject({
   showHiddenFiles: z.boolean(),
   confirmOnDelete: z.boolean(),
+  /**
+   * Reopen the folder the panel was last in instead of `startFolder` (v0.4.0).
+   *
+   * It lives here rather than being read through `useSettings()` because the
+   * panel decides *where to open* inside its bootstrap effect, in the same tick
+   * it learns the root and before the first `listDir`. `getState` is the one
+   * call that already delivers that tick; a second async source racing it would
+   * either delay the first listing or open the start folder and jump a moment
+   * later.
+   */
+  restoreLastFolder: z.boolean(),
   sortField: sortFieldSchema,
   sortDirection: sortDirectionSchema,
 });

@@ -52,9 +52,10 @@ afterEach(async () => {
 });
 
 describe("settingsDescriptors", () => {
-  it("declares exactly the six settings of §7.1 with their defaults", () => {
+  it("declares exactly the seven settings of §7.1 with their defaults", () => {
     expect(Object.keys(settingsDescriptors)).toEqual([
       "startFolder",
+      "restoreLastFolder",
       "showHiddenFiles",
       "confirmOnDelete",
       "sortField",
@@ -111,6 +112,7 @@ describe("defaults and derived values", () => {
     expect(settings.preferences()).toEqual({
       showHiddenFiles: false,
       confirmOnDelete: true,
+      restoreLastFolder: true,
       sortField: "name",
       sortDirection: "asc",
     });
@@ -198,6 +200,7 @@ describe("savePreferences", () => {
     expect(result.preferences).toEqual({
       showHiddenFiles: true,
       confirmOnDelete: true,
+      restoreLastFolder: true,
       sortField: "size",
       sortDirection: "asc",
     });

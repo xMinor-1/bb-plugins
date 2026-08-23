@@ -22,7 +22,9 @@ import { toast } from "sonner";
 import { errorToastText } from "../lib/errors";
 import { isSamePath } from "../lib/fm-paths";
 import { useFmRpc, type RpcOutput } from "../lib/fm-rpc";
+import { forgetLastFolder, readLastFolder } from "../lib/last-folder";
 import {
+  isExternalBooleanSettingChange,
   isExternalSettingChange,
   saveStartFolder,
   startFolderLabel,
@@ -59,7 +61,14 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
    * without either guard and produced confident nonsense ("the saved path
    * could not be opened" about a path that was fine).
    */
-  const rawStartFolder = useSettings().values?.startFolder;
+  const hostSettings = useSettings().values;
+  const rawStartFolder = hostSettings?.startFolder;
+  /**
+   * The second key with the same job. `restoreLastFolder` decides *which* of
+   * the two folders below is the one that opens, so a change to it makes the
+   * copy in this section wrong until it is re-read.
+   */
+  const rawRestoreLastFolder = hostSettings?.restoreLastFolder;
 
   const [state, setState] = useState<PanelState | null>(null);
   /**
@@ -80,6 +89,13 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
    * back out of the folder they are inspecting.
    */
   const [pickerStart, setPickerStart] = useState<string | null>(null);
+  /**
+   * Whether a remembered folder exists right now. Client-side and free to
+   * read: `lib/last-folder.ts` is module scope in the same bundle, exactly
+   * like `components/panel-bus.ts`, so this section can answer for the panel's
+   * memory without an RPC even though the host mounts it elsewhere.
+   */
+  const [hasMemory, setHasMemory] = useState(() => readLastFolder() !== null);
 
   // Mounted-guard: a settings page can be navigated away from mid-request, and
   // a setState on an unmounted section is a console warning nobody can act on.
@@ -112,6 +128,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
       if (superseded()) return;
       setState(result);
       setStateIsRead(true);
+      setHasMemory(readLastFolder() !== null);
       setLoadError(null);
     } catch (failure) {
       if (superseded()) return;
@@ -138,6 +155,13 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
     lastRawRef.current = rawStartFolder;
     if (isExternalSettingChange(previous, rawStartFolder)) refresh();
   }, [rawStartFolder, refresh]);
+
+  const lastRawRestoreRef = useRef<string | boolean | undefined>(undefined);
+  useEffect(() => {
+    const previous = lastRawRestoreRef.current;
+    lastRawRestoreRef.current = rawRestoreLastFolder;
+    if (isExternalBooleanSettingChange(previous, rawRestoreLastFolder)) refresh();
+  }, [rawRestoreLastFolder, refresh]);
 
   // Coming back to the page refreshes too: a broadcast can be missed while the
   // socket is down, and a start folder can stop existing (deleted, renamed)
@@ -278,12 +302,44 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
           >
             {root === null ? "Reset" : `Reset to ${root}`}
           </Button>
+          {/* Pure client-side: no RPC, no settings write. The memory is a
+              trace in this browser profile, not a stored decision (§1.9). */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={!ready || !hasMemory}
+            data-testid="fm-settings-forget"
+            onClick={() => {
+              if (state === null) return;
+              forgetLastFolder();
+              setHasMemory(false);
+              toast.success(
+                `Forgotten. The panel will open in ${startFolderLabel(
+                  state.startFolder,
+                  state.root,
+                )} next time.`,
+              );
+            }}
+          >
+            Forget the remembered folder
+          </Button>
         </div>
       </div>
 
       <div className="flex min-h-5 items-start justify-between gap-4">
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          The panel opens here every time.
+        {/* The one thing the host's own checkbox cannot say: which of the two
+            folders is actually in effect. "The panel opens here every time" is
+            only true with the toggle off, so it is now a pair (§2.2). */}
+        <p
+          className="text-xs leading-relaxed text-muted-foreground"
+          data-testid="fm-settings-open-rule"
+        >
+          {state === null
+            ? "The panel opens here."
+            : state.preferences.restoreLastFolder
+              ? "Reopening the last folder is on, so this is where the panel opens the first time and whenever the last folder is gone."
+              : "Reopening the last folder is off, so the panel always opens here."}
           {root === null ? null : ` Everything stays inside ${root}.`}
         </p>
         <div className="flex shrink-0 items-center gap-3">

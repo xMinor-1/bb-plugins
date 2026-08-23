@@ -1,15 +1,16 @@
 // components/Toolbar.tsx — the one persistent control strip.
 //
-// Breadcrumbs on the left (also drop targets), then the in-folder filter, the
-// sort menu, the hidden-files toggle and a manual refresh. Sort and hidden are
-// persisted through `savePreferences`; the filter is client-side only and is
-// deliberately *not* in the URL (§8: a `?` in a file name would break it).
+// The path bar on the left (breadcrumbs, or a text field — PATHBAR-SPEC §3),
+// then the in-folder filter, the sort menu, the hidden-files toggle and a
+// manual refresh. Sort and hidden are persisted through `savePreferences`; the
+// filter is client-side only and is deliberately *not* in the URL (§8: a `?`
+// in a file name would break it).
 import type { DragEvent, RefObject } from "react";
 
 import type { SortDirection, SortField } from "../hooks/useDirectory";
 import { cn } from "../lib/utils";
 import { formatBytes } from "../lib/format";
-import { Breadcrumbs } from "./Breadcrumbs";
+import { PathBar } from "./PathBar";
 import { Button } from "./ui/button";
 import {
   DropdownMenu,
@@ -55,6 +56,15 @@ export interface ToolbarProps {
   onDragOverCrumb?: (path: string, event: DragEvent<HTMLElement>) => void;
   onDragLeaveCrumb?: (path: string, event: DragEvent<HTMLElement>) => void;
   onDropOnCrumb?: (path: string, event: DragEvent<HTMLElement>) => void;
+  /* --- path bar (PATHBAR-SPEC §3); the panel owns the mode and the commit --- */
+  pathEditing: boolean;
+  onPathOpen: () => void;
+  onPathCancel: (options: { focusGrid: boolean }) => void;
+  onPathSubmit: (raw: string) => void;
+  pathError: string | null;
+  onPathDirty: () => void;
+  pathBusy?: boolean;
+  pathFocusTick: number;
   className?: string;
 }
 
@@ -81,6 +91,14 @@ export function Toolbar({
   onDragOverCrumb,
   onDragLeaveCrumb,
   onDropOnCrumb,
+  pathEditing,
+  onPathOpen,
+  onPathCancel,
+  onPathSubmit,
+  pathError,
+  onPathDirty,
+  pathBusy = false,
+  pathFocusTick,
   className,
 }: ToolbarProps) {
   return (
@@ -91,14 +109,22 @@ export function Toolbar({
         className,
       )}
     >
-      <Breadcrumbs
+      <PathBar
         path={path}
         root={root}
         onNavigate={onNavigate}
+        editing={pathEditing}
+        onOpen={onPathOpen}
+        onCancel={onPathCancel}
+        onSubmit={onPathSubmit}
+        error={pathError}
+        onDirty={onPathDirty}
+        busy={pathBusy}
+        focusTick={pathFocusTick}
         dropTargetPath={dropTargetPath}
-        onDragOverTarget={onDragOverCrumb}
-        onDragLeaveTarget={onDragLeaveCrumb}
-        onDropOnTarget={onDropOnCrumb}
+        onDragOverCrumb={onDragOverCrumb}
+        onDragLeaveCrumb={onDragLeaveCrumb}
+        onDropOnCrumb={onDropOnCrumb}
       />
 
       <div className="relative w-40 shrink-0 @lg:w-56">

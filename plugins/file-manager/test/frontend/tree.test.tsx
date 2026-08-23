@@ -31,6 +31,7 @@ vi.mock("sonner", () => ({
 const app = await loadPluginApp(() => import("../../app"));
 const { resetUploadManager } = await import("../../hooks/useUploads");
 const { resetPanelSnapshot } = await import("../../components/panel-bus");
+const { resetLastFolderStore } = await import("../../lib/last-folder");
 const { resetTreeStore } = await import("../../hooks/useTree");
 const { AUTO_EXPAND_HOVER_MS, EXPANDED_STORAGE_KEY, MAX_EXPANDED_PATHS } = await import(
   "../../lib/fm-tree"
@@ -85,6 +86,7 @@ const HIDDEN_IN_DOCS = makeEntry({ name: ".secret", path: `${DOCS}/.secret` });
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  restoreLastFolder: true,
   sortField: "name" as const,
   sortDirection: "asc" as const,
 };
@@ -333,6 +335,11 @@ beforeEach(() => {
   holds = new Map();
   resetUploadManager();
   resetPanelSnapshot();
+  // The location memory decides where the panel opens, so it leaks
+  // between mounts unless every suite that mounts one clears it
+  // (PATHBAR-SPEC §9.5).
+  window.localStorage.clear();
+  resetLastFolderStore();
   resetTreeStore();
   window.localStorage.clear();
 });

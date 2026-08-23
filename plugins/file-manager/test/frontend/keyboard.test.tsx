@@ -26,6 +26,7 @@ vi.mock("sonner", () => ({
 const app = await loadPluginApp(() => import("../../app"));
 const { resetUploadManager } = await import("../../hooks/useUploads");
 const { resetPanelSnapshot } = await import("../../components/panel-bus");
+const { resetLastFolderStore } = await import("../../lib/last-folder");
 
 const registration = app.navPanels[0]!;
 const Panel = registration.component;
@@ -55,6 +56,7 @@ const FOLDER = makeEntry({ name: "docs", kind: "directory", path: DOCS });
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  restoreLastFolder: true,
   sortField: "name" as const,
   sortDirection: "asc" as const,
 };
@@ -138,6 +140,11 @@ beforeEach(() => {
   toasts.success.length = 0;
   resetUploadManager();
   resetPanelSnapshot();
+  // The location memory decides where the panel opens, so it leaks
+  // between mounts unless every suite that mounts one clears it
+  // (PATHBAR-SPEC §9.5).
+  window.localStorage.clear();
+  resetLastFolderStore();
 });
 
 afterEach(() => {
@@ -430,5 +437,117 @@ describe("cut / copy / paste (§8.5)", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(callsTo(slot, "moveEntries")).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* v0.4.0 — the one new binding (PATHBAR-SPEC §7.1, §7.2, §7.3)         */
+/* ------------------------------------------------------------------ */
+
+describe("Ctrl/Cmd+L — the address bar (§7.1)", () => {
+  it("opens the path bar from the grid, focused and fully selected", async () => {
+    const slot = await mountPanel();
+
+    expect(press(slot.getByTestId("fm-panel"), { key: "l", ctrlKey: true })).toBe(false);
+
+    const input = slot.getByTestId("fm-path-input") as HTMLInputElement;
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe(ROOT);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, ROOT.length]);
+  });
+
+  it("is the one shortcut that works while the filter box has focus (§7.2)", async () => {
+    const slot = await mountPanel();
+    const search = slot.getByTestId("fm-search") as HTMLInputElement;
+    fireEvent.change(search, { target: { value: "b" } });
+    search.focus();
+
+    press(search, { key: "l", ctrlKey: true });
+
+    expect(slot.getByTestId("fm-path-input")).toBeDefined();
+    // The filter itself is untouched: this opens a bar, it does not reset the view.
+    expect((slot.getByTestId("fm-search") as HTMLInputElement).value).toBe("b");
+  });
+
+  it("also answers to Cmd+L, and ignores Ctrl+Shift+L and Alt+L", async () => {
+    const slot = await mountPanel();
+    const panel = slot.getByTestId("fm-panel");
+
+    press(panel, { key: "l", metaKey: true });
+    expect(slot.getByTestId("fm-path-input")).toBeDefined();
+    press(slot.getByTestId("fm-path-input"), { key: "Escape" });
+
+    expect(press(panel, { key: "L", ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(slot.queryByTestId("fm-path-input")).toBeNull();
+    expect(press(panel, { key: "l", altKey: true })).toBe(true);
+    expect(slot.queryByTestId("fm-path-input")).toBeNull();
+  });
+
+  it("Escape inside the path input closes the bar and never reaches the selection (§7.3)", async () => {
+    const slot = await mountPanel();
+    fireEvent.click(rowFor(slot, A.path));
+    expect(selectedNames(slot)).toEqual(["a.txt"]);
+
+    press(slot.getByTestId("fm-panel"), { key: "l", ctrlKey: true });
+    press(slot.getByTestId("fm-path-input"), { key: "Escape" });
+
+    expect(slot.queryByTestId("fm-path-input")).toBeNull();
+    expect(selectedNames(slot)).toEqual(["a.txt"]);
+    expect(document.activeElement).toBe(slot.getByTestId("fm-table"));
+  });
+
+  it("leaves the rest of the map to the grid while the bar is open", async () => {
+    const slot = await mountPanel();
+    press(slot.getByTestId("fm-panel"), { key: "l", ctrlKey: true });
+    const input = slot.getByTestId("fm-path-input");
+
+    // The typing-target guard still owns everything below Ctrl+L.
+    press(input, { key: "ArrowDown" });
+    press(input, { key: "Delete" });
+    press(input, { key: "F2" });
+
+    expect(selectedNames(slot)).toEqual([]);
+    expect(slot.queryByTestId("fm-delete-dialog")).toBeNull();
+    expect(slot.queryByTestId("fm-rename-dialog")).toBeNull();
+  });
+
+  it("stays out of a portalled overlay: Ctrl+L in a dialog field does nothing", async () => {
+    const slot = await mountPanel();
+    press(slot.getByTestId("fm-panel"), { key: "N", ctrlKey: true, shiftKey: true });
+    await waitFor(() => {
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    });
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
+    // A portal: the dialog's DOM is outside the panel even though its events
+    // bubble up the React tree to the panel's onKeyDown.
+    expect(slot.getByTestId("fm-panel").contains(dialog)).toBe(false);
+
+    const field = dialog.querySelector("input") as HTMLInputElement;
+    field.focus();
+    press(field, { key: "l", ctrlKey: true });
+
+    expect(slot.queryByTestId("fm-path-input")).toBeNull();
+    expect(document.activeElement).toBe(field);
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+    // Nor does the rest of the map run from inside the overlay.
+    press(dialog, { key: "ArrowDown" });
+    press(dialog, { key: "Delete" });
+    expect(selectedNames(slot)).toEqual([]);
+    expect(slot.queryByTestId("fm-delete-dialog")).toBeNull();
+  });
+
+  it("still runs the whole existing map once the bar is closed again", async () => {
+    const slot = await mountPanel();
+    const panel = slot.getByTestId("fm-panel");
+    press(panel, { key: "l", ctrlKey: true });
+    press(slot.getByTestId("fm-path-input"), { key: "Escape" });
+
+    press(panel, { key: "ArrowDown" });
+    expect(selectedNames(slot)).toEqual(["docs"]);
+    press(panel, { key: "End" });
+    expect(selectedNames(slot)).toEqual(["c.txt"]);
+    press(panel, { key: "Escape" });
+    expect(selectedNames(slot)).toEqual([]);
   });
 });

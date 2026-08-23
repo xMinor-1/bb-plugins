@@ -50,6 +50,18 @@ export function isExternalSettingChange(previous: unknown, next: unknown): boole
 }
 
 /**
+ * The same rule for a boolean-valued setting — `restoreLastFolder` (v0.4.0).
+ *
+ * A separate function rather than a loosened `isExternalSettingChange`: the
+ * host types a settings value as `string | boolean`, and "a boolean turned up
+ * where a start folder should be" is not a change worth re-reading for, which
+ * is exactly what the string check above is for.
+ */
+export function isExternalBooleanSettingChange(previous: unknown, next: unknown): boolean {
+  return typeof previous === "boolean" && previous !== next;
+}
+
+/**
  * The one fact about the start folder a user cannot see for themselves: the
  * backend is not using the folder the setting names.
  *

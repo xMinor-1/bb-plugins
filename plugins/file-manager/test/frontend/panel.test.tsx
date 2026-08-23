@@ -30,6 +30,7 @@ vi.mock("sonner", () => ({
 const app = await loadPluginApp(() => import("../../app"));
 const { resetUploadManager } = await import("../../hooks/useUploads");
 const { resetPanelSnapshot } = await import("../../components/panel-bus");
+const { resetLastFolderStore } = await import("../../lib/last-folder");
 
 const registration = app.navPanels[0]!;
 const ROOT = "/home/coder";
@@ -76,6 +77,7 @@ const STATE = {
   preferences: {
     showHiddenFiles: false,
     confirmOnDelete: true,
+    restoreLastFolder: true,
     sortField: "name" as const,
     sortDirection: "asc" as const,
   },
@@ -133,6 +135,11 @@ beforeEach(() => {
   toasts.message.length = 0;
   resetUploadManager();
   resetPanelSnapshot();
+  // The location memory decides where the panel opens, so it leaks
+  // between mounts unless every suite that mounts one clears it
+  // (PATHBAR-SPEC §9.5).
+  window.localStorage.clear();
+  resetLastFolderStore();
 });
 
 afterEach(() => {

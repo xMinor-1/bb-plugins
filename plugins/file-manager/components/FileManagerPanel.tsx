@@ -17,15 +17,27 @@ import {
 import { useBbNavigate, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
-import { PANEL_PATH, type FileEntry } from "../contract";
+import { MAX_LIST_ENTRIES, PANEL_PATH, type FileEntry, type FileManagerErrorCode } from "../contract";
 import { useClipboard } from "../hooks/useClipboard";
-import { useDirectory, type SortDirection, type SortField } from "../hooks/useDirectory";
+import {
+  useDirectory,
+  type ListDirResult,
+  type SortDirection,
+  type SortField,
+} from "../hooks/useDirectory";
 import { useJobs } from "../hooks/useJobs";
 import { useSelection } from "../hooks/useSelection";
 import { useTree, type UseTreeResult } from "../hooks/useTree";
 import { useUploads } from "../hooks/useUploads";
 import { downloadEntry, downloadPaths } from "../lib/download";
-import { batchFailureText, errorToastText, parseRpcError, type BatchFailure } from "../lib/errors";
+import {
+  batchFailureText,
+  describeErrorCode,
+  errorToastText,
+  parseRpcError,
+  type BatchFailure,
+  type ParsedRpcError,
+} from "../lib/errors";
 import {
   absoluteToSubPath,
   dirname,
@@ -33,9 +45,25 @@ import {
   isSameOrDescendant,
   isSamePath,
   parentPath as parentOf,
+  rootPhrase,
+  SEPARATOR,
   setClientRoot,
   subPathToAbsolute,
 } from "../lib/fm-paths";
+import {
+  outsideRootMessage,
+  parsePathInput,
+  PATH_INVALID_MESSAGE,
+} from "../lib/fm-pathbar";
+import {
+  forgetLastFolder,
+  LAST_FOLDER_DEBOUNCE_MS,
+  pickInitialFolder,
+  readLastFolder,
+  rememberLastFolder,
+  writeLastFolder,
+  type RememberedFolder,
+} from "../lib/last-folder";
 import {
   AUTO_EXPAND_HOVER_MS,
   MAX_TREE_ROWS,
@@ -45,6 +73,7 @@ import {
 import { useFmRpc, type RpcOutput } from "../lib/fm-rpc";
 import {
   saveStartFolder,
+  startFolderLabel,
   START_FOLDER_SAVED_TEXT,
   START_FOLDER_SAVE_FAILED_TEXT,
 } from "../lib/start-folder";
@@ -175,6 +204,79 @@ async function writeClipboardText(text: string): Promise<boolean> {
   return false;
 }
 
+/* ------------------------------------------------------------------ */
+/* Location memory and the path bar (PATHBAR-SPEC §1.6, §5.4)          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The codes that mean "the folder you were last in is not there any more".
+ * Everything else — `io_error`, a dropped socket, an offline backend — is a
+ * transient failure of a folder that probably still exists, and throwing the
+ * memory away over it is worse than the normal error banner with its retry.
+ */
+const RESTORE_FALLBACK_CODES: ReadonlySet<FileManagerErrorCode> = new Set<FileManagerErrorCode>([
+  "not_found",
+  "not_a_directory",
+  "permission_denied",
+  "path_escape",
+  "invalid_path",
+]);
+
+/** `label` comes from `startFolderLabel`, so no literal root path is spoken. */
+function restoreFallbackText(code: FileManagerErrorCode, label: string): string {
+  switch (code) {
+    case "not_found":
+    case "not_a_directory":
+      return `The folder you were last in is gone. Opened ${label} instead.`;
+    case "permission_denied":
+      return `The folder you were last in cannot be opened. Opened ${label} instead.`;
+    default:
+      return `The folder you were last in is no longer reachable. Opened ${label} instead.`;
+  }
+}
+
+/**
+ * The inline message under the path input. It names the path the *user* typed,
+ * never the server's own path string: on a missing parent `statPath` resolves
+ * the parent chain first and the error it throws names the parent (§5.4).
+ */
+function pathCommitErrorText(failure: unknown, typed: string, root: string): string {
+  const parsed = parseRpcError(failure);
+  switch (parsed.code) {
+    case null:
+      return errorToastText(failure, "Could not open that path.");
+    case "not_found":
+      return `There is nothing at ${typed}.`;
+    case "permission_denied":
+      return `You do not have permission to open ${typed}.`;
+    case "path_escape":
+      return outsideRootMessage(root);
+    case "invalid_path":
+    case "invalid_name":
+      return PATH_INVALID_MESSAGE;
+    case "io_error":
+      return "The filesystem reported an error. Try again.";
+    default:
+      return describeErrorCode(parsed.code);
+  }
+}
+
+/** A file the path bar asked for, waiting for its folder's listing to land. */
+interface PendingReveal {
+  /** Absolute path of the entry to select. */
+  path: string;
+  /** The folder that must be on screen for it to exist. */
+  dir: string;
+  name: string;
+  /**
+   * The listing on screen when the reveal was armed, but only when the reveal
+   * itself turned hidden files on: that refetch is in flight for a render or
+   * two, and the listing still on screen genuinely does not contain the row.
+   * Declaring "it is not here" against it would be wrong (§5.3).
+   */
+  since: ListDirResult | null;
+}
+
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
@@ -203,14 +305,59 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
   currentPathRef.current = currentPath;
 
   const [showHidden, setShowHidden] = useState(false);
+  const showHiddenRef = useRef(showHidden);
+  showHiddenRef.current = showHidden;
   const [confirmOnDelete, setConfirmOnDelete] = useState(true);
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [query, setQuery] = useState("");
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
   const [contextTarget, setContextTarget] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [externalDrag, setExternalDrag] = useState(false);
+
+  /* Path bar (§3). The panel owns the mode, the inline failure and the commit;
+     `components/PathBar.tsx` owns the draft text for exactly as long as the
+     mode lasts. */
+  const [pathEditing, setPathEditing] = useState(false);
+  const [pathError, setPathError] = useState<string | null>(null);
+  const [pathBusy, setPathBusy] = useState(false);
+  const [pathFocusTick, setPathFocusTick] = useState(0);
+  const pathEditingRef = useRef(false);
+  const pathTicketRef = useRef(0);
+  /**
+   * State rather than a ref on purpose: the reveal can target a file in the
+   * folder already on screen, and then no listing lands to wake an effect up.
+   * Setting it has to be what schedules the check.
+   */
+  const [pendingReveal, setPendingReveal] = useState<PendingReveal | null>(null);
+
+  /* Location memory (§1). `restorePending` is the absolute path the bootstrap
+     restored from memory; it arms the §1.6 fallback and is cleared the moment
+     the listing lands. */
+  const [restorePending, setRestorePending] = useState<string | null>(null);
+  const [swallowedError, setSwallowedError] = useState<ParsedRpcError | null>(null);
+  const lastFolderPendingRef = useRef<RememberedFolder | null>(null);
+  /**
+   * True between the bootstrap's `replace` navigation and the host applying
+   * it. The route still says "root" in that window, so listing it would spend
+   * a full `readdir` of the home directory on a folder nobody asked for — and
+   * would record it as "where you were" (§1.4). Nothing is listed until the
+   * route the panel asked for is the route it is on.
+   */
+  const [redirectPending, setRedirectPending] = useState(false);
+  /** The `subPath` the redirect left behind; any change to it opens the gate. */
+  const redirectFromRef = useRef<string | null>(null);
+  /** The value the memory already holds, so a repeat listing writes nothing. */
+  const lastFolderWrittenRef = useRef<RememberedFolder | null>(null);
+  /**
+   * The tier-2 debounce lives in a ref, not in an effect cleanup: a refetch of
+   * the folder already recorded must not cancel a write that is still pending
+   * for it (§1.4).
+   */
+  const lastFolderTimerRef = useRef<number | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -243,9 +390,25 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
         setSortField(result.preferences.sortField);
         setSortDirection(result.preferences.sortDirection);
         setStateError(null);
-        if (subPathRef.current === "" && !isSamePath(result.startFolder, result.root)) {
+        // Where to open: an explicit link, then the remembered folder, then
+        // the configured start folder (§1.5). The `subPath === ""` guard that
+        // used to sit here is now rule 1 of `pickInitialFolder`.
+        const choice = pickInitialFolder({
+          subPath: subPathRef.current,
+          remembered: readLastFolder(),
+          startFolder: result.startFolder,
+          root: result.root,
+          restoreLastFolder: result.preferences.restoreLastFolder,
+        });
+        if (choice.source !== "deep-link" && !isSamePath(choice.path, result.root)) {
+          // Only a folder restored from memory arms the fallback: the start
+          // folder is where that fallback *goes*, so arming it for the start
+          // folder itself would be a loop.
+          if (choice.source === "memory") setRestorePending(choice.path);
+          redirectFromRef.current = subPathRef.current;
+          setRedirectPending(true);
           navigateRef.current.toPluginPanel(PANEL_PATH, {
-            subPath: absoluteToSubPath(result.startFolder, result.root),
+            subPath: absoluteToSubPath(choice.path, result.root),
             replace: true,
           });
         }
@@ -260,9 +423,26 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
     };
   }, [rpc]);
 
+  /**
+   * The host applied the redirect (or moved the panel somewhere else): either
+   * way the route has moved on from the one the redirect left, so the listing
+   * may start. Watching for *any* change rather than for the target keeps a
+   * host that routes elsewhere from leaving the panel in a permanent skeleton.
+   */
+  useEffect(() => {
+    if (!redirectPending) return;
+    if (redirectFromRef.current === null || subPath !== redirectFromRef.current) {
+      redirectFromRef.current = null;
+      setRedirectPending(false);
+    }
+  }, [redirectPending, subPath]);
+
   /* -------------------------------------------------------------- */
   /* Data                                                            */
   /* -------------------------------------------------------------- */
+
+  /** No RPC until the panel is standing where the bootstrap sent it. */
+  const listingEnabled = ready && !redirectPending;
 
   // The filter is NOT handed to `useDirectory`: it moved wholesale into
   // `flattenTree`, so there is exactly one implementation of it and it can
@@ -272,7 +452,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
     showHidden,
     sortField,
     sortDirection,
-    enabled: ready,
+    enabled: listingEnabled,
   });
   const tree = useTree({
     rootPath: currentPath,
@@ -281,7 +461,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
     sortField,
     sortDirection,
     query,
-    enabled: ready,
+    enabled: listingEnabled,
   });
   const treeRef = useRef<UseTreeResult>(tree);
   treeRef.current = tree;
@@ -321,6 +501,8 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
   const uploads = useUploads();
   const refetchRef = useRef(directory.refetch);
   refetchRef.current = directory.refetch;
+  const directoryDataRef = useRef(directory.data);
+  directoryDataRef.current = directory.data;
   const jobs = useJobs({
     onFinished: (job) => {
       if (job.state === "done") toast.success(`${job.label} finished`);
@@ -379,6 +561,158 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
   // re-render; the relative "modified" column only needs a fresh clock when
   // the listing itself changed.
   const nowMs = useMemo(() => Date.now(), [directory.data]);
+
+  /* -------------------------------------------------------------- */
+  /* Location memory (§1)                                            */
+  /* -------------------------------------------------------------- */
+
+  /**
+   * Remember the folder the backend *confirmed*, not the one the route names.
+   *
+   * `listDir` answers with the realpath'ed directory, so a route that went
+   * through a symlink is remembered as the thing it actually opened — and a
+   * route the backend refused never produces `directory.data` at all, which is
+   * what stops a bad deep link from poisoning the memory for the next open.
+   *
+   * Tier 1 is written synchronously and tier 2 debounced, mirroring
+   * `useTree`'s expanded set; the unmount flush below covers a folder opened
+   * less than the debounce before the panel goes away.
+   */
+  useEffect(() => {
+    const listed = directory.data?.path;
+    if (!listingEnabled || listed === undefined || root === SEPARATOR) return;
+    // A refetch — an `fs` signal, a reconnect, a finished job — re-delivers the
+    // folder already recorded. Writing it again would be one `localStorage`
+    // write per signal, and would undo the settings section's "Forget" button
+    // the moment anything touched the folder on screen (§1.9).
+    const written = lastFolderWrittenRef.current;
+    if (written !== null && written.path === listed && written.root === root) return;
+    const value: RememberedFolder = { path: listed, root };
+    lastFolderWrittenRef.current = value;
+    rememberLastFolder(value);
+    lastFolderPendingRef.current = value;
+    if (lastFolderTimerRef.current !== null) window.clearTimeout(lastFolderTimerRef.current);
+    lastFolderTimerRef.current = window.setTimeout(() => {
+      lastFolderTimerRef.current = null;
+      lastFolderPendingRef.current = null;
+      writeLastFolder(value);
+    }, LAST_FOLDER_DEBOUNCE_MS);
+  }, [directory.data, listingEnabled, root]);
+
+  useEffect(
+    () => () => {
+      if (lastFolderTimerRef.current !== null) window.clearTimeout(lastFolderTimerRef.current);
+      lastFolderTimerRef.current = null;
+      const pending = lastFolderPendingRef.current;
+      lastFolderPendingRef.current = null;
+      if (pending !== null) writeLastFolder(pending);
+    },
+    [],
+  );
+
+  /**
+   * The restore was optimistic (§1.6 (b)): the first `listDir` failure is how
+   * the panel learns the remembered folder is gone. Only the codes that mean
+   * "not there" count; anything else is a normal error with a retry.
+   */
+  const restoreFallbackCode: FileManagerErrorCode | null =
+    restorePending !== null &&
+    directory.error !== null &&
+    directory.error.code !== null &&
+    RESTORE_FALLBACK_CODES.has(directory.error.code) &&
+    isSamePath(currentPath, restorePending)
+      ? directory.error.code
+      : null;
+
+  /**
+   * True only while the fallback is about to *move* the panel. When the
+   * remembered folder is the start folder there is nowhere to go, and the
+   * banner must render straight away instead of waiting for a listing that
+   * will never be asked for.
+   */
+  const restoreFallbackMoves =
+    restoreFallbackCode !== null &&
+    state !== null &&
+    !isSamePath(state.startFolder, currentPath);
+
+  /**
+   * The listing landed *for the restored folder*: the restore worked and
+   * nothing else happens.
+   *
+   * The test is `directory.data.path`, not `currentPath`: between the route
+   * changing and the new listing landing, `data` still holds the previous
+   * folder's answer, so "the panel is standing on the restored path" would
+   * disarm the fallback exactly one render before the failure it exists for.
+   * A user navigation disarms it too, in `navigateTo`.
+   */
+  useEffect(() => {
+    if (restorePending === null || directory.data === null) return;
+    if (isSamePath(directory.data.path, restorePending)) setRestorePending(null);
+  }, [directory.data, restorePending]);
+
+  useEffect(() => {
+    if (restoreFallbackCode === null || state === null || directory.error === null) return;
+    setRestorePending(null);
+    forgetLastFolder();
+    lastFolderWrittenRef.current = null;
+    // The remembered folder *is* the start folder — which is the case for
+    // anyone who has opened the panel once with a start folder configured.
+    // There is nowhere to fall back to: navigating would ask the host for the
+    // route it is already on, no new listing would land, and the banner that
+    // was held down for that listing would never come back up. Say nothing,
+    // suppress nothing, and let the ordinary error banner offer its retry.
+    if (!restoreFallbackMoves) return;
+    // Hold the banner down until the folder we fall back to answers: the error
+    // object survives the navigation and would flash for the new path.
+    setSwallowedError(directory.error);
+    navigateRef.current.toPluginPanel(PANEL_PATH, {
+      subPath: absoluteToSubPath(state.startFolder, state.root),
+      replace: true,
+    });
+    toast.message(
+      restoreFallbackText(restoreFallbackCode, startFolderLabel(state.startFolder, state.root)),
+    );
+  }, [directory.error, restoreFallbackCode, restoreFallbackMoves, state]);
+
+  // A different answer arrived: the suppression is over, whatever it says.
+  useEffect(() => {
+    if (swallowedError !== null && directory.error !== swallowedError) setSwallowedError(null);
+  }, [directory.error, swallowedError]);
+
+  /**
+   * The path bar's "reveal this file" (§5.3). It cannot select the row before
+   * the row exists — `useSelection` prunes any path that is not visible — so
+   * the request waits here until the new listing lands. The panel's existing
+   * `selection.focus` effect does the scrolling.
+   */
+  useEffect(() => {
+    const pending = pendingReveal;
+    if (pending === null) return;
+    if (visiblePaths.includes(pending.path)) {
+      setPendingReveal(null);
+      selectionRef.current.select(pending.path);
+      return;
+    }
+    const data = directory.data;
+    if (data === null || directory.isLoading || directory.isRefetching) return;
+    if (!isSamePath(data.path, pending.dir)) return;
+    if (pending.since !== null && data === pending.since && !data.truncated) return;
+    setPendingReveal(null);
+    toast.message(
+      data.truncated
+        ? `${pending.name} is in this folder, but the listing was cut off at ${String(
+            state?.maxListEntries ?? MAX_LIST_ENTRIES,
+          )} items. Use the filter to find it.`
+        : `${pending.name} is not in this folder any more.`,
+    );
+  }, [
+    directory.data,
+    directory.isLoading,
+    directory.isRefetching,
+    pendingReveal,
+    state,
+    visiblePaths,
+  ]);
 
   /* -------------------------------------------------------------- */
   /* Preferences                                                     */
@@ -440,6 +774,15 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
   /* -------------------------------------------------------------- */
 
   const navigateTo = useCallback((absolute: string) => {
+    // Any move the user makes cancels a pending reveal, so a stale one cannot
+    // steal the selection two folders later (§5.3). The reveal re-arms itself
+    // straight after its own `navigateTo`, and the later `setState` wins.
+    setPendingReveal(null);
+    setRestorePending(null);
+    // A move of the user's own outranks the bootstrap redirect: whatever the
+    // host does with that redirect now, the listing gate must not stay shut.
+    redirectFromRef.current = null;
+    setRedirectPending(false);
     navigateRef.current.toPluginPanel(PANEL_PATH, {
       subPath: absoluteToSubPath(absolute),
     });
@@ -450,6 +793,119 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
   const goToParent = useCallback(() => {
     if (parentPath !== null) navigateTo(parentPath);
   }, [navigateTo, parentPath]);
+
+  /* -------------------------------------------------------------- */
+  /* Path bar (§3, §5)                                               */
+  /* -------------------------------------------------------------- */
+
+  /** Open, or re-select when it is already open — a browser's address bar. */
+  const openPathBar = useCallback(() => {
+    if (!pathEditingRef.current) setPathError(null);
+    pathEditingRef.current = true;
+    setPathEditing(true);
+    setPathFocusTick((tick) => tick + 1);
+  }, []);
+
+  const closePathBar = useCallback((focusGrid: boolean) => {
+    pathEditingRef.current = false;
+    setPathEditing(false);
+    setPathError(null);
+    // Leaving edit mode drops a commit that is still in flight: the answer to
+    // a path the user has walked away from must not navigate behind them.
+    // (The success path closes the bar *after* it navigates, so its own
+    // ticket going stale here costs nothing.)
+    pathTicketRef.current += 1;
+    setPathBusy(false);
+    // Focus never lands on <body>: the grid is the panel's one keyboard widget.
+    if (focusGrid) gridRef.current?.focus();
+  }, []);
+
+  const handlePathCancel = useCallback(
+    (options: { focusGrid: boolean }) => {
+      closePathBar(options.focusGrid);
+    },
+    [closePathBar],
+  );
+
+  const handlePathDirty = useCallback(() => {
+    setPathError((previous) => (previous === null ? previous : null));
+  }, []);
+
+  /**
+   * Enter in the path bar. A folder navigates; a file navigates to its folder
+   * and reveals it. Nothing here ever *opens* a file — `openEntry` downloads,
+   * and pasting a path must not start a download nobody asked for (§5.2).
+   */
+  const submitPath = useCallback(
+    (raw: string) => {
+      const parsed = parsePathInput(raw, { root, currentPath: currentPathRef.current });
+      if (parsed.kind === "empty") {
+        closePathBar(true);
+        return;
+      }
+      if (parsed.kind === "refused") {
+        // Refused on the client: no RPC at all, and the caret stays put.
+        setPathError(parsed.message);
+        return;
+      }
+      const typed = parsed.absolute;
+      const ticket = (pathTicketRef.current += 1);
+      setPathBusy(true);
+      void (async () => {
+        try {
+          const result = await rpc.call("statPath", { path: typed });
+          // A second Enter, or an edit and re-submit, can never produce two
+          // navigations: only the newest ticket may act.
+          if (pathTicketRef.current !== ticket) return;
+          const entry = result.entry;
+          if (entry.escapesRoot) {
+            // `escapesRoot` is also what a broken or looping link answers with:
+            // `src/listing.ts#entryFrom` sets it when realpath *throws*, and
+            // the wire carries no way to tell that apart from a link that
+            // really resolves outside the root. One sentence has to be true of
+            // both, so it says what is certain — the link leads nowhere this
+            // panel can open (§5.2).
+            setPathError(`That link does not lead anywhere inside ${rootPhrase(root)}.`);
+            return;
+          }
+          if (effectiveKind(entry) === "directory") {
+            // A symlink to a directory navigates to the link's own path, which
+            // is what double-clicking that row already does; `listDir` then
+            // answers with the realpath and the crumbs settle on the target.
+            // Committing the folder already on screen is a no-op, not a
+            // history step that a later Back would spend doing nothing (§5.1).
+            if (isSamePath(entry.path, currentPathRef.current)) setPendingReveal(null);
+            else navigateTo(entry.path);
+            closePathBar(true);
+            return;
+          }
+          // Only the root has `parentPath: null`, and the root is a directory.
+          const dir = result.parentPath ?? dirname(entry.path);
+          // Two things can hide the row before it is even asked for.
+          if (queryRef.current !== "") setQuery("");
+          let since: ListDirResult | null = null;
+          if (entry.isHidden && !showHiddenRef.current) {
+            // State only — never `persist()`. Silently rewriting a stored
+            // preference is worse than the empty-looking folder it prevents.
+            setShowHidden(true);
+            since = directoryDataRef.current;
+            toast.message(`Showing hidden files so ${entry.name} is visible.`);
+          }
+          // Same rule for a file: revealing a row in the folder already on
+          // screen is a selection, not a navigation.
+          if (!isSamePath(dir, currentPathRef.current)) navigateTo(dir);
+          setPendingReveal({ path: entry.path, dir, name: entry.name, since });
+          closePathBar(true);
+        } catch (failure) {
+          if (pathTicketRef.current !== ticket) return;
+          setPathError(pathCommitErrorText(failure, typed, root));
+        } finally {
+          if (pathTicketRef.current === ticket) setPathBusy(false);
+        }
+      })();
+    },
+    [closePathBar, navigateTo, root, rpc],
+  );
 
   /* -------------------------------------------------------------- */
   /* Mutations                                                       */
@@ -991,6 +1447,27 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
 
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      // A dialog, a context menu and a dropdown all render through a portal,
+      // so their keystrokes bubble up the *React* tree to this handler while
+      // their DOM lives outside the panel. None of them are the panel's to
+      // read: Ctrl+L would open the path bar behind the modal and steal the
+      // focus its focus-trap is holding (§7.2).
+      const panel = rootRef.current;
+      if (panel !== null && event.target instanceof Node && !panel.contains(event.target)) return;
+      // The one shortcut handled *above* the typing-target guard (§7.2):
+      // Ctrl/Cmd+L has to work from the filter box and from the path input
+      // itself, which is the behaviour of the thing it imitates. Nothing else
+      // moves above this line.
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        (event.key === "l" || event.key === "L")
+      ) {
+        event.preventDefault();
+        openPathBar();
+        return;
+      }
       if (isTypingTarget(event.target)) return;
       const mod = event.ctrlKey || event.metaKey;
       const focusedRow = selection.focus === null ? undefined : rowByPath.get(selection.focus);
@@ -1147,6 +1624,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
       goToParent,
       openEntry,
       openKeyboardContextMenu,
+      openPathBar,
       paste,
       requestDelete,
       rowByPath,
@@ -1167,12 +1645,12 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
     publishPanelSnapshot({
       currentPath,
       writable,
-      ready,
+      ready: listingEnabled,
       showHidden,
       selectionCount: selection.count,
       canPaste,
     });
-  }, [canPaste, currentPath, ready, selection.count, showHidden, writable]);
+  }, [canPaste, currentPath, listingEnabled, selection.count, showHidden, writable]);
 
   useEffect(() => resetPanelSnapshot, []);
 
@@ -1269,6 +1747,14 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
         onDragOverCrumb={handleTargetDragOver}
         onDragLeaveCrumb={noopDragHandler}
         onDropOnCrumb={noopDragHandler}
+        pathEditing={pathEditing}
+        onPathOpen={openPathBar}
+        onPathCancel={handlePathCancel}
+        onPathSubmit={submitPath}
+        pathError={pathError}
+        onPathDirty={handlePathDirty}
+        pathBusy={pathBusy}
+        pathFocusTick={pathFocusTick}
       />
 
       {stateError === null ? null : (
@@ -1283,7 +1769,11 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
         />
       )}
 
-      {directory.error === null ? null : (
+      {/* One navigation and one toast, never an error that repairs itself half
+          a second later: while a restored folder is being answered for, and
+          until the folder we fell back to answers, the banner stays down
+          (§1.6). Every other failure renders exactly as it did before. */}
+      {directory.error === null || restoreFallbackMoves || directory.error === swallowedError ? null : (
         <ErrorBanner
           error={directory.error.rawMessage}
           title="Could not open this folder"
@@ -1316,7 +1806,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
             <FileTable
               gridRef={gridRef}
               rows={rows}
-              loading={directory.isLoading || !ready}
+              loading={directory.isLoading || !ready || redirectPending}
               selectedPaths={selection.selected}
               focusedPath={selection.focus}
               cutPaths={

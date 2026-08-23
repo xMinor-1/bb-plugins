@@ -36,7 +36,15 @@ describe("frontend bundle graph", () => {
   });
 
   it("no panel-side module imports the SDK as a value", () => {
-    for (const file of ["app.tsx", "lib/fm-rpc.ts", "lib/start-folder.ts"]) {
+    for (const file of [
+      "app.tsx",
+      "lib/fm-rpc.ts",
+      "lib/start-folder.ts",
+      "lib/fm-store.ts",
+      "lib/fm-pathbar.ts",
+      "lib/last-folder.ts",
+      "components/PathBar.tsx",
+    ]) {
       expect(sdkValueImport.test(read(file))).toBe(false);
     }
   });

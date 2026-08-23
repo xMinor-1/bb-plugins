@@ -104,9 +104,10 @@ describe("registrations", () => {
     expect(routes).toContainEqual({ method: "GET", path: DOWNLOAD_ROUTE, auth: "local" });
   });
 
-  it("declares the six §7.1 settings", () => {
+  it("declares the seven §7.1 settings", () => {
     expect(Object.keys(host.harness.inspection.registrations.settingsDescriptors)).toEqual([
       "startFolder",
+      "restoreLastFolder",
       "showHiddenFiles",
       "confirmOnDelete",
       "sortField",

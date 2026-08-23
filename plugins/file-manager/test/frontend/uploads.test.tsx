@@ -26,6 +26,7 @@ vi.mock("sonner", () => ({
 const app = await loadPluginApp(() => import("../../app"));
 const { getUploadManager, resetUploadManager } = await import("../../hooks/useUploads");
 const { resetPanelSnapshot } = await import("../../components/panel-bus");
+const { resetLastFolderStore } = await import("../../lib/last-folder");
 
 const registration = app.navPanels[0]!;
 const ROOT = "/home/coder";
@@ -127,6 +128,7 @@ function entryFor(name: string, sizeBytes: number): FileEntry {
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  restoreLastFolder: true,
   sortField: "name" as const,
   sortDirection: "asc" as const,
 };
@@ -245,6 +247,11 @@ beforeEach(() => {
   FakeXhr.instances = [];
   resetUploadManager();
   resetPanelSnapshot();
+  // The location memory decides where the panel opens, so it leaks
+  // between mounts unless every suite that mounts one clears it
+  // (PATHBAR-SPEC §9.5).
+  window.localStorage.clear();
+  resetLastFolderStore();
   vi.stubGlobal("XMLHttpRequest", FakeXhr as unknown as typeof XMLHttpRequest);
   vi.stubGlobal(
     "fetch",

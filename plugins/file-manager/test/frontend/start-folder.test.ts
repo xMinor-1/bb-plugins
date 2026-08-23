@@ -46,6 +46,7 @@ describe("saveStartFolder", () => {
       preferences: {
         showHiddenFiles: false,
         confirmOnDelete: true,
+        restoreLastFolder: true,
         sortField: "name",
         sortDirection: "asc",
       },

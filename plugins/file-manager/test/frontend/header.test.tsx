@@ -26,6 +26,7 @@ vi.mock("sonner", () => ({
 const app = await loadPluginApp(() => import("../../app"));
 const { resetUploadManager } = await import("../../hooks/useUploads");
 const { resetPanelSnapshot } = await import("../../components/panel-bus");
+const { resetLastFolderStore } = await import("../../lib/last-folder");
 
 const registration = app.navPanels[0]!;
 const HeaderActions = registration.headerContent!;
@@ -56,6 +57,7 @@ function entryFor(name: string, kind: FileEntry["kind"] = "file"): FileEntry {
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  restoreLastFolder: true,
   sortField: "name" as const,
   sortDirection: "asc" as const,
 };
@@ -127,6 +129,11 @@ beforeEach(() => {
   clipboardWrites.length = 0;
   resetUploadManager();
   resetPanelSnapshot();
+  // The location memory decides where the panel opens, so it leaks
+  // between mounts unless every suite that mounts one clears it
+  // (PATHBAR-SPEC §9.5).
+  window.localStorage.clear();
+  resetLastFolderStore();
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: {
@@ -270,5 +277,63 @@ describe("HeaderActions (§10 headerContent)", () => {
     await waitFor(() => {
       expect((header.getByTestId("fm-header-new-folder") as HTMLButtonElement).disabled).toBe(true);
     });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* v0.4.0 — the toolbar grew a path bar (PATHBAR-SPEC §3.1, §9.4)       */
+/* ------------------------------------------------------------------ */
+
+describe("Toolbar shape with the path bar (§3.1)", () => {
+  it("keeps every control it had, with Edit path between the crumbs and the filter", async () => {
+    const { panel } = await mountBoth();
+
+    const toolbar = panel.getByTestId("fm-toolbar");
+    const order = Array.from(toolbar.querySelectorAll("[data-testid]"))
+      .map((node) => node.getAttribute("data-testid"))
+      .filter((id): id is string =>
+        [
+          "fm-path-bar",
+          "fm-breadcrumbs",
+          "fm-path-edit",
+          "fm-search",
+          "fm-sort-menu",
+          "fm-toggle-hidden",
+          "fm-collapse-all",
+          "fm-refresh",
+        ].includes(id ?? ""),
+      );
+
+    expect(order).toEqual([
+      "fm-path-bar",
+      "fm-breadcrumbs",
+      "fm-path-edit",
+      "fm-search",
+      "fm-sort-menu",
+      "fm-toggle-hidden",
+      "fm-collapse-all",
+      "fm-refresh",
+    ]);
+  });
+
+  it("tracks the mode on the button and swaps the crumbs for the input", async () => {
+    const { panel } = await mountBoth();
+    const button = panel.getByTestId("fm-path-edit") as HTMLButtonElement;
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(button.getAttribute("aria-label")).toBe("Edit path");
+    // The shortcut is written down once, on the wrapper the vendored Button
+    // cannot carry a title on.
+    expect(button.parentElement?.getAttribute("title")).toBe("Edit path (Ctrl+L)");
+
+    fireEvent.click(button);
+    expect(panel.getByTestId("fm-path-edit").getAttribute("aria-pressed")).toBe("true");
+    expect(panel.queryByTestId("fm-breadcrumbs")).toBeNull();
+    expect(panel.getByTestId("fm-path-group").getAttribute("aria-label")).toBe("Folder path");
+
+    // The same button closes it again, without leaving focus on <body>.
+    fireEvent.click(panel.getByTestId("fm-path-edit"));
+    expect(panel.getByTestId("fm-path-edit").getAttribute("aria-pressed")).toBe("false");
+    expect(panel.getByTestId("fm-breadcrumbs")).toBeDefined();
+    expect(document.activeElement).toBe(panel.getByTestId("fm-table"));
   });
 });

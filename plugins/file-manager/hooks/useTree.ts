@@ -19,6 +19,7 @@ import { FS_CHANNEL, type FileEntry } from "../contract";
 import { parseRpcError } from "../lib/errors";
 import { isInsideRoot, normalizePath } from "../lib/fm-paths";
 import { useFmRpc } from "../lib/fm-rpc";
+import { createSessionStore } from "../lib/fm-store";
 import {
   EMPTY_TREE_STATE,
   EXPANDED_STORAGE_KEY,
@@ -37,45 +38,41 @@ import type { SortDirection, SortField } from "./useDirectory";
 /* Persistence (§6)                                                    */
 /* ------------------------------------------------------------------ */
 
-/** Tier 1: survives a remount of the panel inside one page session. */
-let sessionExpanded: string[] | null = null;
+/**
+ * Module scope over localStorage, through the shared primitive in
+ * `lib/fm-store.ts`. The rules (try/catch everywhere, silent degrade on a
+ * corrupt row, size cap before the write, a versioned key) are TREE-SPEC §6's
+ * and did not change when they moved out of this file — the location memory
+ * needs the same ones, and one implementation is better than two
+ * (PATHBAR-SPEC §1.2).
+ */
+const expandedStore = createSessionStore<string[]>({
+  key: EXPANDED_STORAGE_KEY,
+  fallback: () => [],
+  parse: (raw) => {
+    if (!Array.isArray(raw)) return null;
+    const paths = raw.filter((value): value is string => typeof value === "string");
+    return paths.filter((path) => isInsideRoot(path)).slice(-MAX_EXPANDED_PATHS);
+  },
+  maxBytes: EXPANDED_STORAGE_MAX_BYTES,
+});
 
 function readExpanded(): string[] {
-  if (sessionExpanded !== null) return sessionExpanded;
-  try {
-    const raw = window.localStorage.getItem(EXPANDED_STORAGE_KEY);
-    const parsed: unknown = raw === null ? [] : JSON.parse(raw);
-    const paths = Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === "string")
-      : [];
-    sessionExpanded = paths.filter((path) => isInsideRoot(path)).slice(-MAX_EXPANDED_PATHS);
-  } catch {
-    // Storage denied (an Electron partition can do this) or a corrupt row:
-    // degrade to tier 1. Throwing here would kill the plugin's whole UI.
-    sessionExpanded = [];
-  }
-  return sessionExpanded;
+  return expandedStore.read();
 }
 
 /** Tier 1 alone: cheap, synchronous, and what a remount reads back. */
 function rememberExpanded(paths: readonly string[]): void {
-  sessionExpanded = [...paths];
+  expandedStore.remember([...paths]);
 }
 
 function writeExpanded(paths: readonly string[]): void {
-  sessionExpanded = [...paths];
-  try {
-    const json = JSON.stringify(sessionExpanded);
-    if (json.length > EXPANDED_STORAGE_MAX_BYTES) return; // never blow the quota
-    window.localStorage.setItem(EXPANDED_STORAGE_KEY, json);
-  } catch {
-    /* tier 1 only */
-  }
+  expandedStore.write([...paths]);
 }
 
 /** Test seam, mirroring `resetPanelSnapshot` / `resetUploadManager`. */
 export function resetTreeStore(): void {
-  sessionExpanded = null;
+  expandedStore.reset();
 }
 
 /* ------------------------------------------------------------------ */

@@ -46,6 +46,9 @@ vi.mock("sonner", () => ({
 // app.tsx binds `@get-bb/plugin-sdk/app` at import time, so it may only be
 // imported through loadPluginApp's thunk (see installTestPluginRuntime docs).
 const app = await loadPluginApp(() => import("../../app"));
+const { forgetLastFolder, readLastFolder, resetLastFolderStore, writeLastFolder } = await import(
+  "../../lib/last-folder"
+);
 
 const ROOT = "/home/coder";
 const WORK = `${ROOT}/Work`;
@@ -58,6 +61,7 @@ const PROJECTS_REAL = `${ROOT}/real-projects`;
 const PREFERENCES: Preferences = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  restoreLastFolder: true,
   sortField: "name",
   sortDirection: "asc",
 };
@@ -199,6 +203,10 @@ async function openPicker(slot: RenderedSlot): Promise<HTMLElement> {
 beforeEach(() => {
   toasts.error.length = 0;
   toasts.success.length = 0;
+  // This section reads and clears the panel's location memory, which is module
+  // scope plus a localStorage row — both leak between tests (PATHBAR-SPEC §9.5).
+  window.localStorage.clear();
+  resetLastFolderStore();
 });
 
 afterEach(() => {
@@ -755,5 +763,108 @@ describe("SettingsSection — degraded hosts", () => {
     expect(slot.getByTestId("fm-settings-start-folder").textContent).toBe(WORK);
     expect(callsTo(slot, "getState")).toHaveLength(2);
     expect(slot.queryByTestId("fm-settings-retry")).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* v0.4.0 — the start folder is no longer the only answer (§2.2, §1.9)  */
+/* ------------------------------------------------------------------ */
+
+describe("SettingsSection — which folder actually opens (§2.2)", () => {
+  function stateWithRestore(restoreLastFolder: boolean, startFolder = WORK) {
+    return {
+      ...stateWith(startFolder),
+      preferences: { ...PREFERENCES, restoreLastFolder },
+    };
+  }
+
+  it("says the start folder is the fallback while reopening is on", async () => {
+    const slot = await mountSection(baseRpc({ getState: () => stateWithRestore(true) }));
+
+    expect(slot.getByTestId("fm-settings-open-rule").textContent).toBe(
+      "Reopening the last folder is on, so this is where the panel opens the first time " +
+        `and whenever the last folder is gone. Everything stays inside ${ROOT}.`,
+    );
+  });
+
+  it("says the start folder is the only answer while reopening is off", async () => {
+    const slot = await mountSection(baseRpc({ getState: () => stateWithRestore(false) }));
+
+    expect(slot.getByTestId("fm-settings-open-rule").textContent).toBe(
+      "Reopening the last folder is off, so the panel always opens here. " +
+        `Everything stays inside ${ROOT}.`,
+    );
+  });
+
+  it("re-reads when the host delivers a flipped checkbox, not on a bare re-render", async () => {
+    // Same delivery mechanism as the start-folder case above: `useSettings()`
+    // hands back this very object, so mutating it and re-rendering is what the
+    // host's own checkbox does to this section.
+    const settings: Record<string, string | boolean> = {
+      startFolder: WORK,
+      restoreLastFolder: true,
+    };
+    let restore = true;
+    const slot = await mountSection(
+      baseRpc({ getState: () => stateWithRestore(restore) }),
+      settings,
+    );
+    expect(callsTo(slot, "getState")).toHaveLength(1);
+    expect(slot.getByTestId("fm-settings-open-rule").textContent).toContain("is on");
+
+    // A re-render with nothing changed is not a delivery.
+    slot.lifecycle.rerender(createElement(section.component, {}));
+    expect(callsTo(slot, "getState")).toHaveLength(1);
+
+    restore = false;
+    settings.restoreLastFolder = false;
+    slot.lifecycle.rerender(createElement(section.component, {}));
+
+    await waitFor(() => {
+      expect(slot.getByTestId("fm-settings-open-rule").textContent).toContain(
+        "always opens here",
+      );
+    });
+    expect(callsTo(slot, "getState")).toHaveLength(2);
+  });
+});
+
+describe("SettingsSection — forgetting the remembered folder (§1.9)", () => {
+  it("clears the memory with no rpc and no settings write, then disables itself", async () => {
+    writeLastFolder({ path: `${ROOT}/docs`, root: ROOT });
+
+    const slot = await mountSection();
+    const forget = button(slot, "fm-settings-forget");
+    expect(forget.disabled).toBe(false);
+    const before = slot.inspection.rpcCalls.length;
+
+    fireEvent.click(forget);
+
+    expect(readLastFolder()).toBeNull();
+    expect(window.localStorage.getItem("bb-plugin-file-manager:last-folder:v1")).toBeNull();
+    expect(slot.inspection.rpcCalls).toHaveLength(before);
+    expect(callsTo(slot, "savePreferences")).toHaveLength(0);
+    expect(toasts.success).toEqual([`Forgotten. The panel will open in Work next time.`]);
+    await waitFor(() => {
+      expect(button(slot, "fm-settings-forget").disabled).toBe(true);
+    });
+  });
+
+  it("is disabled when there is nothing to forget", async () => {
+    forgetLastFolder();
+    const slot = await mountSection();
+
+    expect(button(slot, "fm-settings-forget").disabled).toBe(true);
+    fireEvent.click(button(slot, "fm-settings-forget"));
+    expect(toasts.success).toHaveLength(0);
+  });
+
+  it("names the root when the start folder is the root itself", async () => {
+    writeLastFolder({ path: `${ROOT}/docs`, root: ROOT });
+    const slot = await mountSection(baseRpc({}, ROOT), undefined);
+
+    fireEvent.click(button(slot, "fm-settings-forget"));
+
+    expect(toasts.success).toEqual(["Forgotten. The panel will open in Home next time."]);
   });
 });

@@ -26,9 +26,20 @@ export const settingsDescriptors = {
     // and the other refreshes itself.
     label: "Start folder (typed path)",
     description:
-      "Absolute path under the hard root that the panel opens by default. " +
+      "Absolute path under the hard root the panel opens on its first open, " +
+      "after you forget the remembered folder, and whenever the last folder is " +
+      "gone — or every time, with \"Reopen the last folder\" off. " +
       "The Start folder section below sets the same value with a folder browser.",
     default: DEFAULT_ROOT,
+  },
+  restoreLastFolder: {
+    type: "boolean",
+    label: "Reopen the last folder",
+    description:
+      "Open the folder you were last in instead of the start folder. " +
+      "The start folder is used the first time you open the panel, after you " +
+      "forget the remembered folder, and whenever the last folder is gone.",
+    default: true,
   },
   showHiddenFiles: {
     type: "boolean",
@@ -65,6 +76,7 @@ export const settingsDescriptors = {
 
 export interface FileManagerSettingsValues {
   startFolder: string;
+  restoreLastFolder: boolean;
   showHiddenFiles: boolean;
   confirmOnDelete: boolean;
   sortField: string;
@@ -112,6 +124,7 @@ function toPreferences(values: FileManagerSettingsValues): Preferences {
   return {
     showHiddenFiles: values.showHiddenFiles,
     confirmOnDelete: values.confirmOnDelete,
+    restoreLastFolder: values.restoreLastFolder,
     sortField: sortField.success ? sortField.data : "name",
     sortDirection: sortDirection.success ? sortDirection.data : "asc",
   };

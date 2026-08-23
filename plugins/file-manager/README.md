@@ -30,6 +30,12 @@ every path is re-resolved and clamped on the server before a single byte moves.
   second open panel or a finishing background job updates the listing without
   polling.
 - **Hidden files** — dot-files toggle, remembered as a setting.
+- **Type or paste a path** — the breadcrumbs turn into an address bar
+  (`Ctrl`/`Cmd`+`L`, the pencil button, or a click on the empty space right of
+  the last crumb). Paste a path to a **file** and the panel opens its folder
+  with that file selected.
+- **Reopens where you left off** — the folder you were last in comes back after
+  you leave the panel, reload the page or restart bb. A setting turns it off.
 - **Pick where it opens** — the plugin's settings page carries a folder
   browser for the start folder, so it is chosen rather than typed.
 
@@ -54,7 +60,8 @@ the folder — the two gestures are deliberately different.
 | `Alt`+`←`, `Backspace` | go up one directory |
 | `Enter` | open: a folder navigates in, a file downloads, an archive opens the extract dialog |
 | `Shift`+`F10`, the Menu key | open the context menu for the row under the cursor (the empty-space menu when no row is focused) |
-| `Escape` | clear the selection (in the filter box, it clears the filter) |
+| `Ctrl`/`Cmd`+`L` | edit the path: the crumbs become a text field with the full path selected |
+| `Escape` | clear the selection (in the path bar it cancels, in the filter box it clears the filter) |
 | Collapse all folders | toolbar button, also an item in the empty-space context menu |
 
 Everything else works the same on a nested row as on a top-level one:
@@ -79,6 +86,66 @@ Which folders are open is remembered per absolute path — across navigation, a
 panel remount and a bb restart. It is stored client-side and capped at 200 open
 folders. **Collapse all folders** resets it.
 
+## The path bar
+
+The breadcrumb strip has a second state. `Ctrl`/`Cmd`+`L`, the pencil button at
+its right end, or a click on the empty space after the last crumb replaces the
+crumbs with a text field holding the full absolute path, selected, so a paste
+replaces it. `Enter` goes there, `Escape` cancels, and clicking away cancels
+too — a blur is not a decision, and a half-typed path is the worst thing to
+navigate to. A commit that fails keeps your text and says why underneath.
+
+The crumbs themselves are unchanged: they are still one-click jumps to an
+ancestor and still drop targets for a dragged row.
+
+What it accepts:
+
+| You paste | What happens |
+| --- | --- |
+| `/home/you/projects` | goes there |
+| `~`, `~/projects` | `~` is the root — the home folder bb runs as |
+| `projects`, `./projects`, `../pics` | resolved against the folder **on screen**, like a shell |
+| `"/home/you/My File.txt"`, `'…'` | the quotes come off; the spaces stay |
+| `/home/you/My\ File.txt` | a path dragged into a terminal: the escapes come off |
+| `file:///home/you/a%20b` | the scheme comes off and `%20` decodes |
+| a multi-line paste | the first non-empty line |
+| a path to a **file** | opens its folder and selects, focuses and scrolls to that file — it never downloads it |
+| a hidden file while hidden files are off | turns them on for this visit only, and says so; your saved setting is untouched |
+| a path outside the root | refused on the spot, with no request to the server |
+| `C:\Users\you`, `\\server\share`, `https://…` | refused: there is no correct translation, and a guess would land you somewhere wrong |
+| a path that does not exist | says so, and leaves your text in the box |
+
+Percent-escapes are decoded only for a `file://` URL — `%` and `\` are legal in
+a POSIX file name, so a plain path is taken literally. There is no completion
+list yet; `Tab` is deliberately still the browser's.
+
+## Where the panel opens
+
+In order: an explicit link wins, then the folder you were last in, then the
+configured start folder.
+
+The last folder is remembered from the listing the server actually answered
+with, so a folder that failed to open is never remembered, and a symlinked
+route is remembered as the folder it really opened. It lives in this browser
+profile alone — never synced, never sent anywhere — because it is a path on
+this machine. Set **Reopen the last folder** to off and the panel always opens
+the start folder instead; the memory is still kept, so turning it back on
+resumes where you were.
+
+If the remembered folder is gone when the panel next opens, it falls back to
+the start folder, says so once, and forgets it — no error banner for a folder
+you did not ask for. When the folder it lost *is* the start folder there is
+nowhere to fall back to, so you get the ordinary "Could not open this folder"
+banner and its Retry instead of a message that would name the dead folder twice.
+**Forget the remembered folder**, on the plugin's settings page, drops the
+memory on demand; it stays dropped while the panel is open, and the panel starts
+remembering again the next time you move to a different folder.
+
+Which folders are expanded comes back with it, because that is remembered
+separately and by absolute path. The scroll position and the selection are not
+restored on purpose: they are a moment, not a place, and a restored selection
+would arm `Delete` and `F2` on rows you did not choose this session.
+
 ## Requirements
 
 - bb `>= 0.39` with `@get-bb/plugin-sdk >= 0.4.8` (Node 24).
@@ -100,7 +167,7 @@ Straight from git, which builds during install — the released tag, or the tip
 of `main`:
 
 ```bash
-bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.3.0 \
+bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.4.0 \
   --plugin file-manager --tag-prefix file-manager/
 bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@main --plugin file-manager
 ```
@@ -125,7 +192,8 @@ Change them in bb's settings UI, from the panel, or with
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `startFolder` | string | home folder | Absolute path under the root the panel opens by default. Shown in the form as **Start folder (typed path)**, and set with a folder browser by the **Start folder** section below it. Re-validated on every read; a deleted or out-of-root path falls back to the root. |
+| `startFolder` | string | home folder | Absolute path under the root the panel opens on its first open, after you forget the remembered folder, and whenever the last folder is gone — or every time, with `restoreLastFolder` off. Shown in the form as **Start folder (typed path)**, and set with a folder browser by the **Start folder** section below it. Re-validated on every read; a deleted or out-of-root path falls back to the root. |
+| `restoreLastFolder` | boolean | `true` | Reopen the folder you were last in instead of the start folder. |
 | `showHiddenFiles` | boolean | `false` | Show dot-files and dot-directories. |
 | `confirmOnDelete` | boolean | `true` | Ask before deleting. |
 | `sortField` | `name` \| `size` \| `modified` \| `kind` | `name` | Default sort column. |
@@ -149,6 +217,11 @@ detail page in Tools:
   *Copy to…*, so a folder is picked, never typed;
 - **Reset to …** — writes the root back; the button spells out the path it will
   write, and is disabled when the start folder already is the root;
+- **Forget the remembered folder** — drops the "reopen where I was" memory in
+  this browser profile. Purely local: no request, no setting written, and it is
+  disabled when there is nothing to forget;
+- one line saying which of the two folders is actually in effect, because
+  `restoreLastFolder` decides that and the checkbox above cannot say it;
 - a saved / saving indicator, and the backend's own message inline when it
   rejects a path (outside the root, deleted, or not a folder).
 
@@ -266,6 +339,9 @@ every save.
 | `app.tsx`, `components/`, `hooks/`, `lib/` | the panel and the settings section |
 | `components/SettingsSection.tsx`, `lib/start-folder.ts` | the `settingsSection` slot and the start-folder logic it shares with the panel |
 | `lib/fm-tree.ts`, `hooks/useTree.ts` | the folder tree: a pure reducer plus the lazy loader around it |
+| `lib/fm-store.ts` | the two-tier client store (module scope over `localStorage`) both the expanded set and the location memory use |
+| `lib/last-folder.ts` | what "reopen where I was" remembers, and the pure rule that picks the folder to open |
+| `lib/fm-pathbar.ts`, `components/PathBar.tsx` | the path bar: what a pasted path means, and the strip that switches between crumbs and a text field |
 | `components/ui/` | vendored bb UI kit (`npx shadcn add @bb/<name>`) — not hand-edited |
 | `test/backend/`, `test/frontend/` | unit suites for each side |
 | `test/integration/` | loads the real `server.ts` through bb's fake plugin host: contract coverage, route auth modes, upload / download / extract end to end |
@@ -286,10 +362,12 @@ The BB Community catalog entry is *not* kept in this directory. It lives as
 [get-bb/marketplace](https://github.com/get-bb/marketplace), filed as
 [PR #90](https://github.com/get-bb/marketplace/pull/90), and that copy is the
 source of truth — a draft next to the code only goes stale, as it did between
-0.2.0 and 0.3.0. The entry resolves the source range `^0.3.0` against this
-repository's tags, so any release inside `0.3.x` reaches the catalog on its own;
-moving the source, or changing the id, display name, description, tags or icon,
-needs a new pull request there.
+0.2.0 and 0.3.0. The entry resolves a source range against this repository's
+tags, so any release inside that range reaches the catalog on its own — but
+0.4.0 is outside the `^0.3.0` the open entry declares, so the range has to be
+widened there before this release shows up in the catalog. Moving the source,
+or changing the id, display name, description, tags or icon, needs a pull
+request there too.
 
 ## License
 

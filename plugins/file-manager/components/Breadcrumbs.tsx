@@ -19,6 +19,14 @@ export interface BreadcrumbsProps {
   onDragOverTarget?: (path: string, event: DragEvent<HTMLElement>) => void;
   onDragLeaveTarget?: (path: string, event: DragEvent<HTMLElement>) => void;
   onDropOnTarget?: (path: string, event: DragEvent<HTMLElement>) => void;
+  /**
+   * Click on the flex slack to the right of the last crumb — the
+   * Explorer/Nautilus gesture for "let me type the path" (PATHBAR-SPEC §3.2).
+   * Every crumb button, and the wrapper around it, is a *descendant* of the
+   * nav, so the target-identity check below makes a crumb click impossible to
+   * confuse with an empty-area one.
+   */
+  onEmptyAreaClick?: () => void;
   className?: string;
 }
 
@@ -30,6 +38,7 @@ export function Breadcrumbs({
   onDragOverTarget,
   onDragLeaveTarget,
   onDropOnTarget,
+  onEmptyAreaClick,
   className,
 }: BreadcrumbsProps) {
   const crumbs = breadcrumbs(path, root, "Home");
@@ -39,6 +48,9 @@ export function Breadcrumbs({
       aria-label="Breadcrumb"
       data-testid="fm-breadcrumbs"
       className={cn("flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto", className)}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onEmptyAreaClick?.();
+      }}
     >
       {crumbs.map((crumb, index) => {
         const isLast = index === crumbs.length - 1;
