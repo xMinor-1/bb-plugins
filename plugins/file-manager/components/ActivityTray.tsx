@@ -234,7 +234,12 @@ export function ActivityTray({
   return (
     <div
       data-testid="fm-activity-tray"
-      className={cn("pointer-events-none absolute bottom-3 right-3 z-20 w-80", className)}
+      // `max-w` matters in a panel tab: the tray is fixed at 320px, and a
+      // narrow side panel would otherwise let it hang over both edges.
+      className={cn(
+        "pointer-events-none absolute bottom-3 right-3 z-20 w-80 max-w-[calc(100%-1.5rem)]",
+        className,
+      )}
     >
       <div className="pointer-events-auto overflow-hidden rounded-lg border border-border bg-surface-raised shadow-md">
         <div className="flex items-center gap-2 border-b border-border-hairline px-3 py-1.5">

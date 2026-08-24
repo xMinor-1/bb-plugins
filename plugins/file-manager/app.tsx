@@ -10,10 +10,16 @@
 // Plus one settings section (v0.3): bb's declarative settings form has no path
 // descriptor type, so `startFolder` would otherwise only be typeable by hand.
 // The section renders the real folder browser over the same setting.
+//
+// Plus the two panel-launcher actions (v0.5): the same file manager, opened as
+// a tab in the right-hand panel from "New tab" → Actions, beside Start
+// terminal and Start side chat (§10.1). `layout: "flush"` because the body
+// owns its own scrolling and needs a definite height for the listing.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 
 import { PANEL_PATH } from "./contract";
 import { FileManagerPanel } from "./components/FileManagerPanel";
+import { FileManagerNewThreadTab, FileManagerTab } from "./components/FileManagerTab";
 import { HeaderActions } from "./components/HeaderActions";
 import { SettingsSection } from "./components/SettingsSection";
 import { SidebarAccessory } from "./components/SidebarAccessory";
@@ -37,5 +43,25 @@ export default definePluginApp((app) => {
     title: "Start folder",
     description: "Pick the folder the File Manager panel opens in.",
     component: SettingsSection,
+  });
+
+  // The thread panel's launcher. `run` is omitted on purpose: there is nothing
+  // to resolve before opening, so the host opens the tab with the defaults.
+  app.slots.threadPanelAction({
+    id: "file-manager",
+    title: "File Manager",
+    icon: "FolderOpen",
+    layout: "flush",
+    component: FileManagerTab,
+  });
+
+  // The same action on the root New thread screen, which bb keeps as a
+  // separate slot from the thread one.
+  app.slots.experimental_newThreadPanelAction({
+    id: "file-manager",
+    title: "File Manager",
+    icon: "FolderOpen",
+    layout: "flush",
+    component: FileManagerNewThreadTab,
   });
 });

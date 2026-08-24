@@ -1,6 +1,11 @@
 // components/FileManagerPanel.tsx — the panel root: layout, state ownership,
 // the keyboard map and the drag&drop surface (§8.1–§8.5, §9).
 //
+// One body, two surfaces (§10.1). `FileManagerSurface` takes an `FmLocation`
+// instead of reading the route, so the nav panel can keep the folder in the
+// URL while a panel tab keeps it in component state, and a `chrome` flag says
+// whether the actions live in bb's title bar or in the toolbar.
+//
 // Everything that can fail is caught here. A throw inside a slot component
 // disables the plugin's whole UI until `bb plugin reload`, so every RPC
 // rejection ends in a toast or an ErrorBanner, never in an exception.
@@ -14,11 +19,12 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { useBbNavigate, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
+import type { PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
-import { MAX_LIST_ENTRIES, PANEL_PATH, type FileEntry, type FileManagerErrorCode } from "../contract";
+import { MAX_LIST_ENTRIES, type FileEntry, type FileManagerErrorCode } from "../contract";
 import { useClipboard } from "../hooks/useClipboard";
+import { useRouteLocation, type FmLocation } from "../hooks/useFmLocation";
 import {
   useDirectory,
   type ListDirResult,
@@ -93,7 +99,14 @@ import { FolderPickerDialog } from "./dialogs/FolderPickerDialog";
 import { NewFolderDialog } from "./dialogs/NewFolderDialog";
 import { RenameDialog } from "./dialogs/RenameDialog";
 import { ContextMenu, ContextMenuTrigger } from "./ui/context-menu";
-import { publishPanelSnapshot, resetPanelSnapshot, subscribePanelCommands } from "./panel-bus";
+import {
+  publishPanelSnapshot,
+  resetPanelSnapshot,
+  subscribePanelCommands,
+  type PanelCommand,
+  type PanelSnapshot,
+} from "./panel-bus";
+import { PanelActions } from "./PanelActions";
 
 type GetState = RpcOutput<"getState">;
 type BatchResult = RpcOutput<"moveEntries">;
@@ -289,11 +302,27 @@ function isTypingTarget(target: EventTarget | null): boolean {
 /* Panel                                                               */
 /* ------------------------------------------------------------------ */
 
-export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
+export interface FileManagerSurfaceProps {
+  /** Where the current folder lives — the route, or this component's state. */
+  location: FmLocation;
+  /**
+   * Which chrome the surface is wearing.
+   *
+   * "host-header" is the nav panel: bb renders `HeaderActions` in the shared
+   * title bar, and the panel talks to it through components/panel-bus.ts.
+   * "inline" is a panel tab, which has no title bar of its own — the same
+   * actions ride in the toolbar instead, and the surface stays off the bus so
+   * two open surfaces cannot answer one header click.
+   */
+  chrome: "host-header" | "inline";
+}
+
+export function FileManagerSurface({ location, chrome }: FileManagerSurfaceProps) {
   const rpc = useFmRpc();
-  const navigate = useBbNavigate();
-  const navigateRef = useRef(navigate);
-  navigateRef.current = navigate;
+  const subPath = location.subPath;
+  const locationRef = useRef(location);
+  locationRef.current = location;
+  const inlineChrome = chrome === "inline";
 
   const [state, setState] = useState<GetState | null>(null);
   const [stateError, setStateError] = useState<string | null>(null);
@@ -321,6 +350,14 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
   /* Path bar (§3). The panel owns the mode, the inline failure and the commit;
      `components/PathBar.tsx` owns the draft text for exactly as long as the
      mode lasts. */
+  /**
+   * Compact chrome only: the filter is folded into a magnifier so the path bar
+   * keeps a readable width, and this says whether it is unfolded.
+   */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchOpenRef = useRef(searchOpen);
+  searchOpenRef.current = searchOpen;
+
   const [pathEditing, setPathEditing] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
   const [pathBusy, setPathBusy] = useState(false);
@@ -407,8 +444,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
           if (choice.source === "memory") setRestorePending(choice.path);
           redirectFromRef.current = subPathRef.current;
           setRedirectPending(true);
-          navigateRef.current.toPluginPanel(PANEL_PATH, {
-            subPath: absoluteToSubPath(choice.path, result.root),
+          locationRef.current.navigate(absoluteToSubPath(choice.path, result.root), {
             replace: true,
           });
         }
@@ -665,8 +701,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
     // Hold the banner down until the folder we fall back to answers: the error
     // object survives the navigation and would flash for the new path.
     setSwallowedError(directory.error);
-    navigateRef.current.toPluginPanel(PANEL_PATH, {
-      subPath: absoluteToSubPath(state.startFolder, state.root),
+    locationRef.current.navigate(absoluteToSubPath(state.startFolder, state.root), {
       replace: true,
     });
     toast.message(
@@ -783,9 +818,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
     // host does with that redirect now, the listing gate must not stay shut.
     redirectFromRef.current = null;
     setRedirectPending(false);
-    navigateRef.current.toPluginPanel(PANEL_PATH, {
-      subPath: absoluteToSubPath(absolute),
-    });
+    locationRef.current.navigate(absoluteToSubPath(absolute));
   }, []);
 
   const parentPath = directory.data?.parentPath ?? parentOf(currentPath, root);
@@ -800,6 +833,13 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
 
   /** Open, or re-select when it is already open — a browser's address bar. */
   const openPathBar = useCallback(() => {
+    // Compact chrome shows the path bar *or* the unfolded filter, never both,
+    // so opening one has to fold the other away — otherwise Ctrl+L would put
+    // the panel into path-editing with no field on screen to edit.
+    if (searchOpenRef.current) {
+      setSearchOpen(false);
+      setQuery("");
+    }
     if (!pathEditingRef.current) setPathError(null);
     pathEditingRef.current = true;
     setPathEditing(true);
@@ -1513,6 +1553,12 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
           case "f":
           case "F":
             event.preventDefault();
+            // Folded away in compact chrome: unfold first, and let the effect
+            // below focus the field once it is on screen.
+            if (inlineChrome && !searchOpenRef.current) {
+              setSearchOpen(true);
+              return;
+            }
             searchRef.current?.focus();
             searchRef.current?.select();
             return;
@@ -1626,6 +1672,7 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
       openKeyboardContextMenu,
       openPathBar,
       paste,
+      inlineChrome,
       requestDelete,
       rowByPath,
       rows,
@@ -1641,20 +1688,35 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
   /* Title-bar bridge                                                */
   /* -------------------------------------------------------------- */
 
-  useEffect(() => {
-    publishPanelSnapshot({
+  /**
+   * Only the nav panel is on the bus. A panel tab renders the very same
+   * actions inside its toolbar, and publishing from both would leave the title
+   * bar describing whichever surface rendered last — while a header click
+   * would run in both.
+   */
+  const snapshot: PanelSnapshot = useMemo(
+    () => ({
       currentPath,
       writable,
       ready: listingEnabled,
       showHidden,
       selectionCount: selection.count,
       canPaste,
-    });
-  }, [canPaste, currentPath, listingEnabled, selection.count, showHidden, writable]);
+    }),
+    [canPaste, currentPath, listingEnabled, selection.count, showHidden, writable],
+  );
 
-  useEffect(() => resetPanelSnapshot, []);
+  useEffect(() => {
+    if (inlineChrome) return;
+    publishPanelSnapshot(snapshot);
+  }, [inlineChrome, snapshot]);
 
-  const commandRef = useRef<(command: { type: string }) => void>(() => undefined);
+  useEffect(() => {
+    if (inlineChrome) return;
+    return resetPanelSnapshot;
+  }, [inlineChrome]);
+
+  const commandRef = useRef<(command: PanelCommand) => void>(() => undefined);
   commandRef.current = (command) => {
     switch (command.type) {
       case "upload":
@@ -1682,18 +1744,47 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
       case "set-start-folder":
         setStartFolder(currentPathRef.current);
         return;
+      case "collapse-all":
+        handleCollapseAll();
+        return;
       default:
         return;
     }
   };
 
-  useEffect(
-    () =>
-      subscribePanelCommands((command) => {
-        commandRef.current(command);
-      }),
-    [],
+  const runCommand = useCallback((command: PanelCommand) => {
+    commandRef.current(command);
+  }, []);
+
+  const handleSearchOpenChange = useCallback(
+    (open: boolean) => {
+      setSearchOpen(open);
+      // The other half of the same rule as `openPathBar`: unfolding the filter
+      // takes the path bar off screen, so it must not stay in edit mode.
+      if (open) {
+        closePathBar(false);
+        return;
+      }
+      // Folding the field away has to take the filter with it, or rows stay
+      // hidden behind a control that is no longer on screen.
+      setQuery("");
+      gridRef.current?.focus();
+    },
+    [closePathBar],
   );
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    searchRef.current?.focus();
+    searchRef.current?.select();
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (inlineChrome) return;
+    return subscribePanelCommands((command) => {
+      commandRef.current(command);
+    });
+  }, [inlineChrome]);
 
   /* -------------------------------------------------------------- */
   /* Render                                                          */
@@ -1725,6 +1816,25 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
       onDrop={handleRootDrop}
     >
       <Toolbar
+        variant={inlineChrome ? "compact" : "wide"}
+        searchOpen={searchOpen}
+        onSearchOpenChange={handleSearchOpenChange}
+        actions={
+          inlineChrome ? (
+            <PanelActions
+              ready={listingEnabled}
+              writable={writable}
+              canPaste={canPaste}
+              showHidden={showHidden}
+              sortField={sortField}
+              sortDirection={sortDirection}
+              expandedCount={tree.expandedCount}
+              onCommand={runCommand}
+              onSortFieldChange={applySortField}
+              onSortDirectionChange={applySortDirection}
+            />
+          ) : null
+        }
         path={currentPath}
         root={root}
         onNavigate={navigateTo}
@@ -2074,4 +2184,17 @@ export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
       ) : null}
     </div>
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Surfaces                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The nav panel (§10): the route carries the folder, and bb renders
+ * `HeaderActions` in the shared title bar above this component.
+ */
+export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
+  const location = useRouteLocation(subPath);
+  return <FileManagerSurface location={location} chrome="host-header" />;
 }

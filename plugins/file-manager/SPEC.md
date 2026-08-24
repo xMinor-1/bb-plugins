@@ -1269,6 +1269,48 @@ export default definePluginApp((app) => {
 register. Do not add `experimental_fixedTabs` in v0.1: only the active fixed tab
 is mounted and closing the panel unmounts it, which would strand tree state.
 
+### 10.1 Panel-tab registration (v0.5)
+
+The same file manager also opens as a tab in bb's right-hand panel, from
+"New tab" → Actions (beside Start terminal and Start side chat). Two
+registrations, because bb keeps the two launchers apart:
+
+```tsx
+app.slots.threadPanelAction({
+  id: "file-manager",
+  title: "File Manager",
+  icon: "FolderOpen",
+  layout: "flush",
+  component: FileManagerTab,
+});
+app.slots.experimental_newThreadPanelAction({ /* the same, on New thread */ });
+```
+
+`layout: "flush"` because the body owns its own scrolling and needs a definite
+height for the listing; `run` is omitted because nothing has to be resolved
+before the tab opens. Neither `threadId` nor `projectId` is read: the root is
+the home folder of whoever runs bb, not a thread or a project.
+
+One body serves both surfaces. `FileManagerSurface` takes two props instead of
+reading the route itself:
+
+- `location: FmLocation` (`hooks/useFmLocation.ts`) — `{ subPath, navigate }`.
+  The nav panel's flavour writes the route (`toPluginPanel`), so back/forward
+  still walks the folder history; the panel tab's flavour is component state,
+  because a panel tab has no route and navigating with `toPluginPanel` would
+  take the whole app to the plugin page and the thread off screen.
+- `chrome: "host-header" | "inline"` — which chrome the surface wears. Only
+  `"host-header"` is on `components/panel-bus.ts`: a tab that published would
+  leave the title bar describing the wrong folder, and a tab that subscribed
+  would run every header click twice.
+
+A panel is ~450px wide, so `"inline"` also switches the toolbar to its compact
+variant: upload / new folder / an overflow menu (`components/PanelActions.tsx`)
+at the trailing edge, sort / hidden files / collapse-all / refresh folded into
+that menu, and the filter folded into a magnifier so the path bar keeps a
+readable width. `Ctrl`/`Cmd`+`F` unfolds it; closing it clears the filter, so
+rows can never stay hidden behind a control that is off screen.
+
 ---
 
 ## 11. Test plan

@@ -41,7 +41,33 @@ every path is re-resolved and clamped on the server before a single byte moves.
 
 The panel appears in the bb sidebar as **File Manager** and is routed at
 `/plugins/file-manager/files/*`. While uploads are running, the sidebar row
-shows how many are in flight.
+shows how many are in flight. The same file manager also opens as a tab in the
+right-hand panel, next to a thread — see below.
+
+## Open it beside a thread
+
+**New tab** → **Actions** → **File Manager**, in the right-hand panel of a
+thread or of the New thread screen, opens the file manager as a panel tab —
+beside *Start terminal* and *Start side chat*. It is the same file manager, not
+a cut-down one: the same listing and tree, uploads and downloads, context
+menus, dialogs, drag and drop and keyboard map. Drag a file from your desktop
+onto the panel and it uploads into the folder on screen while you keep talking
+to the agent.
+
+Two things differ, because a panel is a ~450px column with no title bar of its
+own:
+
+- **The actions ride in the toolbar.** Upload, new folder and an overflow menu
+  sit at its right end; sort, hidden files, collapse-all and refresh live in
+  that menu instead of having their own buttons.
+- **The filter folds into a magnifier**, so the path bar keeps a readable
+  width. `Ctrl`/`Cmd`+`F` unfolds it; closing it clears the filter.
+
+The folder you are in is kept by the tab itself rather than by the URL, so
+navigating folders never takes the thread off screen, and the sidebar page and
+a panel tab can stand in different folders at once. Both still share the
+settings, the upload queue and the "reopen where I was" memory, because those
+belong to the machine, not to a surface.
 
 ## Folders expand in place
 
@@ -167,7 +193,7 @@ Straight from git, which builds during install — the released tag, or the tip
 of `main`:
 
 ```bash
-bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.4.0 \
+bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.5.0 \
   --plugin file-manager --tag-prefix file-manager/
 bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@main --plugin file-manager
 ```
@@ -336,7 +362,8 @@ every save.
 | `server.ts` | backend entry: settings, RPC registration, HTTP routes, upload GC schedule |
 | `src/` | path safety, listing, mutations, uploads, archives, jobs |
 | `contract.ts` | the RPC contract shared by both sides; it is frozen and edited by nobody |
-| `app.tsx`, `components/`, `hooks/`, `lib/` | the panel and the settings section |
+| `app.tsx`, `components/`, `hooks/`, `lib/` | the panel, the panel tabs and the settings section |
+| `components/FileManagerTab.tsx`, `hooks/useFmLocation.ts`, `components/PanelActions.tsx` | the panel-tab surface: state-held location and the compact action cluster |
 | `components/SettingsSection.tsx`, `lib/start-folder.ts` | the `settingsSection` slot and the start-folder logic it shares with the panel |
 | `lib/fm-tree.ts`, `hooks/useTree.ts` | the folder tree: a pure reducer plus the lazy loader around it |
 | `lib/fm-store.ts` | the two-tier client store (module scope over `localStorage`) both the expanded set and the location memory use |
@@ -364,7 +391,7 @@ The BB Community catalog entry is *not* kept in this directory. It lives as
 source of truth — a draft next to the code only goes stale, as it did between
 0.2.0 and 0.3.0. The entry resolves a source range against this repository's
 tags, so any release inside that range reaches the catalog on its own — but
-0.4.0 is outside the `^0.3.0` the open entry declares, so the range has to be
+0.5.0 is outside the `^0.3.0` the open entry declares, so the range has to be
 widened there before this release shows up in the catalog. Moving the source,
 or changing the id, display name, description, tags or icon, needs a pull
 request there too.

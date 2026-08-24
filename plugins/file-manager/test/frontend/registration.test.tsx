@@ -63,13 +63,59 @@ describe("nav panel registration (§10)", () => {
     expect(app.navPanels[0]?.experimental_fixedTabs).toBeUndefined();
   });
 
-  // v0.3 added the start-folder settings section; everything else is still off.
-  it("registers no frontend slots beyond the panel and the settings section", () => {
+  // v0.3 added the start-folder settings section, v0.5 the two panel
+  // launchers; everything else is still off.
+  it("registers no frontend slots beyond the panel, the settings section and the launchers", () => {
     expect(app.homepageSections).toHaveLength(0);
     expect(app.settingsSections).toHaveLength(1);
-    expect(app.threadPanelActions).toHaveLength(0);
+    expect(app.threadPanelActions).toHaveLength(1);
+    expect(app.newThreadPanelActions).toHaveLength(1);
     expect(app.composerCustomizations).toHaveLength(0);
     expect(app.contentScripts).toHaveLength(0);
+  });
+
+  // §10.1 — the same file manager, opened as a panel tab from "New tab" →
+  // Actions. Both launchers must agree with the nav panel on title and icon,
+  // and both must be "flush": the body owns its own scrolling and needs a
+  // definite height for the listing.
+  it("registers the thread panel launcher with the nav panel's identity", () => {
+    const action = app.threadPanelActions[0];
+    expect({
+      id: action?.id,
+      title: action?.title,
+      icon: action?.icon,
+      layout: action?.layout,
+    }).toEqual({
+      id: "file-manager",
+      title: "File Manager",
+      icon: "FolderOpen",
+      layout: "flush",
+    });
+    expect(action?.component).toBeTypeOf("function");
+    expect(action?.id).toMatch(/^[a-zA-Z0-9_-]+$/u);
+  });
+
+  it("registers the same launcher on the root New thread screen", () => {
+    const action = app.newThreadPanelActions[0];
+    expect({
+      id: action?.id,
+      title: action?.title,
+      icon: action?.icon,
+      layout: action?.layout,
+    }).toEqual({
+      id: "file-manager",
+      title: "File Manager",
+      icon: "FolderOpen",
+      layout: "flush",
+    });
+    expect(action?.component).toBeTypeOf("function");
+  });
+
+  it("opens both launchers with host defaults instead of a run hook", () => {
+    // Nothing has to be resolved before the tab opens, and an omitted `run`
+    // is what makes bb open it with the registration's own title.
+    expect(app.threadPanelActions[0]?.run).toBeUndefined();
+    expect(app.newThreadPanelActions[0]?.run).toBeUndefined();
   });
 
   it("renders nothing in the sidebar accessory while no upload is running", async () => {

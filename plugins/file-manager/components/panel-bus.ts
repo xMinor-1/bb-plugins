@@ -28,7 +28,9 @@ export type PanelCommand =
   | { type: "select-all" }
   | { type: "paste" }
   | { type: "copy-path" }
-  | { type: "set-start-folder" };
+  | { type: "set-start-folder" }
+  /** Toolbar-only in the nav panel; the bus carries it for a panel tab. */
+  | { type: "collapse-all" };
 
 const INITIAL: PanelSnapshot = {
   currentPath: "",
