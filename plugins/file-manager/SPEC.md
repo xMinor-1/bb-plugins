@@ -1331,10 +1331,13 @@ preview) under one 40px strip naming the folder and carrying an *Open location*
 button. `location` is only ever reached from the context menu, and opens the
 file manager directly.
 
-`LOCATION_OPENER_EXTENSIONS` (contract.ts) is the claimed set: text, config,
-data, code, web and images. `pdf` is deliberately excluded — the pdf-viewer
-plugin owns it, and two plugins claiming one extension makes the automatic pick
-depend on plugin load order.
+`LOCATION_OPENER_EXTENSIONS` (contract.ts) is the claimed set: text, docs,
+office, config, data, code, web, images, audio, video, archives, fonts and
+binaries. `pdf` is deliberately excluded — the pdf-viewer plugin owns it, and
+two plugins claiming one extension makes the automatic pick depend on plugin
+load order. A name with no extension (`Makefile`, `LICENSE`) is unreachable:
+bb's own `getFileExtension` returns null and the menu renders no opener rows at
+all, for any plugin.
 
 **Resolution is a backend job.** An opener's `path` is relative to its
 `source`: a worktree (`environmentId` → `environments.get().path`), a thread's

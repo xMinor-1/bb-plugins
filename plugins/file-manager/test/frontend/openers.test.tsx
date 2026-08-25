@@ -170,11 +170,17 @@ describe("file opener registration (§10.2)", () => {
     expect(locationOpener.title).toBe("File location");
   });
 
-  it("claims text, code and image extensions but leaves pdf to the pdf viewer", () => {
-    for (const extension of ["md", "txt", "json", "ts", "py", "png", "svg"]) {
+  it("claims what a message link actually points at, but leaves pdf to the pdf viewer", () => {
+    for (const extension of [
+      "md", "txt", "json", "ts", "py", "png", "svg", // text, code, images
+      "zip", "tar", "gz", "7z", "deb", "dmg", // archives and packages
+      "mp4", "mp3", "docx", "xlsx", "sqlite", "ttf", "exe", // media, office, binaries
+    ]) {
       expect(previewOpener.extensions).toContain(extension);
     }
     expect(previewOpener.extensions).not.toContain("pdf");
+    // A duplicate is dead weight bb would match twice over.
+    expect(new Set(previewOpener.extensions).size).toBe(previewOpener.extensions.length);
     // Both openers must claim the same set, or the context menu would offer
     // the reveal for files the automatic pick never covers.
     expect([...locationOpener.extensions].sort()).toEqual([...previewOpener.extensions].sort());

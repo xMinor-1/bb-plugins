@@ -88,8 +88,15 @@ with one strip on top naming the folder and carrying the same *Open location*
 button. That entry exists for a reason worth knowing — bb picks an opener
 automatically per extension, and the plugin has to claim extensions to appear
 in the menu at all. So the preview wrapper is what a plain click lands on: the
-file still opens as a preview, plus one button. Text, config, data, code, web
-and image extensions are claimed; `.pdf` is left to the pdf-viewer plugin.
+file still opens as a preview, plus one button.
+
+What is claimed: text and docs, office files, config and data, code, web,
+images, audio, video, archives and packages, fonts and binaries — 200-odd
+extensions. Two things are outside it. `.pdf` is left to the pdf-viewer plugin,
+because two plugins claiming one extension makes bb's automatic pick depend on
+load order. And a name with no extension at all (`Makefile`, `LICENSE`,
+`.env`) gets no *Open with* rows from any plugin — bb matches openers by
+extension, so there is nothing for a plugin to claim.
 
 To take an extension back, use **Settings → File openers** and pin *BB preview*
 for it.

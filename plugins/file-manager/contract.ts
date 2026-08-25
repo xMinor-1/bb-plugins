@@ -33,26 +33,53 @@ export const UPLOAD_CHUNK_URL = `${HTTP_BASE}/upload/chunk`;
 export const DOWNLOAD_URL = `${HTTP_BASE}/download`;
 
 /**
- * Extensions the file-location openers claim (§10.2). bb matches an opener by
- * exact extension — there is no wildcard — so this is a list of what a link in
- * a message plausibly points at: text, code, config, data and images. `pdf` is
- * deliberately absent; the pdf-viewer plugin owns it.
+ * Extensions the file-location openers claim (§10.2).
+ *
+ * bb matches an opener by exact extension — there is no wildcard, and a name
+ * with no extension at all (`Makefile`, `LICENSE`) gets no "Open with" rows
+ * from any plugin — so this list is simply "what a link in a message
+ * plausibly points at": text, docs, office, config, data, code, web, images,
+ * audio, video, archives, fonts and binaries.
+ *
+ * `pdf` is deliberately absent: the pdf-viewer plugin owns it, and two plugins
+ * claiming one extension makes bb's automatic pick depend on load order.
  */
 export const LOCATION_OPENER_EXTENSIONS = [
   // text and docs
-  "md", "mdx", "markdown", "txt", "rst", "adoc", "org", "tex",
+  "md", "mdx", "markdown", "txt", "rst", "adoc", "org", "tex", "rtf",
+  // office and ebooks
+  "doc", "docx", "odt", "xls", "xlsx", "ods", "ppt", "pptx", "odp", "epub",
+  "pages", "numbers", "key",
   // config and data
   "json", "jsonc", "json5", "yaml", "yml", "toml", "ini", "cfg", "conf", "env",
-  "csv", "tsv", "xml", "sql", "log", "lock", "properties",
+  "csv", "tsv", "xml", "sql", "log", "lock", "properties", "plist", "db",
+  "sqlite", "sqlite3", "parquet", "ndjson", "har", "ics", "vcf",
   // code
-  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "java", "kt",
-  "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "sh", "bash", "zsh",
-  "fish", "ps1", "lua", "r", "pl", "scala", "clj", "ex", "exs", "dart", "vue",
-  "svelte", "graphql", "proto", "diff", "patch",
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "ipynb", "rb", "go",
+  "rs", "java", "kt", "kts", "swift", "m", "mm", "c", "h", "cc", "cpp", "hpp",
+  "cs", "php", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "lua", "r",
+  "pl", "scala", "clj", "cljs", "ex", "exs", "erl", "hs", "ml", "dart", "vue",
+  "svelte", "astro", "graphql", "gql", "proto", "diff", "patch", "gradle",
+  "cmake", "mk", "asm", "vb", "f90", "jl", "nim", "zig", "sol", "tf", "tfvars",
+  "hcl", "nix", "bzl",
   // web
-  "html", "htm", "css", "scss", "sass", "less",
+  "html", "htm", "xhtml", "css", "scss", "sass", "less", "styl", "map",
   // images
-  "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico",
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico", "tif",
+  "tiff", "heic", "psd", "ai", "eps",
+  // audio and video
+  "mp3", "wav", "flac", "aac", "ogg", "oga", "m4a", "opus", "aiff",
+  "mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "mpg", "mpeg",
+  // archives — the plugin extracts several of these itself
+  "zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "7z", "rar", "zst",
+  "lz4", "iso", "dmg", "jar", "war", "whl", "gem", "crate", "nupkg", "xpi",
+  "vsix", "apk", "aab", "ipa", "deb", "rpm", "pkg", "msi", "appimage", "snap",
+  "flatpak", "cab",
+  // fonts and binaries
+  "ttf", "otf", "woff", "woff2", "eot", "exe", "dll", "so", "dylib", "bin",
+  "dat", "img", "wasm", "o", "a", "class", "pyc", "node",
+  // certificates and keys that are safe to *locate* (never read here)
+  "pem", "crt", "cer", "der", "p12", "pfx", "asc", "sig", "gpg",
 ] as const;
 
 /** Realtime channels published with bb.realtime.publish(channel, payload). */
