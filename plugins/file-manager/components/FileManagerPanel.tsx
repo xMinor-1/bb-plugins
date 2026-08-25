@@ -46,6 +46,7 @@ import {
 } from "../lib/errors";
 import {
   absoluteToSubPath,
+  basename,
   dirname,
   getClientRoot,
   isSameOrDescendant,
@@ -315,14 +316,34 @@ export interface FileManagerSurfaceProps {
    * two open surfaces cannot answer one header click.
    */
   chrome: "host-header" | "inline";
+  /**
+   * Absolute folder to open on mount, outranking the remembered and the
+   * configured start folder (§10.2). The file-location openers pass the folder
+   * they resolved; every other surface leaves it null and gets the ordinary
+   * §1.5 rules.
+   */
+  initialPath?: string | null;
+  /** Absolute path of an entry to select once its folder is listed (§5.3). */
+  revealPath?: string | null;
+  /** Seed for the in-folder filter; the compact chrome unfolds for it. */
+  initialQuery?: string;
 }
 
-export function FileManagerSurface({ location, chrome }: FileManagerSurfaceProps) {
+export function FileManagerSurface({
+  location,
+  chrome,
+  initialPath = null,
+  revealPath = null,
+  initialQuery = "",
+}: FileManagerSurfaceProps) {
   const rpc = useFmRpc();
   const subPath = location.subPath;
   const locationRef = useRef(location);
   locationRef.current = location;
   const inlineChrome = chrome === "inline";
+  // Read once: the bootstrap runs once, and a later prop change must not drag
+  // the panel back to where it started while the user is somewhere else.
+  const initialPathRef = useRef(initialPath);
 
   const [state, setState] = useState<GetState | null>(null);
   const [stateError, setStateError] = useState<string | null>(null);
@@ -339,7 +360,7 @@ export function FileManagerSurface({ location, chrome }: FileManagerSurfaceProps
   const [confirmOnDelete, setConfirmOnDelete] = useState(true);
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const queryRef = useRef(query);
   queryRef.current = query;
   const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
@@ -354,7 +375,7 @@ export function FileManagerSurface({ location, chrome }: FileManagerSurfaceProps
    * Compact chrome only: the filter is folded into a magnifier so the path bar
    * keeps a readable width, and this says whether it is unfolded.
    */
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(initialQuery !== "");
   const searchOpenRef = useRef(searchOpen);
   searchOpenRef.current = searchOpen;
 
@@ -427,9 +448,22 @@ export function FileManagerSurface({ location, chrome }: FileManagerSurfaceProps
         setSortField(result.preferences.sortField);
         setSortDirection(result.preferences.sortDirection);
         setStateError(null);
-        // Where to open: an explicit link, then the remembered folder, then
-        // the configured start folder (§1.5). The `subPath === ""` guard that
-        // used to sit here is now rule 1 of `pickInitialFolder`.
+        // Where to open: a folder the caller asked for (§10.2), then an
+        // explicit link, then the remembered folder, then the configured start
+        // folder (§1.5). The `subPath === ""` guard that used to sit here is
+        // now rule 1 of `pickInitialFolder`.
+        const requested = initialPathRef.current;
+        if (requested !== null) {
+          // A requested folder needs the same redirect a remembered one needs:
+          // the surface mounted at its location's `subPath`, not at this path.
+          const targetSubPath = absoluteToSubPath(requested, result.root);
+          if (targetSubPath !== subPathRef.current) {
+            redirectFromRef.current = subPathRef.current;
+            setRedirectPending(true);
+            locationRef.current.navigate(targetSubPath, { replace: true });
+          }
+          return;
+        }
         const choice = pickInitialFolder({
           subPath: subPathRef.current,
           remembered: readLastFolder(),
@@ -713,6 +747,27 @@ export function FileManagerSurface({ location, chrome }: FileManagerSurfaceProps
   useEffect(() => {
     if (swallowedError !== null && directory.error !== swallowedError) setSwallowedError(null);
   }, [directory.error, swallowedError]);
+
+  /**
+   * The caller's "reveal this file" (§10.2): a file-location opener names the
+   * entry it resolved, and the same machinery the path bar uses selects it
+   * once its folder is listed. Armed once — a re-render must not re-select a
+   * row the user has since navigated away from.
+   */
+  const revealArmedRef = useRef(false);
+  useEffect(() => {
+    if (revealPath === null || state === null || revealArmedRef.current) return;
+    revealArmedRef.current = true;
+    const name = basename(revealPath);
+    let since: ListDirResult | null = null;
+    if (name.startsWith(".") && !showHiddenRef.current) {
+      // State only, never `persist()` — same rule as the path bar's reveal.
+      setShowHidden(true);
+      since = directoryDataRef.current;
+      toast.message(`Showing hidden files so ${name} is visible.`);
+    }
+    setPendingReveal({ path: revealPath, dir: dirname(revealPath), name, since });
+  }, [revealPath, state]);
 
   /**
    * The path bar's "reveal this file" (§5.3). It cannot select the row before

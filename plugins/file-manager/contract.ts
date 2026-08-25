@@ -32,6 +32,29 @@ export const TOKEN_URL = `/api/v1/plugins/${PLUGIN_ID}/token`;
 export const UPLOAD_CHUNK_URL = `${HTTP_BASE}/upload/chunk`;
 export const DOWNLOAD_URL = `${HTTP_BASE}/download`;
 
+/**
+ * Extensions the file-location openers claim (§10.2). bb matches an opener by
+ * exact extension — there is no wildcard — so this is a list of what a link in
+ * a message plausibly points at: text, code, config, data and images. `pdf` is
+ * deliberately absent; the pdf-viewer plugin owns it.
+ */
+export const LOCATION_OPENER_EXTENSIONS = [
+  // text and docs
+  "md", "mdx", "markdown", "txt", "rst", "adoc", "org", "tex",
+  // config and data
+  "json", "jsonc", "json5", "yaml", "yml", "toml", "ini", "cfg", "conf", "env",
+  "csv", "tsv", "xml", "sql", "log", "lock", "properties",
+  // code
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "java", "kt",
+  "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "sh", "bash", "zsh",
+  "fish", "ps1", "lua", "r", "pl", "scala", "clj", "ex", "exs", "dart", "vue",
+  "svelte", "graphql", "proto", "diff", "patch",
+  // web
+  "html", "htm", "css", "scss", "sass", "less",
+  // images
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico",
+] as const;
+
 /** Realtime channels published with bb.realtime.publish(channel, payload). */
 export const FS_CHANNEL = "fs";
 export const JOB_CHANNEL = "job";
@@ -97,6 +120,18 @@ export const errorCodeSchema = z.enum([
   "unsupported",
 ]);
 export type FileManagerErrorCode = z.infer<typeof errorCodeSchema>;
+
+/**
+ * bb's `fileOpener` source descriptor, mirrored so the backend can validate it
+ * (§10.2). `kind` decides what `path` is relative to.
+ */
+export const fileOpenerSourceSchema = z.strictObject({
+  kind: z.enum(["host", "thread-storage", "workspace"]),
+  threadId: z.string().nullable(),
+  environmentId: z.string().nullable(),
+  projectId: z.string().nullable(),
+});
+export type FileOpenerSourceInput = z.infer<typeof fileOpenerSourceSchema>;
 
 /** One directory entry. `path` is always absolute and inside the hard root. */
 export const entrySchema = z.strictObject({
@@ -247,6 +282,34 @@ export const fileManagerContract = defineRpcContract({
     output: z.strictObject({
       entry: entrySchema,
       parentPath: z.string().nullable(),
+    }),
+  },
+
+  /**
+   * Where a file link points, and which folder to open for it (§10.2).
+   *
+   * The path comes from a `fileOpener`, so it is relative to whatever surface
+   * produced it: a worktree, a thread's storage directory, or absolute for a
+   * host path. A target that does not exist is not an error — the nearest
+   * existing folder is still the useful answer, which is what an agent's glob
+   * or a since-renamed file needs.
+   */
+  resolveFileLocation: {
+    input: z.strictObject({
+      path: z.string(),
+      source: fileOpenerSourceSchema,
+    }),
+    output: z.strictObject({
+      /** Folder to open: the target's own, or its nearest existing ancestor. */
+      dirPath: z.string(),
+      /** Absolute path the link named. May not exist. */
+      absolutePath: z.string(),
+      /** Base name of the target; "" when the link named a folder. */
+      name: z.string(),
+      exists: z.boolean(),
+      isDirectory: z.boolean(),
+      /** Filter text for a missing glob-ish name, else null. */
+      matchHint: z.string().nullable(),
     }),
   },
 

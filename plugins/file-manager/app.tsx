@@ -15,10 +15,16 @@
 // a tab in the right-hand panel from "New tab" → Actions, beside Start
 // terminal and Start side chat (§10.1). `layout: "flush"` because the body
 // owns its own scrolling and needs a definite height for the listing.
+//
+// Plus the two file openers (v0.6): "Open with File location" in the
+// right-click menu of a file link reveals that file in the side panel, and the
+// preview wrapper keeps the automatic per-extension pick looking like bb's own
+// preview (§10.2).
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 
-import { PANEL_PATH } from "./contract";
+import { LOCATION_OPENER_EXTENSIONS, PANEL_PATH } from "./contract";
 import { FileManagerPanel } from "./components/FileManagerPanel";
+import { FileLocationOpener, FilePreviewOpener } from "./components/FileLocationOpener";
 import { FileManagerNewThreadTab, FileManagerTab } from "./components/FileManagerTab";
 import { HeaderActions } from "./components/HeaderActions";
 import { SettingsSection } from "./components/SettingsSection";
@@ -63,5 +69,24 @@ export default definePluginApp((app) => {
     icon: "FolderOpen",
     layout: "flush",
     component: FileManagerNewThreadTab,
+  });
+
+  // Right-clicking a file link in a message lists every matching opener as
+  // "Open with <title>" — but bb also picks one AUTOMATICALLY per extension,
+  // and that pick is the first registration that matches. So the preview
+  // wrapper is registered first: a plain click still shows the file, with one
+  // strip on top that reveals it. Order here is load-bearing (§10.2).
+  app.slots.fileOpener({
+    id: "preview",
+    title: "Preview + location",
+    extensions: [...LOCATION_OPENER_EXTENSIONS],
+    component: FilePreviewOpener,
+  });
+
+  app.slots.fileOpener({
+    id: "location",
+    title: "File location",
+    extensions: [...LOCATION_OPENER_EXTENSIONS],
+    component: FileLocationOpener,
   });
 });

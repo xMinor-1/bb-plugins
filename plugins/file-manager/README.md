@@ -69,6 +69,31 @@ a panel tab can stand in different folders at once. Both still share the
 settings, the upload queue and the "reopen where I was" memory, because those
 belong to the machine, not to a surface.
 
+## Right-click a file link → show me where it is
+
+Right-click any file link in a message and bb's menu offers **Open with File
+location**. It opens this file manager in the side panel, in the file's folder,
+with the file selected — the "reveal in folder" a chat surface otherwise has no
+way to do.
+
+A path that does not exist still works, because that is half of what agents
+write. `knowledge-base/backups/*-otlozhena-2026-08-25.md` — a glob, not a file —
+opens `knowledge-base/backups/` with `-otlozhena-2026-08-25.md` already in the
+filter, so the file it meant is the only row on screen. A file that has since
+been renamed or deleted opens the nearest folder that still exists, and says
+which one. Only a path outside the home folder is refused outright.
+
+The same menu also lists **Open with Preview + location**: bb's own preview
+with one strip on top naming the folder and carrying the same *Open location*
+button. That entry exists for a reason worth knowing — bb picks an opener
+automatically per extension, and the plugin has to claim extensions to appear
+in the menu at all. So the preview wrapper is what a plain click lands on: the
+file still opens as a preview, plus one button. Text, config, data, code, web
+and image extensions are claimed; `.pdf` is left to the pdf-viewer plugin.
+
+To take an extension back, use **Settings → File openers** and pin *BB preview*
+for it.
+
 ## Folders expand in place
 
 Clicking the chevron left of a folder row expands that folder underneath it:
@@ -193,7 +218,7 @@ Straight from git, which builds during install — the released tag, or the tip
 of `main`:
 
 ```bash
-bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.5.0 \
+bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.6.0 \
   --plugin file-manager --tag-prefix file-manager/
 bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@main --plugin file-manager
 ```
@@ -364,6 +389,7 @@ every save.
 | `contract.ts` | the RPC contract shared by both sides; it is frozen and edited by nobody |
 | `app.tsx`, `components/`, `hooks/`, `lib/` | the panel, the panel tabs and the settings section |
 | `components/FileManagerTab.tsx`, `hooks/useFmLocation.ts`, `components/PanelActions.tsx` | the panel-tab surface: state-held location and the compact action cluster |
+| `components/FileLocationOpener.tsx`, `src/locate.ts` | the two `fileOpener` slots and the path resolution behind them |
 | `components/SettingsSection.tsx`, `lib/start-folder.ts` | the `settingsSection` slot and the start-folder logic it shares with the panel |
 | `lib/fm-tree.ts`, `hooks/useTree.ts` | the folder tree: a pure reducer plus the lazy loader around it |
 | `lib/fm-store.ts` | the two-tier client store (module scope over `localStorage`) both the expanded set and the location memory use |
@@ -391,7 +417,7 @@ The BB Community catalog entry is *not* kept in this directory. It lives as
 source of truth — a draft next to the code only goes stale, as it did between
 0.2.0 and 0.3.0. The entry resolves a source range against this repository's
 tags, so any release inside that range reaches the catalog on its own — but
-0.5.0 is outside the `^0.3.0` the open entry declares, so the range has to be
+0.6.0 is outside the `^0.3.0` the open entry declares, so the range has to be
 widened there before this release shows up in the catalog. Moving the source,
 or changing the id, display name, description, tags or icon, needs a pull
 request there too.

@@ -90,7 +90,7 @@ describe("registrations", () => {
   it("registers every contract method exactly once", () => {
     const registered = [...host.harness.inspection.registrations.rpcMethods].sort();
     expect(registered).toEqual(CONTRACT_METHODS);
-    expect(registered).toHaveLength(17);
+    expect(registered).toHaveLength(18);
   });
 
   it("mounts both §5 routes with the auth modes §5 requires", () => {
@@ -151,9 +151,13 @@ describe("reachability", () => {
     uploadFinish: { uploadId: "0".repeat(32) },
     uploadAbort: { uploadId: "0".repeat(32) },
     savePreferences: {},
+    resolveFileLocation: {
+      path: "does-not-exist",
+      source: { kind: "host", threadId: null, environmentId: null, projectId: null },
+    },
   };
 
-  it("covers all 17 methods with a probe", () => {
+  it("covers all 18 methods with a probe", () => {
     expect(Object.keys(probes).sort()).toEqual(CONTRACT_METHODS);
   });
 

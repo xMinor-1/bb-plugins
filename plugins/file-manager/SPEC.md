@@ -1311,6 +1311,52 @@ that menu, and the filter folded into a magnifier so the path bar keeps a
 readable width. `Ctrl`/`Cmd`+`F` unfolds it; closing it clears the filter, so
 rows can never stay hidden behind a control that is off screen.
 
+### 10.2 File openers — "show me where this file is" (v0.6)
+
+Right-clicking a file link in a rendered message gives bb's own menu: *Open
+in …*, *Open with built-in preview*, one *Open with `<title>`* row per matching
+`fileOpener`, *Copy file path*, *Copy file name*. The chosen opener renders as
+a tab in the side panel — the surface a reveal wants. So two registrations:
+
+```tsx
+app.slots.fileOpener({ id: "preview",  title: "Preview + location", extensions, component: FilePreviewOpener });
+app.slots.fileOpener({ id: "location", title: "File location",      extensions, component: FileLocationOpener });
+```
+
+**Order is load-bearing.** bb matches an opener by exact extension (no
+wildcards) and, absent a Settings → *File openers* pin, uses the FIRST
+registration that matches for every automatic open — a plain click included.
+So `preview` is registered first and renders `experimental_Original` (bb's own
+preview) under one 40px strip naming the folder and carrying an *Open location*
+button. `location` is only ever reached from the context menu, and opens the
+file manager directly.
+
+`LOCATION_OPENER_EXTENSIONS` (contract.ts) is the claimed set: text, config,
+data, code, web and images. `pdf` is deliberately excluded — the pdf-viewer
+plugin owns it, and two plugins claiming one extension makes the automatic pick
+depend on plugin load order.
+
+**Resolution is a backend job.** An opener's `path` is relative to its
+`source`: a worktree (`environmentId` → `environments.get().path`), a thread's
+storage root (`threadId` → `threads.storagePaths()`), or absolute for a host
+path. `resolveFileLocation` (`src/locate.ts`) turns that pair into
+`{ dirPath, absolutePath, name, exists, isDirectory, matchHint }` under the
+usual §6 clamp.
+
+**A missing target is not an error.** Agents write globs
+(`backups/*-otlozhena-2026-08-25.md`) and paths that have since moved, and the
+folder is still the useful answer, so the resolver walks up to the nearest
+existing directory and reports it. When the name held glob characters, its
+longest literal run comes back as `matchHint` and the panel opens with that in
+the filter — the file the link meant is then the only row on screen. A path
+outside the root stays a refusal (`path_escape`): walking up from it would
+answer with a folder nobody named.
+
+The panel body takes three optional props for this (§10.1's surface): 
+`initialPath` (the folder to open, outranking §1.5's rules), `revealPath` (the
+entry to select once its folder lists, through the same machinery the path bar
+uses) and `initialQuery` (the filter seed, which unfolds the compact filter).
+
 ---
 
 ## 11. Test plan

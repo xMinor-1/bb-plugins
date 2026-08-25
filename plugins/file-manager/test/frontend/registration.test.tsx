@@ -64,12 +64,13 @@ describe("nav panel registration (§10)", () => {
   });
 
   // v0.3 added the start-folder settings section, v0.5 the two panel
-  // launchers; everything else is still off.
-  it("registers no frontend slots beyond the panel, the settings section and the launchers", () => {
+  // launchers, v0.6 the two file openers; everything else is still off.
+  it("registers no frontend slots beyond the panel, the settings section, the launchers and the openers", () => {
     expect(app.homepageSections).toHaveLength(0);
     expect(app.settingsSections).toHaveLength(1);
     expect(app.threadPanelActions).toHaveLength(1);
     expect(app.newThreadPanelActions).toHaveLength(1);
+    expect(app.fileOpeners).toHaveLength(2);
     expect(app.composerCustomizations).toHaveLength(0);
     expect(app.contentScripts).toHaveLength(0);
   });
