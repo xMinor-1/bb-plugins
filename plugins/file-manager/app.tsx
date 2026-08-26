@@ -3,7 +3,7 @@
 // One nav panel, registered exactly as §10 of SPEC.md prescribes. `id` and
 // `path` must match /^[a-zA-Z0-9_-]+$/ or the whole frontend fails to
 // register, and `icon` must agree with `bb.branding.icon` in package.json
-// (which overrides it on compact surfaces). `experimental_fixedTabs` is
+// (which overrides it on compact surfaces). `fixedTabs` is
 // deliberately absent in v0.1: only the active fixed tab is mounted, so
 // closing the panel would strand the tree state.
 //

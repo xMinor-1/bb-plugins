@@ -59,8 +59,8 @@ describe("nav panel registration (§10)", () => {
     expect(panel?.experimental_sidebarAccessory).toBeTypeOf("function");
   });
 
-  it("does not register experimental_fixedTabs in v0.1 (§10: it strands tree state)", () => {
-    expect(app.navPanels[0]?.experimental_fixedTabs).toBeUndefined();
+  it("does not register fixedTabs (§10: they strand tree state)", () => {
+    expect(app.navPanels[0]?.fixedTabs).toBeUndefined();
   });
 
   // v0.3 added the start-folder settings section, v0.5 the two panel

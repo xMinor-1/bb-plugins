@@ -6,6 +6,7 @@
 // the double-open you get when a per-row trigger and a container trigger both
 // see the same `contextmenu` event.
 import type { FileEntry } from "../contract";
+import { useMenuPointerGuard } from "../hooks/useMenuPointerGuard";
 import {
   ContextMenuContent,
   ContextMenuItem,
@@ -63,9 +64,11 @@ export function RowContextMenu({
     (entry) => !entry.escapesRoot && effectiveKind(entry) === "file",
   );
   const archive = single !== undefined && single.archiveFormat !== null ? single : undefined;
+  // Letting go of the right button must not run whatever it landed on.
+  const pointerGuard = useMenuPointerGuard();
 
   return (
-    <ContextMenuContent className="w-56" data-testid="fm-row-menu">
+    <ContextMenuContent className="w-56" data-testid="fm-row-menu" {...pointerGuard}>
       <ContextMenuLabel className="truncate">
         {single === undefined ? `${String(entries.length)} items` : single.name}
       </ContextMenuLabel>

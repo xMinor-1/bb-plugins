@@ -141,7 +141,7 @@ function mountOpener(
 ): RenderedSlot {
   return renderSlot(
     { component: registration.component },
-    { path, source: SOURCE, experimental_Original: Original },
+    { path, source: SOURCE, Original },
     { rpc: handlers as PluginRpcTestHandlers<FileManagerContract> },
   ) as RenderedSlot;
 }

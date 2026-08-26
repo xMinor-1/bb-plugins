@@ -149,6 +149,18 @@ async function openBackgroundMenu(slot: RenderedSlot): Promise<HTMLElement> {
   return slot.findByTestId("fm-background-menu");
 }
 
+/** The item a `pointerup` would land on when the menu flips under the cursor. */
+function itemIn(menu: HTMLElement, label: string | RegExp): HTMLElement {
+  return within(menu)
+    .getAllByRole("menuitem")
+    .concat(within(menu).queryAllByRole("menuitemcheckbox"))
+    .find((candidate) =>
+      typeof label === "string"
+        ? (candidate.textContent ?? "").startsWith(label)
+        : label.test(candidate.textContent ?? ""),
+    )!;
+}
+
 function clickItem(menu: HTMLElement, label: string | RegExp): void {
   const item = within(menu)
     .getAllByRole("menuitem")
@@ -509,5 +521,49 @@ describe("background context menu (§8.2)", () => {
       .getAllByRole("menuitem")
       .find((item) => (item.textContent ?? "").startsWith("Paste"))!;
     expect(paste.getAttribute("data-disabled")).not.toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+
+describe("releasing the right button does not pick an item", () => {
+  // Radix selects a MenuItem on `pointerup` even when the `pointerdown` came
+  // from somewhere else, and near the right edge of the window the popper
+  // flips the menu onto the cursor — which is where a side panel always is.
+  // The result was a menu that flashed and ran something by itself.
+  it("swallows a pointerup the row menu never saw a pointerdown for", async () => {
+    const slot = await mountPanel();
+    const menu = await openRowMenu(slot, ARCHIVE.path);
+    const extract = itemIn(menu, "Extract");
+
+    fireEvent.pointerUp(extract, { button: 2, pointerType: "mouse" });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(slot.queryByTestId("fm-extract-dialog")).toBeNull();
+    expect(slot.queryByTestId("fm-row-menu")).not.toBeNull();
+  });
+
+  it("still runs an item that was pressed inside the menu", async () => {
+    const slot = await mountPanel();
+    const menu = await openRowMenu(slot, ARCHIVE.path);
+    const extract = itemIn(menu, "Extract");
+
+    fireEvent.pointerDown(extract, { button: 0, pointerType: "mouse" });
+    fireEvent.pointerUp(extract, { button: 0, pointerType: "mouse" });
+    fireEvent.click(extract);
+
+    expect(await slot.findByTestId("fm-extract-dialog")).toBeDefined();
+  });
+
+  it("swallows the same stray pointerup in the background menu", async () => {
+    const slot = await mountPanel();
+    const menu = await openBackgroundMenu(slot);
+    const newFolder = itemIn(menu, "New folder");
+
+    fireEvent.pointerUp(newFolder, { button: 2, pointerType: "mouse" });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(slot.queryByTestId("fm-new-folder-dialog")).toBeNull();
+    expect(slot.queryByTestId("fm-background-menu")).not.toBeNull();
   });
 });

@@ -206,7 +206,7 @@ would arm `Delete` and `F2` on rows you did not choose this session.
 
 ## Requirements
 
-- bb `>= 0.39` with `@get-bb/plugin-sdk >= 0.4.8` (Node 24).
+- bb `>= 0.40` with `@get-bb/plugin-sdk >= 0.4.21` (Node 24).
 - Archive extraction shells out to `tar`, `unzip` and `7z`/`7za`/`7zz`. Formats
   whose tool is missing are reported as unsupported instead of failing at
   extraction time; everything else works without them.

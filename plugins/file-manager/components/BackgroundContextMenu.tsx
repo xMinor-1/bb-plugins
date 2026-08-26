@@ -2,6 +2,7 @@
 //
 // Same Radix root as RowContextMenu (see that file); this is the variant the
 // panel renders when the click did not land on a row.
+import { useMenuPointerGuard } from "../hooks/useMenuPointerGuard";
 import {
   ContextMenuCheckboxItem,
   ContextMenuContent,
@@ -43,8 +44,11 @@ export function BackgroundContextMenu({
   onCopyPath,
   onSetStartFolder,
 }: BackgroundContextMenuProps) {
+  // Letting go of the right button must not run whatever it landed on.
+  const pointerGuard = useMenuPointerGuard();
+
   return (
-    <ContextMenuContent className="w-56" data-testid="fm-background-menu">
+    <ContextMenuContent className="w-56" data-testid="fm-background-menu" {...pointerGuard}>
       <ContextMenuItem disabled={!writable} onSelect={onNewFolder}>
         <Icon name="FolderPlus" className="size-4" aria-hidden="true" />
         New folder

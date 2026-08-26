@@ -127,11 +127,7 @@ export function FileLocationOpener({ path, source }: PluginFileOpenerProps) {
  * than on the reveal — opening a file link with a plain click must still show
  * the file.
  */
-export function FilePreviewOpener({
-  path,
-  source,
-  experimental_Original: Original,
-}: PluginFileOpenerProps) {
+export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerProps) {
   const [showLocation, setShowLocation] = useState(false);
 
   if (showLocation) {

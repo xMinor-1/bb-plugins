@@ -1266,7 +1266,7 @@ export default definePluginApp((app) => {
 ```
 
 `id` and `path` must match `/^[a-zA-Z0-9_-]+$/` or the whole frontend fails to
-register. Do not add `experimental_fixedTabs` in v0.1: only the active fixed tab
+register. Do not add `fixedTabs` (`experimental_fixedTabs` before SDK 0.4.16): only the active fixed tab
 is mounted and closing the panel unmounts it, which would strand tree state.
 
 ### 10.1 Panel-tab registration (v0.5)
@@ -1326,7 +1326,7 @@ app.slots.fileOpener({ id: "location", title: "File location",      extensions, 
 **Order is load-bearing.** bb matches an opener by exact extension (no
 wildcards) and, absent a Settings → *File openers* pin, uses the FIRST
 registration that matches for every automatic open — a plain click included.
-So `preview` is registered first and renders `experimental_Original` (bb's own
+So `preview` is registered first and renders the `Original` prop (bb's own
 preview) under one 40px strip naming the folder and carrying an *Open location*
 button. `location` is only ever reached from the context menu, and opens the
 file manager directly.
