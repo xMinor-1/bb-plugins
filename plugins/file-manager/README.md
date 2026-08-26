@@ -419,15 +419,15 @@ scheme and the range rules live in the [repository README](../../README.md).
 
 The BB Community catalog entry is *not* kept in this directory. It lives as
 `entries/file-manager.json` in
-[get-bb/marketplace](https://github.com/get-bb/marketplace), filed as
-[PR #90](https://github.com/get-bb/marketplace/pull/90), and that copy is the
-source of truth — a draft next to the code only goes stale, as it did between
-0.2.0 and 0.3.0. The entry resolves a source range against this repository's
-tags, so any release inside that range reaches the catalog on its own — but
-0.6.0 is outside the `^0.3.0` the open entry declares, so the range has to be
-widened there before this release shows up in the catalog. Moving the source,
-or changing the id, display name, description, tags or icon, needs a pull
-request there too.
+[get-bb/marketplace](https://github.com/get-bb/marketplace) — filed as
+[PR #90](https://github.com/get-bb/marketplace/pull/90), widened to the 0.6.x
+line in [PR #122](https://github.com/get-bb/marketplace/pull/122) — and that
+copy is the source of truth; a draft next to the code only goes stale, as it
+did between 0.2.0 and 0.3.0. The entry resolves a source range against this
+repository's tags, so any release inside that range reaches the catalog on its
+own. On a `0.x` line `^0.6.0` covers `0.6.x` only, so the next minor needs a
+new pull request there — as do moving the source, or changing the id, display
+name, description, tags or icon.
 
 ## License
 
