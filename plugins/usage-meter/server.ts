@@ -49,7 +49,22 @@ const WINDOW_MS: Record<"day" | "week", number> = {
 type UsageLimits = Awaited<
   ReturnType<BbPluginApi["sdk"]["system"]["usageLimits"]>
 >;
-type ClaudeUsage = UsageLimits["claudeCode"];
+type ClaudeUsage = UsageLimits[string];
+
+/** bb's id for the Claude Code provider: the key its usage arrives under. */
+const CLAUDE_PROVIDER_ID = "claude-code";
+/** The key the same figures came under before bb keyed the answer by provider id. */
+const LEGACY_CLAUDE_KEY = "claudeCode";
+
+/**
+ * The answer is a record of provider id → usage, and a record says nothing
+ * about which keys are actually there: an absent provider is `undefined` at
+ * runtime while the type still promises a value. Hence the explicit lookup.
+ */
+function claudeUsageOf(usage: UsageLimits): ClaudeUsage | null {
+  const byProvider = usage as Record<string, ClaudeUsage | undefined>;
+  return byProvider[CLAUDE_PROVIDER_ID] ?? byProvider[LEGACY_CLAUDE_KEY] ?? null;
+}
 
 const usageWindow = z.object({
   /** The API's English window label: "Current session", "Weekly limit", "Fable". */
@@ -172,10 +187,15 @@ export default async function plugin(bb: BbPluginApi) {
     if (inFlight) return inFlight;
     inFlight = (async () => {
       try {
-        const usage = await bb.sdk.system.usageLimits(
-          signal ? { signal } : undefined,
-        );
-        const next = toState(usage.claudeCode, current);
+        const usage = await bb.sdk.system.usageLimits({
+          providerId: CLAUDE_PROVIDER_ID,
+          ...(signal ? { signal } : {}),
+        });
+        const claude = claudeUsageOf(usage);
+        // No entry at all: this bb has no Claude Code provider to ask.
+        const next = claude
+          ? toState(claude, current)
+          : { ...UNKNOWN, status: "not_installed" as const, fetchedAt: new Date().toISOString() };
         const key = next.status === "ok" ? "" : `${next.status}:${next.message ?? ""}`;
         if (key !== complaint) {
           complaint = key;
