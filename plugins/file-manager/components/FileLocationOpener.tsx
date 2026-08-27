@@ -35,10 +35,14 @@ type LocateState =
   | { status: "ready"; located: Located }
   | { status: "failed"; message: string };
 
-/** The folder half of an opener path, as the link itself spelled it. */
-function folderLabel(path: string): string {
+/**
+ * The folder half of an opener path, as the link itself spelled it, or null
+ * when there is none — a thread-storage file is named without a folder, and
+ * "This folder" said nothing while taking up the whole strip.
+ */
+function folderLabel(path: string): string | null {
   const cut = path.replace(/\/+$/u, "").lastIndexOf("/");
-  return cut <= 0 ? "This folder" : path.slice(0, cut);
+  return cut <= 0 ? null : path.slice(0, cut);
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
@@ -129,6 +133,7 @@ export function FileLocationOpener({ path, source }: PluginFileOpenerProps) {
  */
 export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerProps) {
   const [showLocation, setShowLocation] = useState(false);
+  const folder = folderLabel(path);
 
   if (showLocation) {
     return <LocationView path={path} source={source} />;
@@ -136,22 +141,29 @@ export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerPr
 
   return (
     <div className="@container flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
-        {/* The tab title already carries the file name, so this says the one
-            thing it does not: which folder the file is in. */}
-        <Icon name="Folder" className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        <span
-          className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
-          title={path}
-          data-testid="fm-opener-folder"
-        >
-          {folderLabel(path)}
-        </span>
+      {/* Kept to one thin line: BB's preview already has a header of its own
+          with the file name and its actions, so this adds the one thing it
+          does not have — where the file lives, and a way to go there. */}
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-2">
+        {folder === null ? (
+          <span className="flex-1" />
+        ) : (
+          <>
+            <Icon name="Folder" className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            <span
+              className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+              title={path}
+              data-testid="fm-opener-folder"
+            >
+              {folder}
+            </span>
+          </>
+        )}
         <Button
           type="button"
           size="sm"
           variant="ghost"
-          className="h-8 shrink-0 gap-1.5 px-2"
+          className="h-6 shrink-0 gap-1.5 px-2 text-xs"
           data-testid="fm-open-location"
           // LocationView owns the lookup, its loading state and its failure
           // text, so this only has to switch to it.
@@ -162,16 +174,17 @@ export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerPr
         </Button>
       </div>
       {/*
-       * A flex column, not a plain block, and this is the whole bug that
-       * shipped in 0.6: BB's own preview sizes itself with `flex-1`, which
-       * means nothing inside a block parent. It grew to content height with no
-       * scroll of its own — a document that would not scroll, and a tab that
-       * looked empty for anything taller than the panel. This wrapper
-       * reproduces the frame BB gives an opener (`flex h-full min-h-0 flex-1
-       * flex-col overflow-hidden`) so the preview lands in exactly the box it
-       * would have had without us.
+       * This wrapper is the scroller, and that is not a detail: BB's preview
+       * picks its layout per file type. Code, CSV and iframes take
+       * `h-full min-h-0` and scroll inside themselves; a rendered markdown
+       * document takes `min-h-full` and grows to its content, expecting
+       * whatever holds it to scroll. BB's own opener frame is
+       * `overflow-hidden`, so with no scroller of our own a long document
+       * simply had nowhere to go — the bug reported against 0.6 and 0.7.
+       * `overflow-auto` serves both: the self-scrolling kinds never overflow
+       * it, the growing kind finally can.
        */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden" data-testid="fm-opener-body">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto" data-testid="fm-opener-body">
         <Original />
       </div>
     </div>

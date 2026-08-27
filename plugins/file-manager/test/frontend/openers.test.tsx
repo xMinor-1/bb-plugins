@@ -278,6 +278,10 @@ describe("Preview + location opener", () => {
     for (const className of ["flex", "flex-col", "flex-1", "min-h-0"]) {
       expect(body.className).toContain(className);
     }
+    // And it scrolls: a rendered markdown document grows to its content and
+    // expects its container to be the scroller, while BB's own opener frame is
+    // overflow-hidden. Without this the document had nowhere to scroll.
+    expect(body.className).toContain("overflow-auto");
     expect(body.querySelector("[data-testid='bb-preview']")).not.toBeNull();
   });
 

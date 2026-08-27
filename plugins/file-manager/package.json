@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-file-manager",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Browse, upload, download and organize files under your home folder from a bb sidebar panel.",
   "license": "MIT",
   "author": "Foma",
