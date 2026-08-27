@@ -37,6 +37,7 @@ export interface RowContextMenuProps {
   onCopyPath: () => void;
   onDelete: () => void;
   onSetStartFolder: (entry: FileEntry) => void;
+  onProperties: () => void;
 }
 
 export function RowContextMenu({
@@ -56,6 +57,7 @@ export function RowContextMenu({
   onCopyPath,
   onDelete,
   onSetStartFolder,
+  onProperties,
 }: RowContextMenuProps) {
   const single = entries.length === 1 ? entries[0] : undefined;
   const isDirectory = single !== undefined && effectiveKind(single) === "directory";
@@ -145,6 +147,11 @@ export function RowContextMenu({
           Set as start folder
         </ContextMenuItem>
       ) : null}
+      <ContextMenuItem onSelect={onProperties}>
+        <Icon name="Info" className="size-4" aria-hidden="true" />
+        Properties
+        <ContextMenuShortcut>Alt+Enter</ContextMenuShortcut>
+      </ContextMenuItem>
 
       <ContextMenuSeparator />
 

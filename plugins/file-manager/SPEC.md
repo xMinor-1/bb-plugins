@@ -1042,6 +1042,7 @@ components/dialogs/NewFolderDialog.tsx    FRONTEND
 components/dialogs/RenameDialog.tsx       FRONTEND
 components/dialogs/ConfirmDeleteDialog.tsx FRONTEND
 components/dialogs/ExtractDialog.tsx      FRONTEND
+components/dialogs/PropertiesDialog.tsx   FRONTEND  §8.10: one path in full, or a summary of a selection
 components/dialogs/FolderPickerDialog.tsx FRONTEND  own folder browser (native picker is macOS-only)
 hooks/useDirectory.ts                     FRONTEND  listDir + realtime refetch + sort/filter memo
 hooks/useSelection.ts                     FRONTEND  anchor/range/toggle logic
@@ -1113,6 +1114,7 @@ the row menu, where it is explicit.
 | `Enter` | open (directory) or download (file) |
 | `Backspace`, `Alt+←` | go to parent |
 | `F2` | rename (single selection only) |
+| `Alt+Enter` | properties of the selection, or of the current folder (§8.10) |
 | `Delete` | delete selection (confirmation when `confirmOnDelete`) |
 | `Ctrl/Cmd+A` | select all visible rows |
 | `Ctrl/Cmd+X` / `+C` / `+V` | cut / copy / paste |
@@ -1192,6 +1194,57 @@ Use **XMLHttpRequest**, not `fetch`: `fetch` with a `Blob` body reports no
 upload progress. `xhr.upload.onprogress` gives byte-accurate progress.
 Wire `AbortSignal` → `xhr.abort()`. Persist nothing to `localStorage` in v0.1;
 resume-after-reload works because `uploadCreate` matches the session key.
+
+### 8.10 Properties
+
+`components/dialogs/PropertiesDialog.tsx`, reached three ways: **Properties**
+in the row menu, **Properties** in the empty-space menu (which describes the
+folder on screen — there is no row to talk about), and `Alt+Enter`, which takes
+the selection when there is one and the current folder when there is not.
+`Alt+Enter` is read above the plain-`Enter` case of the keyboard map, because
+that case opens the focused row and does not look at `altKey`.
+
+**One target** is described by `pathProperties`: name, absolute path, parent,
+kind, size, modified / created / accessed times, mode in both forms
+(`-rw-r--r--` and `0644`), owner, link count, content type, and for a symlink
+its raw target plus where it resolves.
+
+Three rules the backend keeps:
+
+* **The final component is never followed.** A symlink describes *itself* — its
+  own mode, its own size (the length of the target string), its own times —
+  and reports the target separately. `resolveLink` does the clamping, exactly
+  as `statPath` does; the hard root is the one path it refuses, so that case is
+  handled explicitly (§6 rule 5).
+* **A link out of the root is named, not resolved.** `linkTarget` carries the
+  raw text so the dialog can show where it claims to point, while
+  `linkTargetPath` stays null and `escapesRoot` is true — the panel is never
+  handed a path it is not allowed to open (§6 rule 3).
+* **Only the process's own user is named.** Node exposes no `getpwuid`, and
+  parsing `/etc/passwd` would leave the hard root and answer wrongly wherever
+  users come from LDAP or SSSD. Every other owner — and every group — is a
+  number, the way `ls -n` prints it.
+
+**A folder's real size** is the one expensive question, so it stays behind a
+**Calculate size** button and its own method, `directorySize`. The walk is
+bounded on three axes (`src/properties.ts`): depth 32, 200 000 entries, and a
+5 s wall clock. Depth only prunes the branch it hit; the other two abandon the
+walk. Any of them makes the answer `partial: true` with a `stoppedBy`, and the
+dialog renders that as "over 5 MB" plus a note — a lower bound, never a total.
+
+Symlinks are not followed (a link to an ancestor would loop forever) and the
+staging directory is skipped (§6 rule 4); hidden entries *are* counted, because
+a folder's size includes its dot-files.
+
+bb's RPC has no abort channel, so a dialog closed mid-walk cannot call the walk
+off. It retires the ticket the answer would land on — every reply carries the
+ticket it was asked under — and the 5 s budget bounds what is left running.
+
+**Several rows** get a summary instead, computed from the listing rows the
+panel already holds: how many files, how many folders, and the total of the
+files whose size is known. Folders have no size in a listing and a symlink's
+`sizeBytes` is the length of its target string rather than of the file, so
+neither is added up and the dialog says so.
 
 ---
 

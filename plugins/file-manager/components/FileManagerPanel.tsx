@@ -98,6 +98,7 @@ import { ConflictDialog, type ConflictChoice } from "./dialogs/ConflictDialog";
 import { ExtractDialog, isFormatSupported, type ExtractSubmission } from "./dialogs/ExtractDialog";
 import { FolderPickerDialog } from "./dialogs/FolderPickerDialog";
 import { NewFolderDialog } from "./dialogs/NewFolderDialog";
+import { PropertiesDialog, type PropertiesTarget } from "./dialogs/PropertiesDialog";
 import { RenameDialog } from "./dialogs/RenameDialog";
 import { ContextMenu, ContextMenuTrigger } from "./ui/context-menu";
 import {
@@ -123,6 +124,7 @@ type DialogState =
   | { kind: "rename"; entry: FileEntry }
   | { kind: "delete"; entries: FileEntry[] }
   | { kind: "extract"; entry: FileEntry }
+  | { kind: "properties"; target: PropertiesTarget }
   | { kind: "picker"; mode: "move" | "copy"; paths: string[] }
   | {
       kind: "conflict";
@@ -1334,6 +1336,19 @@ export function FileManagerSurface({
     return entry === undefined ? [] : [entry];
   }, [contextTarget, entryByPath, selectedEntries, selection.selected]);
 
+  /**
+   * Properties (§8.10), from either menu and from `Alt+Enter`. Rows describe
+   * themselves; an empty list describes the folder on screen, which is the
+   * only thing the empty-space menu has to talk about.
+   */
+  const openProperties = useCallback((entries: readonly FileEntry[]) => {
+    setDialog(
+      entries.length > 0
+        ? { kind: "properties", target: { kind: "entries", entries: [...entries] } }
+        : { kind: "properties", target: { kind: "path", path: currentPathRef.current } },
+    );
+  }, []);
+
   /* -------------------------------------------------------------- */
   /* Drag & drop (§8.4)                                              */
   /* -------------------------------------------------------------- */
@@ -1624,6 +1639,14 @@ export function FileManagerSurface({
         openKeyboardContextMenu(selection.focus);
         return;
       }
+      // `Alt+Enter` is the OS-wide properties gesture (§8.3), and it has to be
+      // read here rather than in the switch below — that switch's `Enter` case
+      // opens the focused row, and it does not look at `altKey`.
+      if (event.altKey && !mod && !event.shiftKey && event.key === "Enter") {
+        event.preventDefault();
+        openProperties(selectedEntries);
+        return;
+      }
       if (mod && !event.shiftKey) {
         switch (event.key) {
           case "a":
@@ -1767,6 +1790,7 @@ export function FileManagerSurface({
       openEntry,
       openKeyboardContextMenu,
       openPathBar,
+      openProperties,
       paste,
       inlineChrome,
       requestDelete,
@@ -2095,6 +2119,7 @@ export function FileManagerSurface({
             onCopyPath={() => copyPathsToClipboard(menuEntries.map((entry) => entry.path))}
             onDelete={() => requestDelete(menuEntries)}
             onSetStartFolder={(entry) => setStartFolder(entry.path)}
+            onProperties={() => openProperties(menuEntries)}
           />
         ) : (
           <BackgroundContextMenu
@@ -2111,6 +2136,7 @@ export function FileManagerSurface({
             onCollapseAll={handleCollapseAll}
             onCopyPath={() => copyPathsToClipboard([currentPath])}
             onSetStartFolder={() => setStartFolder(currentPath)}
+            onProperties={() => openProperties([])}
           />
         )}
       </ContextMenu>
@@ -2216,6 +2242,16 @@ export function FileManagerSurface({
             if (!open) setDialog({ kind: "none" });
           }}
           onSubmit={startExtract}
+        />
+      ) : null}
+
+      {dialog.kind === "properties" ? (
+        <PropertiesDialog
+          open
+          target={dialog.target}
+          onOpenChange={(open) => {
+            if (!open) setDialog({ kind: "none" });
+          }}
         />
       ) : null}
 

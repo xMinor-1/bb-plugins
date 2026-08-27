@@ -254,6 +254,71 @@ export const fsSignalSchema = z.strictObject({
 export type FsSignal = z.infer<typeof fsSignalSchema>;
 
 /* ------------------------------------------------------------------ */
+/* Properties (§8.10)                                                  */
+/* ------------------------------------------------------------------ */
+
+/** Everything the Properties dialog shows about a single path. */
+export const pathPropertiesSchema = z.strictObject({
+  name: z.string(),
+  /** Absolute path of the entry itself — the link, never its target. */
+  path: z.string(),
+  /** Containing directory; null for the hard root, which has no parent here. */
+  parentPath: z.string().nullable(),
+  /** lstat kind: a symlink is "symlink", and its target is `targetKind`. */
+  kind: entryKindSchema,
+  targetKind: entryKindSchema.nullable(),
+  isSymlink: z.boolean(),
+  /** True when a symlink resolves outside the hard root. Not navigable. */
+  escapesRoot: z.boolean(),
+  /** Raw link text as stored on disk; null for everything but a symlink. */
+  linkTarget: z.string().nullable(),
+  /** Resolved absolute target; null when it is broken or escapes the root. */
+  linkTargetPath: z.string().nullable(),
+  /**
+   * lstat size: file bytes, symlink target length, or a directory's own inode
+   * size — never the size of a directory's contents. That is `directorySize`.
+   */
+  sizeBytes: z.number(),
+  modifiedAtMs: z.number(),
+  /** Null on a filesystem that records no birth time (rather than 1970). */
+  createdAtMs: z.number().nullable(),
+  accessedAtMs: z.number(),
+  /** Four octal digits, setuid/setgid/sticky included: "0644", "4755". */
+  modeOctal: z.string(),
+  /** The `ls -l` mode column, type character included: "drwxr-xr-x". */
+  modeText: z.string(),
+  ownerUid: z.number(),
+  ownerGid: z.number(),
+  /**
+   * Owner's name, or null. Node has no getpwuid, so only the user bb itself
+   * runs as can be named without a name-service lookup; every other owner —
+   * and every group — is reported as a number, the way `ls -n` does it.
+   */
+  ownerName: z.string().nullable(),
+  linkCount: z.number(),
+  /** MIME type guessed from the extension; null when the name says nothing. */
+  contentType: z.string().nullable(),
+});
+export type PathProperties = z.infer<typeof pathPropertiesSchema>;
+
+/** Result of the bounded recursive walk behind "Calculate size". */
+export const directorySizeSchema = z.strictObject({
+  path: z.string(),
+  /** Sum of the lstat sizes of regular files; symlinks add nothing. */
+  sizeBytes: z.number(),
+  fileCount: z.number().int(),
+  directoryCount: z.number().int(),
+  /** Entries the walk looked at, including the ones it skipped. */
+  visitedEntries: z.number().int(),
+  /** True when a limit stopped the walk: every count above is a lower bound. */
+  partial: z.boolean(),
+  /** Which limit stopped it; null when the walk saw the whole subtree. */
+  stoppedBy: z.enum(["depth", "entries", "time"]).nullable(),
+  elapsedMs: z.number(),
+});
+export type DirectorySize = z.infer<typeof directorySizeSchema>;
+
+/* ------------------------------------------------------------------ */
 /* RPC contract                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -308,6 +373,30 @@ export const fileManagerContract = defineRpcContract({
       writable: z.boolean(),
       volume: volumeSchema.nullable(),
     }),
+  },
+
+  /**
+   * Everything the Properties dialog shows about one path (§8.10).
+   *
+   * One lstat, and it never looks below the path it was given: the final
+   * component is not followed, so a symlink describes itself, and a directory
+   * reports its own inode size rather than its contents.
+   */
+  pathProperties: {
+    input: z.strictObject({ path: z.string() }),
+    output: pathPropertiesSchema,
+  },
+
+  /**
+   * Recursive size of one directory (§8.10).
+   *
+   * Separate from `pathProperties` because it can take seconds: the walk is
+   * bounded by depth, entry count and wall clock, never follows a symlink, and
+   * says `partial: true` instead of pretending the total is complete.
+   */
+  directorySize: {
+    input: z.strictObject({ path: z.string() }),
+    output: directorySizeSchema,
   },
 
   /** Stat a single path; used for deep links and after external changes. */

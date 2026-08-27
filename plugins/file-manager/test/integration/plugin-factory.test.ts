@@ -5,7 +5,7 @@
 // the host. This file loads the real factory through the fake plugin host and
 // asserts the wiring the panel depends on:
 //
-//   * all 17 contract methods are registered AND reachable (a missing handler
+//   * every contract method is registered AND reachable (a missing handler
 //     surfaces as `unknown_method`, which type-checking cannot catch because
 //     `registerRpc` spreads `deps.transfer` into the handler map);
 //   * both §5 routes are mounted, with `token` on the upload route and the
@@ -90,7 +90,7 @@ describe("registrations", () => {
   it("registers every contract method exactly once", () => {
     const registered = [...host.harness.inspection.registrations.rpcMethods].sort();
     expect(registered).toEqual(CONTRACT_METHODS);
-    expect(registered).toHaveLength(18);
+    expect(registered).toHaveLength(20);
   });
 
   it("mounts both §5 routes with the auth modes §5 requires", () => {
@@ -136,6 +136,8 @@ describe("reachability", () => {
   const probes: Record<string, unknown> = {
     getState: null,
     listDir: { path: "does-not-exist" },
+    pathProperties: { path: "does-not-exist" },
+    directorySize: { path: "does-not-exist" },
     statPath: { path: "does-not-exist" },
     searchDir: { path: "does-not-exist", query: "x" },
     createFolder: { path: "does-not-exist", name: "x" },
@@ -157,7 +159,7 @@ describe("reachability", () => {
     },
   };
 
-  it("covers all 18 methods with a probe", () => {
+  it("covers all 20 methods with a probe", () => {
     expect(Object.keys(probes).sort()).toEqual(CONTRACT_METHODS);
   });
 

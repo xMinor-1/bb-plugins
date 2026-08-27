@@ -34,6 +34,10 @@ every path is re-resolved and clamped on the server before a single byte moves.
 - **Live refresh** — every mutation is published on a realtime channel, so a
   second open panel or a finishing background job updates the listing without
   polling.
+- **Properties** — `Alt+Enter`, or **Properties** in either context menu,
+  opens a panel of everything about a file or folder: size, times, permissions,
+  owner, content type, and where a symlink really points. A folder's recursive
+  size is one button away.
 - **Hidden files** — dot-files toggle, remembered as a setting.
 - **Type or paste a path** — the breadcrumbs turn into an address bar
   (`Ctrl`/`Cmd`+`L`, the pencil button, or a click on the empty space right of
@@ -208,6 +212,31 @@ Which folders are expanded comes back with it, because that is remembered
 separately and by absolute path. The scroll position and the selection are not
 restored on purpose: they are a moment, not a place, and a restored selection
 would arm `Delete` and `F2` on rows you did not choose this session.
+
+## What exactly is this file?
+
+**Properties**, from the right-click menu or `Alt+Enter`, answers it: name and
+full path, kind, size, modified / created / accessed times, permissions in both
+the `-rw-r--r--` and the `0644` form, owner, how many hard links point at it,
+and the content type its extension implies. Right-click empty space and you get
+the same panel for the folder you are standing in.
+
+A symlink describes *itself* — its own permissions, its own times — and shows
+where it points on a separate line. If it points outside your home folder, the
+dialog says so and shows the raw target without resolving it: the panel is
+never handed a path it is not allowed to open.
+
+Folders keep their real size behind a **Calculate size** button, because
+answering it means walking the whole subtree. The walk is bounded — it stops at
+32 levels deep, at 200 000 entries, or after 5 seconds — and when a limit stops
+it, the number is shown as a lower bound ("over 5 MB") with a line saying why,
+rather than as a total that is quietly wrong. It never follows symlinks, so a
+link pointing back at a parent cannot send it round forever. Close the dialog
+and the answer is dropped.
+
+Select several rows first and you get a summary instead: how many files, how
+many folders, and the total size of the files. Folders are left out of that
+total — each one would need its own walk.
 
 ## Requirements
 
@@ -403,6 +432,7 @@ every save.
 | `components/FileManagerTab.tsx`, `hooks/useFmLocation.ts`, `components/PanelActions.tsx` | the panel-tab surface: state-held location and the compact action cluster |
 | `components/FileLocationOpener.tsx`, `src/locate.ts` | the two `fileOpener` slots and the path resolution behind them |
 | `components/SettingsSection.tsx`, `lib/start-folder.ts` | the `settingsSection` slot and the start-folder logic it shares with the panel |
+| `src/properties.ts`, `components/dialogs/PropertiesDialog.tsx` | the Properties dialog: one lstat for a path, and the bounded recursive walk behind "Calculate size" |
 | `lib/fm-tree.ts`, `hooks/useTree.ts` | the folder tree: a pure reducer plus the lazy loader around it |
 | `lib/fm-store.ts` | the two-tier client store (module scope over `localStorage`) both the expanded set and the location memory use |
 | `lib/last-folder.ts` | what "reopen where I was" remembers, and the pure rule that picks the folder to open |

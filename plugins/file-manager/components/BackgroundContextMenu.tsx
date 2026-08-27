@@ -27,6 +27,8 @@ export interface BackgroundContextMenuProps {
   onCollapseAll: () => void;
   onCopyPath: () => void;
   onSetStartFolder: () => void;
+  /** Properties of the folder on screen — there is no row to describe here. */
+  onProperties: () => void;
 }
 
 export function BackgroundContextMenu({
@@ -43,6 +45,7 @@ export function BackgroundContextMenu({
   onCollapseAll,
   onCopyPath,
   onSetStartFolder,
+  onProperties,
 }: BackgroundContextMenuProps) {
   // Letting go of the right button must not run whatever it landed on.
   const pointerGuard = useMenuPointerGuard();
@@ -93,6 +96,11 @@ export function BackgroundContextMenu({
       <ContextMenuItem onSelect={onSetStartFolder}>
         <Icon name="Pin" className="size-4" aria-hidden="true" />
         Set as start folder
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={onProperties}>
+        <Icon name="Info" className="size-4" aria-hidden="true" />
+        Properties
+        <ContextMenuShortcut>Alt+Enter</ContextMenuShortcut>
       </ContextMenuItem>
     </ContextMenuContent>
   );

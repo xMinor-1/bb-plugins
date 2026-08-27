@@ -13,6 +13,7 @@ import {
   moveEntries,
   renameEntry,
 } from "./mutations";
+import { directorySize, pathProperties } from "./properties";
 import { getRoot } from "./root";
 import type { SettingsModule } from "./settings";
 
@@ -86,6 +87,8 @@ export function createCoreHandlers(
     },
 
     listDir: (input) => listDir(input),
+    pathProperties: (input) => pathProperties(input),
+    directorySize: (input) => directorySize(input),
     statPath: (input) => statPath(input),
     resolveFileLocation: (input) => locateFile(bb, input),
     searchDir: (input) => searchDir(input),
