@@ -61,6 +61,7 @@ const PREFERENCES = {
   restoreLastFolder: true,
   sortField: "name" as const,
   sortDirection: "asc" as const,
+  viewMode: "list" as const,
 };
 
 function listingFor(path: string) {
@@ -328,6 +329,110 @@ describe("keyboard map (§8.3)", () => {
 
     expect(selectedNames(slot)).toEqual([]);
     expect(slot.queryByTestId("fm-delete-dialog")).toBeNull();
+  });
+});
+
+describe("Space — quick look (§8.9)", () => {
+  /** The panel plus a host that accepts previews, which `mountPanel` omits. */
+  async function mountPreviewing(
+    handlers: Partial<PluginRpcTestHandlers<FileManagerContract>> = baseRpc(),
+  ): Promise<RenderedSlot> {
+    const slot = renderSlot(
+      { component: registration.component },
+      { subPath: "" },
+      {
+        rpc: handlers as PluginRpcTestHandlers<FileManagerContract>,
+        openFilePreview: () => true,
+      },
+    ) as RenderedSlot;
+    await slot.findByTestId("fm-table");
+    await waitFor(() => {
+      expect(slot.queryAllByTestId("fm-row").length).toBeGreaterThan(0);
+    });
+    return slot;
+  }
+
+  it("opens the focused file in bb's preview panel, the same way a double click does", async () => {
+    const slot = await mountPreviewing();
+    const panel = slot.getByTestId("fm-panel");
+
+    fireEvent.click(rowFor(slot, A.path));
+    // Cancelled, so the listing does not page down under the cursor.
+    expect(press(panel, { key: " " })).toBe(false);
+
+    expect(slot.inspection.navigateCalls).toEqual([
+      {
+        method: "experimental_openFilePreview",
+        options: { target: { kind: "host", hostId: HOST_ID, path: A.path }, location: null },
+      },
+    ]);
+  });
+
+  it("never downloads when the host declines: a peek is not a download", async () => {
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+    // No `openFilePreview` option: the host answers false, exactly as a client
+    // with no preview surface does.
+    const slot = await mountPanel();
+
+    fireEvent.click(rowFor(slot, A.path));
+    press(slot.getByTestId("fm-panel"), { key: " " });
+
+    expect(clicked).toHaveLength(0);
+    // Enter on the same row still downloads — that is the difference.
+    press(slot.getByTestId("fm-panel"), { key: "Enter" });
+    expect(clicked).toHaveLength(1);
+  });
+
+  it("does not open a folder — that is Enter's job", async () => {
+    const slot = await mountPreviewing();
+    const panel = slot.getByTestId("fm-panel");
+
+    fireEvent.click(rowFor(slot, DOCS));
+    // Still cancelled: the cursor is on a row, and scrolling it away is not an
+    // answer to a quick look.
+    expect(press(panel, { key: " " })).toBe(false);
+
+    expect(slot.inspection.navigateCalls).toEqual([]);
+    expect(callsTo(slot, "listDir")).toHaveLength(1);
+  });
+
+  it("leaves Space to the browser when no row is focused", async () => {
+    const slot = await mountPreviewing();
+
+    expect(press(slot.getByTestId("fm-panel"), { key: " " })).toBe(true);
+    expect(slot.inspection.navigateCalls).toEqual([]);
+  });
+
+  it("leaves Space alone in the filter box and in the path bar", async () => {
+    const slot = await mountPreviewing();
+    fireEvent.click(rowFor(slot, A.path));
+
+    const search = slot.getByTestId("fm-search");
+    expect(press(search, { key: " " })).toBe(true);
+    fireEvent.change(search, { target: { value: "a b" } });
+    expect((search as HTMLInputElement).value).toBe("a b");
+
+    press(slot.getByTestId("fm-panel"), { key: "l", ctrlKey: true });
+    const input = await slot.findByTestId("fm-path-input");
+    expect(press(input, { key: " " })).toBe(true);
+
+    expect(slot.inspection.navigateCalls).toEqual([]);
+  });
+
+  it("leaves Space to the control it belongs to", async () => {
+    // A toolbar button is activated by Space. Stealing it here would refresh
+    // *and* open a preview from one keystroke.
+    const slot = await mountPreviewing();
+    fireEvent.click(rowFor(slot, A.path));
+
+    expect(press(slot.getByTestId("fm-refresh"), { key: " " })).toBe(true);
+
+    expect(slot.inspection.navigateCalls).toEqual([]);
   });
 });
 

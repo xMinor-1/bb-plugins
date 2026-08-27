@@ -131,6 +131,20 @@ export const sortFieldSchema = z.enum(["name", "size", "modified", "kind"]);
 export const sortDirectionSchema = z.enum(["asc", "desc"]);
 export const conflictPolicySchema = z.enum(["rename", "overwrite", "fail"]);
 
+/** Which surface renders the folder: the tree table, or the thumbnail grid. */
+export const viewModeSchema = z.enum(["list", "gallery"]);
+export type ViewMode = z.infer<typeof viewModeSchema>;
+
+/**
+ * Lifetime asked of `bb.sdk.files.createPreview` for a gallery's base URL.
+ *
+ * Long enough that scrolling a folder of a few hundred images never trips over
+ * an expiry mid-scroll, short enough that a URL leaked out of the page stops
+ * being a readable window into the folder within the hour. The panel renews it
+ * shortly before it lapses (hooks/usePreviewBase.ts).
+ */
+export const PREVIEW_TTL_MS = 10 * 60 * 1000;
+
 /**
  * Stable error codes. Handlers throw `Error` whose message is exactly
  * `"<code>: <human readable message>"`; the wire delivers it as
@@ -228,6 +242,13 @@ export const preferencesSchema = z.strictObject({
   restoreLastFolder: z.boolean(),
   sortField: sortFieldSchema,
   sortDirection: sortDirectionSchema,
+  /**
+   * List or gallery (§8.9). It rides here rather than in `useSettings()` for
+   * the same reason `restoreLastFolder` does: the panel has to know which
+   * surface to paint in the tick it learns the root, and a second async source
+   * racing the bootstrap would show the list for a frame and then swap it.
+   */
+  viewMode: viewModeSchema,
 });
 export type Preferences = z.infer<typeof preferencesSchema>;
 
@@ -473,6 +494,38 @@ export const fileManagerContract = defineRpcContract({
   },
 
   /**
+   * A short-lived base URL the gallery hangs its thumbnails off (§8.9).
+   *
+   * `bb.sdk.files.createPreview` mints a token-bearing URL rooted at one
+   * folder; appending a relative path to it streams that file's bytes. The
+   * panel needs exactly that and nothing else: a folder of photos is hundreds
+   * of megabytes, so reading the bytes over RPC and building data-URLs would
+   * mean holding the whole folder in the page.
+   *
+   * Not a per-file method on purpose — one call serves every tile in the
+   * folder, and the alternative is one round trip per row.
+   */
+  createPreviewUrl: {
+    input: z.strictObject({
+      /** Absolute path, or a path relative to root. "" means root. */
+      path: z.string(),
+    }),
+    output: z.strictObject({
+      /**
+       * Prefix for a *relative* path under `path`. Segments are encoded one by
+       * one (lib/preview.ts#previewUrl) — a file name may contain `/`-unsafe
+       * characters, and encoding the whole path at once would eat the
+       * separators.
+       */
+      baseUrl: z.string(),
+      /** The realpath'ed folder the URL is rooted at, echoed back. */
+      path: z.string(),
+      /** Wall-clock expiry; the panel renews shortly before it. */
+      expiresAtMs: z.number().int(),
+    }),
+  },
+
+  /**
    * Where a file link points, and which folder to open for it (§10.2).
    *
    * The path comes from a `fileOpener`, so it is relative to whatever surface
@@ -672,6 +725,7 @@ export const fileManagerContract = defineRpcContract({
       confirmOnDelete: z.boolean().optional(),
       sortField: sortFieldSchema.optional(),
       sortDirection: sortDirectionSchema.optional(),
+      viewMode: viewModeSchema.optional(),
       uploadChunkMiB: z.enum(["4", "8", "16", "32", "64"]).optional(),
     }),
     output: z.strictObject({

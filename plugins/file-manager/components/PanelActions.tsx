@@ -4,14 +4,16 @@
 // HeaderActions.tsx, wired through the panel bus). A panel tab has no title
 // bar: the host paints a tab strip and hands the plugin the whole content
 // area. So the same actions ride here, inside the toolbar, and everything the
-// wide toolbar spreads across the strip — sort, hidden files, collapse all,
-// refresh, the bookmark list — folds into the one overflow menu, because a
-// side panel is ~450px wide and the path bar has to keep its share of it.
+// wide toolbar spreads across the strip — sort, the list/gallery switch,
+// hidden files, collapse all, refresh, the bookmark list — folds into the one
+// overflow menu, because a side panel is ~450px wide and the path bar has to
+// keep its share of it.
 //
 // One action exists here and nowhere else: the jump into the thread's own
 // checkout (§10.3). Only this surface is told which thread it belongs to.
 import type { ReactNode } from "react";
 
+import type { ViewMode } from "../contract";
 import type { SortDirection, SortField } from "../hooks/useDirectory";
 import type { PanelCommand } from "./panel-bus";
 import { Button } from "./ui/button";
@@ -45,6 +47,10 @@ export interface ThreadFolderAction {
   blockedReason: string | null;
   onOpen: () => void;
 }
+const VIEW_LABELS: Record<ViewMode, string> = {
+  list: "List",
+  gallery: "Gallery",
+};
 
 export interface PanelActionsProps {
   /** False until the bootstrap lands: every action needs a folder to act on. */
@@ -55,6 +61,7 @@ export interface PanelActionsProps {
   showHidden: boolean;
   sortField: SortField;
   sortDirection: SortDirection;
+  viewMode: ViewMode;
   /** How many folders the tree has open — drives the collapse-all rule. */
   expandedCount: number;
   /**
@@ -74,6 +81,7 @@ export interface PanelActionsProps {
   onSortDirectionChange: (direction: SortDirection) => void;
   /** Null on a surface with no thread, and while the lookup is still running. */
   threadFolder?: ThreadFolderAction | null;
+  onViewModeChange: (mode: ViewMode) => void;
 }
 
 export function PanelActions({
@@ -83,12 +91,14 @@ export function PanelActions({
   showHidden,
   sortField,
   sortDirection,
+  viewMode,
   expandedCount,
   bookmarks,
   onCommand,
   onSortFieldChange,
   onSortDirectionChange,
   threadFolder = null,
+  onViewModeChange,
 }: PanelActionsProps) {
   const mutationsDisabled = !ready || !writable;
   /*
@@ -239,6 +249,29 @@ export function PanelActions({
             <Icon name="Pin" className="size-4" aria-hidden="true" />
             Set as start folder
           </DropdownMenuItem>
+
+          <DropdownMenuSeparator />
+
+          {/* A menu row rather than the wide toolbar's icon toggle: the compact
+              strip already carries the path bar, the filter and three buttons
+              in ~450px, and a sixth control there costs the path bar more
+              width than a view switch is worth. It sits next to "Sort by"
+              because it answers the same question — how this folder is shown. */}
+          <DropdownMenuLabel>View</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={viewMode}
+            onValueChange={(value) => onViewModeChange(value as ViewMode)}
+          >
+            {(Object.keys(VIEW_LABELS) as ViewMode[]).map((mode) => (
+              <DropdownMenuRadioItem
+                key={mode}
+                value={mode}
+                data-testid={`fm-panel-view-${mode}`}
+              >
+                {VIEW_LABELS[mode]}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
 
           <DropdownMenuSeparator />
 

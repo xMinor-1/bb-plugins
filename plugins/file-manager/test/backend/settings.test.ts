@@ -52,7 +52,7 @@ afterEach(async () => {
 });
 
 describe("settingsDescriptors", () => {
-  it("declares exactly the seven settings of §7.1 with their defaults", () => {
+  it("declares exactly the eight settings of §7.1 with their defaults", () => {
     expect(Object.keys(settingsDescriptors)).toEqual([
       "startFolder",
       "restoreLastFolder",
@@ -60,6 +60,7 @@ describe("settingsDescriptors", () => {
       "confirmOnDelete",
       "sortField",
       "sortDirection",
+      "viewMode",
       "uploadChunkMiB",
     ]);
     expect(settingsDescriptors.startFolder).toMatchObject({
@@ -83,6 +84,11 @@ describe("settingsDescriptors", () => {
       type: "select",
       options: ["asc", "desc"],
       default: "asc",
+    });
+    expect(settingsDescriptors.viewMode).toMatchObject({
+      type: "select",
+      options: ["list", "gallery"],
+      default: "list",
     });
     expect(settingsDescriptors.uploadChunkMiB).toMatchObject({
       type: "select",
@@ -115,6 +121,7 @@ describe("defaults and derived values", () => {
       restoreLastFolder: true,
       sortField: "name",
       sortDirection: "asc",
+      viewMode: "list",
     });
     expect(settings.chunkSizeBytes()).toBe(16 * MIB);
     await host.harness.dispose();
@@ -135,11 +142,26 @@ describe("defaults and derived values", () => {
     await host.harness.dispose();
   });
 
-  it("falls back to a sane sort when the stored enum is unknown", async () => {
+  it("falls back to a sane sort and view when the stored enum is unknown", async () => {
     // The host stores whatever the CLI wrote; the contract enums are narrower.
-    const host = makeHost({ sortField: "colour", sortDirection: "sideways" });
+    const host = makeHost({
+      sortField: "colour",
+      sortDirection: "sideways",
+      viewMode: "carousel",
+    });
     const settings = await createSettings(host.bb);
-    expect(settings.preferences()).toMatchObject({ sortField: "name", sortDirection: "asc" });
+    expect(settings.preferences()).toMatchObject({
+      sortField: "name",
+      sortDirection: "asc",
+      viewMode: "list",
+    });
+    await host.harness.dispose();
+  });
+
+  it("reads a stored gallery view back as a preference", async () => {
+    const host = makeHost({ viewMode: "gallery" });
+    const settings = await createSettings(host.bb);
+    expect(settings.preferences().viewMode).toBe("gallery");
     await host.harness.dispose();
   });
 });
@@ -203,6 +225,7 @@ describe("savePreferences", () => {
       restoreLastFolder: true,
       sortField: "size",
       sortDirection: "asc",
+      viewMode: "list",
     });
     expect(result.startFolder).toBe(root);
     expect(result.chunkSizeBytes).toBe(16 * MIB);
@@ -242,6 +265,21 @@ describe("savePreferences", () => {
     );
 
     expect(host.harness.sdk.callsTo("plugins.updateSettings")).toHaveLength(0);
+    await host.harness.dispose();
+  });
+
+  it("writes the view mode and reflects it straight away", async () => {
+    const host = makeHost();
+    const settings = await createSettings(host.bb);
+
+    const result = await settings.savePreferences({ viewMode: "gallery" });
+
+    expect(host.harness.sdk.callsTo("plugins.updateSettings")[0]?.[0]).toEqual({
+      pluginId: PLUGIN_ID,
+      values: { viewMode: "gallery" },
+    });
+    expect(result.preferences.viewMode).toBe("gallery");
+    expect(settings.preferences().viewMode).toBe("gallery");
     await host.harness.dispose();
   });
 

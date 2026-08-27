@@ -99,6 +99,7 @@ const PREFERENCES: Preferences = {
   restoreLastFolder: true,
   sortField: "name",
   sortDirection: "asc",
+  viewMode: "list",
 };
 
 /** One file per folder, named after it, so the row proves which one is open. */

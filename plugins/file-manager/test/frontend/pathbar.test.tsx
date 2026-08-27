@@ -99,6 +99,7 @@ const PREFERENCES: Preferences = {
   restoreLastFolder: true,
   sortField: "name",
   sortDirection: "asc",
+  viewMode: "list",
 };
 
 function listingFor(path: string, showHidden: boolean) {

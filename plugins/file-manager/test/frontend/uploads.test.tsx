@@ -133,6 +133,7 @@ const PREFERENCES = {
   restoreLastFolder: true,
   sortField: "name" as const,
   sortDirection: "asc" as const,
+  viewMode: "list" as const,
 };
 
 let sessionCounter = 0;

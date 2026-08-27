@@ -126,6 +126,7 @@ const PREFERENCES = {
   restoreLastFolder: true,
   sortField: "name" as const,
   sortDirection: "asc" as const,
+  viewMode: "list" as const,
 };
 
 function listingFor(path: string) {

@@ -66,6 +66,7 @@ const PREFERENCES: Preferences = {
   restoreLastFolder: true,
   sortField: "name",
   sortDirection: "asc",
+  viewMode: "list",
 };
 
 const CHUNK_BYTES = 16 * 1024 * 1024;

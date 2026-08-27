@@ -27,16 +27,19 @@ import {
   MENTION_PROVIDER_ID,
   type FileEntry,
   type FileManagerErrorCode,
+  type ViewMode,
 } from "../contract";
 import { useBookmarks } from "../hooks/useBookmarks";
 import { useClipboard } from "../hooks/useClipboard";
 import { useRouteLocation, type FmLocation } from "../hooks/useFmLocation";
 import {
+  matchesQuery,
   useDirectory,
   type ListDirResult,
   type SortDirection,
   type SortField,
 } from "../hooks/useDirectory";
+import { usePreviewBase } from "../hooks/usePreviewBase";
 import { useJobs } from "../hooks/useJobs";
 import { useSelection } from "../hooks/useSelection";
 import { threadWorkspaceBlockedText, useThreadWorkspace } from "../hooks/useThreadWorkspace";
@@ -105,6 +108,7 @@ import { BookmarkMenuItems, BookmarksMenu } from "./BookmarksMenu";
 import { EmptyState, type EmptyStateKind } from "./EmptyState";
 import { ErrorBanner } from "./ErrorBanner";
 import { effectiveKind, isFileEntry } from "./FileRow";
+import { FileGallery } from "./FileGallery";
 import { FileTable } from "./FileTable";
 import { RowContextMenu } from "./RowContextMenu";
 import { Toolbar } from "./Toolbar";
@@ -133,6 +137,9 @@ type BatchResult = RpcOutput<"moveEntries">;
 const DRAG_MIME = "application/x-bb-file-manager";
 
 const DEFAULT_ARCHIVE_SUPPORT = { zip: false, tar: false, sevenZip: false };
+
+/** Stable empty list, so the list view never re-memoises on a fresh `[]`. */
+const NO_ENTRIES: readonly FileEntry[] = [];
 
 type DialogState =
   | { kind: "none" }
@@ -318,6 +325,18 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
+/**
+ * True when the keystroke is aimed at something Space already means something
+ * to. Space activates a button, a link and a checkbox, and the quick-look
+ * binding (§8.9) bubbles up from every one of them: without this guard, Space
+ * on the toolbar's Refresh would refresh *and* open a preview from one press.
+ * `isTypingTarget` does not cover it — a button is not a typing target.
+ */
+function isActivationTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.closest('button, a[href], summary, [role="button"], [role="checkbox"]') !== null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Panel                                                               */
 /* ------------------------------------------------------------------ */
@@ -407,6 +426,9 @@ export function FileManagerSurface({
   const [confirmOnDelete, setConfirmOnDelete] = useState(true);
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  /** List or gallery (§8.9), persisted exactly like sort and hidden files. */
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const galleryView = viewMode === "gallery";
   const [query, setQuery] = useState(initialQuery);
   const queryRef = useRef(query);
   queryRef.current = query;
@@ -466,8 +488,10 @@ export function FileManagerSurface({
 
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  /** The `role="treegrid"` element: the panel's one keyboard widget (§8.3). */
+  /** The `role="treegrid"` element: the list view's keyboard widget (§8.3). */
   const gridRef = useRef<HTMLTableElement>(null);
+  /** The gallery's `role="listbox"` grid — the same widget in the other view. */
+  const galleryRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const contextRowRef = useRef<string | null>(null);
@@ -475,6 +499,15 @@ export function FileManagerSurface({
   const dragDepthRef = useRef(0);
   const subPathRef = useRef(subPath);
   subPathRef.current = subPath;
+
+  /**
+   * Focus whichever of the two surfaces is mounted. Exactly one ever is, so
+   * this is the old "focus the grid" with the view switch factored out — and
+   * focus still never lands on `<body>`, which is what the keyboard map needs.
+   */
+  const focusSurface = useCallback(() => {
+    (gridRef.current ?? galleryRef.current)?.focus();
+  }, []);
 
   /* -------------------------------------------------------------- */
   /* Bootstrap (§8.1)                                                */
@@ -494,6 +527,7 @@ export function FileManagerSurface({
         setConfirmOnDelete(result.preferences.confirmOnDelete);
         setSortField(result.preferences.sortField);
         setSortDirection(result.preferences.sortDirection);
+        setViewMode(result.preferences.viewMode);
         setStateError(null);
         // Where to open: a folder the caller asked for (§10.2), then an
         // explicit link, then the remembered folder, then the configured start
@@ -605,13 +639,50 @@ export function FileManagerSurface({
     };
   }, [pendingMoved, tree.rows, tree.visiblePaths]);
 
+  /**
+   * The gallery's own row set (§8.9): the current folder, nothing nested.
+   *
+   * The filter is applied here rather than in `useDirectory` for the same
+   * reason the tree applies its own — one implementation per surface, and the
+   * tree's has to keep the ancestors of a nested match visible, which a flat
+   * grid has no use for. `useTree` keeps running while the gallery is up: it
+   * is what the list comes back to, and its cached child listings survive the
+   * trip.
+   */
+  const galleryEntries = useMemo(() => {
+    if (!galleryView) return NO_ENTRIES;
+    const matched =
+      query.trim() === ""
+        ? directory.entries
+        : directory.entries.filter((entry) => matchesQuery(entry, query));
+    if (pendingMoved.length === 0) return matched;
+    return matched.filter(
+      (entry) => !pendingMoved.some((moved) => isSameOrDescendant(entry.path, moved)),
+    );
+  }, [directory.entries, galleryView, pendingMoved, query]);
+
+  const galleryPaths = useMemo(
+    () => galleryEntries.map((entry) => entry.path),
+    [galleryEntries],
+  );
+
+  // One short-lived URL per folder, and none at all while the list is up: the
+  // list has no thumbnails to hang off it (§8.9).
+  const previewBaseUrl = usePreviewBase({
+    path: currentPath,
+    enabled: galleryView && listingEnabled,
+  });
+
   // A listing that lands is the authority on what is really gone: release the
   // optimistic set against it instead of holding rows hostage on an error.
   useEffect(() => {
     setPendingMoved((previous) => (previous.length === 0 ? previous : []));
   }, [directory.data]);
 
-  const selection = useSelection(visiblePaths);
+  // Selection is per *surface*: only the rows the active view actually paints
+  // can be selected, so switching views prunes a selection the other view
+  // could show but this one cannot (`useSelection` drops unknown paths).
+  const selection = useSelection(galleryView ? galleryPaths : visiblePaths);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const clipboard = useClipboard();
@@ -646,11 +717,22 @@ export function FileManagerSurface({
   }, [rows]);
   const rowByPathRef = useRef(rowByPath);
   rowByPathRef.current = rowByPath;
+  /**
+   * Path → entry for whatever the user can see right now. `rowByPath` above
+   * stays list-only because it carries tree facts (depth, expanded) that the
+   * gallery has no answer for; everything that only needs the *entry* — the
+   * context menu, the selection, the keyboard's open and quick-look — reads
+   * this instead, and so works identically in both views.
+   */
   const entryByPath = useMemo(() => {
     const map = new Map<string, FileEntry>();
+    if (galleryView) {
+      for (const entry of galleryEntries) map.set(entry.path, entry);
+      return map;
+    }
     for (const [path, row] of rowByPath) map.set(path, row.entry);
     return map;
-  }, [rowByPath]);
+  }, [galleryEntries, galleryView, rowByPath]);
   const existingNames = useMemo(
     () => new Set((directory.data?.entries ?? []).map((entry) => entry.name)),
     [directory.data],
@@ -895,6 +977,18 @@ export function FileManagerSurface({
     [persist],
   );
 
+  // Focus is deliberately left alone: the switch is always made from a
+  // toolbar button or a menu item, so the grid never holds focus at that
+  // moment, and yanking it out of the control the user is standing on would
+  // be the rudest possible answer to a click.
+  const applyViewMode = useCallback(
+    (mode: ViewMode) => {
+      setViewMode(mode);
+      persist({ viewMode: mode });
+    },
+    [persist],
+  );
+
   const handleHeaderSort = useCallback(
     (field: SortField) => {
       if (field === sortField) {
@@ -1017,8 +1111,8 @@ export function FileManagerSurface({
     pathTicketRef.current += 1;
     setPathBusy(false);
     // Focus never lands on <body>: the grid is the panel's one keyboard widget.
-    if (focusGrid) gridRef.current?.focus();
-  }, []);
+    if (focusGrid) focusSurface();
+  }, [focusSurface]);
 
   const handlePathCancel = useCallback(
     (options: { focusGrid: boolean }) => {
@@ -1447,14 +1541,14 @@ export function FileManagerSurface({
 
   const handleRowClick = useCallback(
     (entry: FileEntry, event: ReactMouseEvent<HTMLElement>) => {
-      gridRef.current?.focus();
+      focusSurface();
       selectionRef.current.handleRowClick(entry.path, {
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
       });
     },
-    [],
+    [focusSurface],
   );
 
   const handleToggleSelect = useCallback((entry: FileEntry) => {
@@ -1462,11 +1556,14 @@ export function FileManagerSurface({
   }, []);
 
   /** Chevron: expansion only. Selection and anchor stay where they were. */
-  const handleToggleExpand = useCallback((entry: FileEntry) => {
-    gridRef.current?.focus();
-    selectionRef.current.setFocus(entry.path);
-    treeRef.current.toggle(entry);
-  }, []);
+  const handleToggleExpand = useCallback(
+    (entry: FileEntry) => {
+      focusSurface();
+      selectionRef.current.setFocus(entry.path);
+      treeRef.current.toggle(entry);
+    },
+    [focusSurface],
+  );
 
   const handleRetryNode = useCallback((path: string) => {
     treeRef.current.reload(path);
@@ -1790,7 +1887,10 @@ export function FileManagerSurface({
       if (isTypingTarget(event.target)) return;
       const mod = event.ctrlKey || event.metaKey;
       const focusedRow = selection.focus === null ? undefined : rowByPath.get(selection.focus);
-      const focusedEntry = focusedRow?.entry;
+      // From `entryByPath`, not from `focusedRow`: the gallery has no tree
+      // rows, and everything below that only needs the entry must work there
+      // too. In the list the two are the same object.
+      const focusedEntry = selection.focus === null ? undefined : entryByPath.get(selection.focus);
 
       if (mod && event.shiftKey && (event.key === "." || event.key === ">")) {
         event.preventDefault();
@@ -1878,6 +1978,29 @@ export function FileManagerSurface({
             openEntry(focusedEntry);
           }
           return;
+        case " ": {
+          /* Quick look (§8.9): the preview a double-click opens, without
+             leaving the keyboard. */
+          // Space is the activation key of whatever control has focus, and
+          // that meaning wins: a press on the toolbar's Refresh must not
+          // refresh *and* open a preview from one keystroke.
+          if (isActivationTarget(event.target)) return;
+          // With no row under the cursor there is nothing to look at, and
+          // Space is still the browser's page-down over the listing.
+          if (focusedEntry === undefined) return;
+          // Claimed before the outcome is known: whatever the row turns out to
+          // be, scrolling the listing out from under the cursor is not it.
+          event.preventDefault();
+          // A folder is Enter's business, not quick look's — there is nothing
+          // to preview, and opening it would make Space a second Enter. A link
+          // that leaves the root is not readable through this plugin at all.
+          if (focusedEntry.escapesRoot || effectiveKind(focusedEntry) === "directory") return;
+          // No download fallback, unlike `openEntry`: a peek that silently
+          // puts a file in the downloads folder is not a peek. A client with
+          // no preview surface simply gets nothing, which is what it can do.
+          previewEntry(focusedEntry);
+          return;
+        }
         case "Backspace":
           event.preventDefault();
           goToParent();
@@ -1886,6 +2009,13 @@ export function FileManagerSurface({
           // `Alt+ArrowRight` is the host's history-forward gesture, exactly
           // like `Alt+ArrowLeft` below — leave it alone (§8.3).
           if (event.altKey) return;
+          // In the gallery the rows run left to right, so left/right are the
+          // previous and next tile. There is no tree there to expand into.
+          if (galleryView) {
+            event.preventDefault();
+            selection.moveFocus(1, event.shiftKey);
+            return;
+          }
           // Tree semantics only: open the folder, else step into it. Never
           // preventDefault for a row that has nothing to open (§8.3).
           if (focusedRow === undefined || !focusedRow.expandable) return;
@@ -1912,6 +2042,11 @@ export function FileManagerSurface({
           if (event.altKey) {
             event.preventDefault();
             goToParent();
+            return;
+          }
+          if (galleryView) {
+            event.preventDefault();
+            selection.moveFocus(-1, event.shiftKey);
             return;
           }
           if (focusedRow === undefined) return;
@@ -1954,12 +2089,15 @@ export function FileManagerSurface({
     },
     [
       clipboard,
+      entryByPath,
+      galleryView,
       goToParent,
       openEntry,
       openKeyboardContextMenu,
       openPathBar,
       openProperties,
       paste,
+      previewEntry,
       inlineChrome,
       requestDelete,
       rowByPath,
@@ -2056,9 +2194,9 @@ export function FileManagerSurface({
       // Folding the field away has to take the filter with it, or rows stay
       // hidden behind a control that is no longer on screen.
       setQuery("");
-      gridRef.current?.focus();
+      focusSurface();
     },
-    [closePathBar],
+    [closePathBar, focusSurface],
   );
 
   useEffect(() => {
@@ -2108,6 +2246,26 @@ export function FileManagerSurface({
     onRemove: removeBookmark,
     onRefresh: bookmarks.refresh,
   };
+  /* The two surfaces are one folder shown two ways, so everything they are
+     told about it is built once, here, and handed to whichever is mounted. */
+  const surfaceLoading = directory.isLoading || !ready || redirectPending;
+  const cutPaths =
+    clipboard.clipboard?.mode === "cut"
+      ? new Set(clipboard.clipboard.paths)
+      : new Set<string>();
+  const handleParentDragOver = (event: ReactDragEvent<HTMLElement>): void => {
+    if (parentPath !== null) handleTargetDragOver(parentPath, event);
+  };
+  const emptyStateNode = (
+    <EmptyState
+      kind={emptyKind}
+      query={query}
+      root={root}
+      onClearSearch={() => setQuery("")}
+      onNewFolder={writable ? () => setDialog({ kind: "new-folder" }) : undefined}
+      onUpload={writable ? openFilePicker : undefined}
+    />
+  );
 
   return (
     <div
@@ -2135,12 +2293,14 @@ export function FileManagerSurface({
               showHidden={showHidden}
               sortField={sortField}
               sortDirection={sortDirection}
+              viewMode={viewMode}
               expandedCount={tree.expandedCount}
               bookmarks={<BookmarkMenuItems {...bookmarkItems} />}
               onCommand={runCommand}
               onSortFieldChange={applySortField}
               onSortDirectionChange={applySortDirection}
               threadFolder={threadFolder}
+              onViewModeChange={applyViewMode}
             />
           ) : null
         }
@@ -2154,6 +2314,8 @@ export function FileManagerSurface({
         sortDirection={sortDirection}
         onSortFieldChange={applySortField}
         onSortDirectionChange={applySortDirection}
+        viewMode={viewMode}
+        onViewModeChange={applyViewMode}
         showHidden={showHidden}
         onToggleHidden={toggleHidden}
         expandedCount={tree.expandedCount}
@@ -2211,7 +2373,10 @@ export function FileManagerSurface({
         </div>
       ) : null}
 
-      {tree.rowsTruncated ? (
+      {/* A tree-row cap has nothing to say about a grid of one folder: the
+          gallery never renders those rows, so the banner would be describing
+          a surface that is not on screen. */}
+      {tree.rowsTruncated && !galleryView ? (
         <div className="flex items-center gap-2 border-b border-border bg-surface-attention px-3 py-1.5 text-xs text-warning-text">
           Showing the first {String(MAX_TREE_ROWS)} rows. Collapse a folder to see more.
         </div>
@@ -2226,55 +2391,71 @@ export function FileManagerSurface({
             onClick={handleBackgroundClick}
             onContextMenu={handleContainerContextMenu}
           >
-            <FileTable
-              gridRef={gridRef}
-              rows={rows}
-              loading={directory.isLoading || !ready || redirectPending}
-              selectedPaths={selection.selected}
-              focusedPath={selection.focus}
-              cutPaths={
-                clipboard.clipboard?.mode === "cut"
-                  ? new Set(clipboard.clipboard.paths)
-                  : new Set<string>()
-              }
-              sortField={sortField}
-              sortDirection={sortDirection}
-              onSort={handleHeaderSort}
-              parentPath={parentPath}
-              onNavigateParent={goToParent}
-              dropTargetPath={dropTarget}
-              nowMs={nowMs}
-              onSelectAll={(selectAll) => {
-                if (selectAll) selection.selectAll();
-                else selection.clear();
-              }}
-              onToggleExpand={handleToggleExpand}
-              onRetryNode={handleRetryNode}
-              onRowClick={handleRowClick}
-              onRowDoubleClick={openEntry}
-              onRowContextMenu={handleRowContextMenu}
-              onToggleSelect={handleToggleSelect}
-              onRowDragStart={handleRowDragStart}
-              onRowDragOver={handleRowDragOver}
-              onRowDragLeave={handleRowDragLeave}
-              onRowDrop={noopDragHandler}
-              onRowDragEnd={handleRootDragEnd}
-              onParentDragOver={(event) => {
-                if (parentPath !== null) handleTargetDragOver(parentPath, event);
-              }}
-              onParentDragLeave={noopDragHandler}
-              onParentDrop={noopDragHandler}
-              emptyState={
-                <EmptyState
-                  kind={emptyKind}
-                  query={query}
-                  root={root}
-                  onClearSearch={() => setQuery("")}
-                  onNewFolder={writable ? () => setDialog({ kind: "new-folder" }) : undefined}
-                  onUpload={writable ? openFilePicker : undefined}
-                />
-              }
-            />
+            {/* One surface at a time, sharing every handler: selection, the
+                context menu, double-click and drag & drop are the panel's, so
+                the gallery inherits them rather than reimplementing them. */}
+            {galleryView ? (
+              <FileGallery
+                gridRef={galleryRef}
+                entries={galleryEntries}
+                loading={surfaceLoading}
+                selectedPaths={selection.selected}
+                focusedPath={selection.focus}
+                cutPaths={cutPaths}
+                dropTargetPath={dropTarget}
+                previewBaseUrl={previewBaseUrl}
+                parentPath={parentPath}
+                onNavigateParent={goToParent}
+                onRowClick={handleRowClick}
+                onRowDoubleClick={openEntry}
+                onRowContextMenu={handleRowContextMenu}
+                onToggleSelect={handleToggleSelect}
+                onRowDragStart={handleRowDragStart}
+                onRowDragOver={handleRowDragOver}
+                onRowDragLeave={handleRowDragLeave}
+                onRowDrop={noopDragHandler}
+                onRowDragEnd={handleRootDragEnd}
+                onParentDragOver={handleParentDragOver}
+                onParentDragLeave={noopDragHandler}
+                onParentDrop={noopDragHandler}
+                emptyState={emptyStateNode}
+              />
+            ) : (
+              <FileTable
+                gridRef={gridRef}
+                rows={rows}
+                loading={surfaceLoading}
+                selectedPaths={selection.selected}
+                focusedPath={selection.focus}
+                cutPaths={cutPaths}
+                sortField={sortField}
+                sortDirection={sortDirection}
+                onSort={handleHeaderSort}
+                parentPath={parentPath}
+                onNavigateParent={goToParent}
+                dropTargetPath={dropTarget}
+                nowMs={nowMs}
+                onSelectAll={(selectAll) => {
+                  if (selectAll) selection.selectAll();
+                  else selection.clear();
+                }}
+                onToggleExpand={handleToggleExpand}
+                onRetryNode={handleRetryNode}
+                onRowClick={handleRowClick}
+                onRowDoubleClick={openEntry}
+                onRowContextMenu={handleRowContextMenu}
+                onToggleSelect={handleToggleSelect}
+                onRowDragStart={handleRowDragStart}
+                onRowDragOver={handleRowDragOver}
+                onRowDragLeave={handleRowDragLeave}
+                onRowDrop={noopDragHandler}
+                onRowDragEnd={handleRootDragEnd}
+                onParentDragOver={handleParentDragOver}
+                onParentDragLeave={noopDragHandler}
+                onParentDrop={noopDragHandler}
+                emptyState={emptyStateNode}
+              />
+            )}
           </div>
         </ContextMenuTrigger>
 

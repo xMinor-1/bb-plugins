@@ -22,6 +22,12 @@ every path is re-resolved and clamped on the server before a single byte moves.
   own preview panel, so it opens as a tab beside the manager instead of
   landing in your downloads folder. A client with no preview panel downloads
   it as before, and an archive still opens the extract dialog.
+- **Quick look** — `Space` on the selected row opens the same preview without
+  taking your hands off the keyboard. It never downloads and never opens a
+  folder, so holding `↓` and tapping `Space` is a way to skim a folder.
+- **Gallery** — a grid of thumbnails instead of a list, for the folders where
+  the file names are not the point. Images are shown, everything else keeps
+  its type icon, and the choice is remembered.
 - **Download** — streamed straight from disk with `Range` support, so a 10 GB
   file costs the browser no memory. It moved to the row menu, where it is a
   deliberate choice rather than the side effect of a double-click.
@@ -73,8 +79,9 @@ Two things differ, because a panel is a ~450px column with no title bar of its
 own:
 
 - **The actions ride in the toolbar.** Upload, new folder and an overflow menu
-  sit at its right end; sort, hidden files, collapse-all and refresh live in
-  that menu instead of having their own buttons.
+  sit at its right end; sort, the list/gallery switch, hidden files,
+  collapse-all and refresh live in that menu instead of having their own
+  buttons.
 - **The filter folds into a magnifier**, so the path bar keeps a readable
   width. `Ctrl`/`Cmd`+`F` unfolds it; closing it clears the filter.
 
@@ -183,6 +190,7 @@ the folder — the two gestures are deliberately different.
 | `←` on a nested row | move the cursor to its parent row |
 | `Alt`+`←`, `Backspace` | go up one directory |
 | `Enter` | open: a folder navigates in, a file opens in bb's preview panel, an archive opens the extract dialog |
+| `Space` | quick look: open the selected file in bb's preview panel. A folder does nothing — that is `Enter`'s job — and nothing is ever downloaded |
 | `Shift`+`F10`, the Menu key | open the context menu for the row under the cursor (the empty-space menu when no row is focused) |
 | `Ctrl`/`Cmd`+`L` | edit the path: the crumbs become a text field with the full path selected |
 | `Escape` | clear the selection (in the path bar it cancels, in the filter box it clears the filter) |
@@ -209,6 +217,40 @@ Three behaviors worth knowing:
 Which folders are open is remembered per absolute path — across navigation, a
 panel remount and a bb restart. It is stored client-side and capped at 200 open
 folders. **Collapse all folders** resets it.
+
+## Gallery
+
+The button right of the filter swaps the list for a grid of thumbnails. Images
+— `png`, `jpg`, `jpeg`, `gif`, `webp`, `avif`, `bmp`, `svg` — are shown as
+themselves; everything else keeps the type icon it has in the list, with its
+name underneath. In a side panel the switch lives in the overflow menu instead,
+where the rest of the compact toolbar's controls are.
+
+Everything you can do to a row you can do to a tile, because they are the same
+handlers: click and `Ctrl`/`Shift`+click to select, right-click for the same
+menu, double-click to open, drag onto a folder to move, drop files from your
+desktop to upload. `Space` quick-looks the tile under the cursor, and `←` / `→`
+walk to the previous and next one. The filter applies as it does in the list.
+
+Two differences, both on purpose:
+
+- **The gallery shows one folder.** Expanding a folder in place is a list
+  affordance — a grid has nowhere to indent into — so tiles are always the
+  contents of the folder you are in. Your expanded folders are not forgotten:
+  switch back and the tree is as you left it.
+- **There are no column headers to sort by**, so sorting moves to the toolbar's
+  sort menu, which sorts the tiles exactly as it sorts the rows.
+
+Thumbnails are streamed, never copied into the page: the panel asks bb for one
+short-lived URL for the folder on screen and points each tile at a file under
+it, so a folder of 300 photos costs one request plus whatever your browser
+decides to fetch as you scroll — images load lazily. If your bb server is too
+old to hand out such a URL, or an image will not decode, that tile quietly
+falls back to its type icon; nothing else changes.
+
+Which view you last used is remembered as the `viewMode` setting, so the panel
+opens in it next time — including in a side panel, since both surfaces share
+the plugin's settings.
 
 ## The path bar
 
@@ -379,6 +421,7 @@ Change them in bb's settings UI, from the panel, or with
 | `confirmOnDelete` | boolean | `true` | Ask before deleting. |
 | `sortField` | `name` \| `size` \| `modified` \| `kind` | `name` | Default sort column. |
 | `sortDirection` | `asc` \| `desc` | `asc` | Default sort direction. |
+| `viewMode` | `list` \| `gallery` | `list` | Which view the panel opens in — the sortable table, or the thumbnail grid. |
 | `uploadChunkMiB` | `4` \| `8` \| `16` \| `32` \| `64` | `16` | Upload chunk size. Larger chunks are faster on fast links; smaller chunks survive flaky ones. |
 
 Toggles made in the panel are written back through the plugin's own
@@ -523,6 +566,7 @@ every save.
 | `components/SettingsSection.tsx`, `lib/start-folder.ts` | the `settingsSection` slot and the start-folder logic it shares with the panel |
 | `src/properties.ts`, `components/dialogs/PropertiesDialog.tsx` | the Properties dialog: one lstat for a path, and the bounded recursive walk behind "Calculate size" |
 | `lib/fm-tree.ts`, `hooks/useTree.ts` | the folder tree: a pure reducer plus the lazy loader around it |
+| `components/FileGallery.tsx`, `lib/preview.ts`, `hooks/usePreviewBase.ts`, `src/preview.ts` | the gallery: the tile grid, what has a thumbnail, and the short-lived folder URL they stream from |
 | `lib/fm-store.ts` | the two-tier client store (module scope over `localStorage`) both the expanded set and the location memory use |
 | `lib/last-folder.ts` | what "reopen where I was" remembers, and the pure rule that picks the folder to open |
 | `lib/fm-pathbar.ts`, `components/PathBar.tsx` | the path bar: what a pasted path means, and the strip that switches between crumbs and a text field |

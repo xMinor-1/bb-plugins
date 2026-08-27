@@ -1,12 +1,13 @@
 // components/Toolbar.tsx — the one persistent control strip.
 //
 // The path bar on the left (breadcrumbs, or a text field — PATHBAR-SPEC §3),
-// then the in-folder filter, the sort menu, the hidden-files toggle and a
-// manual refresh. Sort and hidden are persisted through `savePreferences`; the
-// filter is client-side only and is deliberately *not* in the URL (§8: a `?`
-// in a file name would break it).
+// then the in-folder filter, the list/gallery toggle, the sort menu, the
+// hidden-files toggle and a manual refresh. Sort, view and hidden are
+// persisted through `savePreferences`; the filter is client-side only and is
+// deliberately *not* in the URL (§8: a `?` in a file name would break it).
 import type { DragEvent, ReactNode, RefObject } from "react";
 
+import type { ViewMode } from "../contract";
 import type { SortDirection, SortField } from "../hooks/useDirectory";
 import { cn } from "../lib/utils";
 import { formatBytes } from "../lib/format";
@@ -36,10 +37,11 @@ export interface ToolbarProps {
    * "wide" is the nav panel: every control has its own button, and the title
    * bar carries upload / new folder / the overflow menu.
    * "compact" is a panel tab, a ~450px column with no title bar of its own:
-   * sort, hidden files, collapse-all, refresh and the bookmark list move into
-   * `actions`' overflow menu, and the filter folds into a magnifier so the
-   * path bar keeps a readable width (components/PanelActions.tsx). The
-   * bookmark *star* stays on the strip in both variants.
+   * sort, the view switch, hidden files, collapse-all, refresh and the
+   * bookmark list move into `actions`' overflow menu, and the filter folds
+   * into a magnifier so the path bar keeps a readable width
+   * (components/PanelActions.tsx). The bookmark *star* stays on the strip in
+   * both variants.
    */
   variant?: "wide" | "compact";
   /** Rendered at the trailing edge; the compact variant's action cluster. */
@@ -57,6 +59,9 @@ export interface ToolbarProps {
   sortDirection: SortDirection;
   onSortFieldChange: (field: SortField) => void;
   onSortDirectionChange: (direction: SortDirection) => void;
+  /** List or gallery (§8.9); compact hands this to the overflow menu instead. */
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
   showHidden: boolean;
   onToggleHidden: () => void;
   /** How many folders the tree currently has open — drives the disabled rule. */
@@ -112,6 +117,8 @@ export function Toolbar({
   sortDirection,
   onSortFieldChange,
   onSortDirectionChange,
+  viewMode,
+  onViewModeChange,
   showHidden,
   onToggleHidden,
   expandedCount,
@@ -256,6 +263,28 @@ export function Toolbar({
       </Button>
 
       {compact ? null : bookmarksMenu}
+
+      {compact ? null : (
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-8 w-8 shrink-0 p-0"
+        // Icon and `aria-pressed` say where you are, the label says what the
+        // click does — the same split the hidden-files toggle two buttons over
+        // already uses, so one strip does not teach two conventions.
+        aria-pressed={viewMode === "gallery"}
+        aria-label={viewMode === "gallery" ? "Show the list view" : "Show the gallery view"}
+        data-testid="fm-view-toggle"
+        onClick={() => onViewModeChange(viewMode === "gallery" ? "list" : "gallery")}
+      >
+        <Icon
+          name={viewMode === "gallery" ? "GridView" : "ListView"}
+          className="size-4"
+          aria-hidden="true"
+        />
+      </Button>
+      )}
 
       {compact ? null : (
       <DropdownMenu>

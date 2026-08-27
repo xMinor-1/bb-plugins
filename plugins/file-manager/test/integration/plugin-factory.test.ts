@@ -95,7 +95,7 @@ describe("registrations", () => {
   it("registers every contract method exactly once", () => {
     const registered = [...host.harness.inspection.registrations.rpcMethods].sort();
     expect(registered).toEqual(CONTRACT_METHODS);
-    expect(registered).toHaveLength(25);
+    expect(registered).toHaveLength(26);
   });
 
   it("mounts both §5 routes with the auth modes §5 requires", () => {
@@ -109,7 +109,7 @@ describe("registrations", () => {
     expect(routes).toContainEqual({ method: "GET", path: DOWNLOAD_ROUTE, auth: "local" });
   });
 
-  it("declares the seven §7.1 settings", () => {
+  it("declares the eight §7.1 settings", () => {
     expect(Object.keys(host.harness.inspection.registrations.settingsDescriptors)).toEqual([
       "startFolder",
       "restoreLastFolder",
@@ -117,6 +117,7 @@ describe("registrations", () => {
       "confirmOnDelete",
       "sortField",
       "sortDirection",
+      "viewMode",
       "uploadChunkMiB",
     ]);
   });
@@ -152,6 +153,7 @@ describe("reachability", () => {
     pathProperties: { path: "does-not-exist" },
     directorySize: { path: "does-not-exist" },
     statPath: { path: "does-not-exist" },
+    createPreviewUrl: { path: "does-not-exist" },
     searchDir: { path: "does-not-exist", query: "x" },
     createFolder: { path: "does-not-exist", name: "x" },
     renameEntry: { path: "does-not-exist", newName: "x" },
@@ -177,7 +179,7 @@ describe("reachability", () => {
     renameBookmark: { path: "does-not-exist", name: "x" },
   };
 
-  it("covers all 25 methods with a probe", () => {
+  it("covers all 26 methods with a probe", () => {
     expect(Object.keys(probes).sort()).toEqual(CONTRACT_METHODS);
   });
 

@@ -1035,6 +1035,7 @@ components/Toolbar.tsx                    FRONTEND  breadcrumbs + search + sort 
 components/Breadcrumbs.tsx                FRONTEND  clickable path segments, drop targets
 components/FileTable.tsx                  FRONTEND  header row, sorting, rubber-band-free multi-select
 components/FileRow.tsx                    FRONTEND  one row: icon, name, size, mtime, drag source/target
+components/FileGallery.tsx                FRONTEND  the gallery view: thumbnail grid over the same handlers (§8.9)
 components/RowContextMenu.tsx             FRONTEND  right-click menu for a selection
 components/BackgroundContextMenu.tsx      FRONTEND  right-click menu for empty space
 components/ActivityTray.tsx               FRONTEND  upload progress + extract jobs, bottom-right
@@ -1051,6 +1052,8 @@ hooks/useSelection.ts                     FRONTEND  anchor/range/toggle logic
 hooks/useClipboard.ts                     FRONTEND  cut/copy/paste state
 hooks/useUploads.ts                       FRONTEND  React binding for lib/upload-manager
 hooks/useJobs.ts                          FRONTEND  extract job list + JOB_CHANNEL
+hooks/usePreviewBase.ts                   FRONTEND  one createPreviewUrl per folder, renewed before it lapses (§8.9)
+lib/preview.ts                            FRONTEND  which entries have thumbnails, and baseUrl + name → URL (§8.9)
 lib/fm-rpc.ts                             FRONTEND  typed useRpc wrapper + error parsing
 lib/upload-manager.ts                     FRONTEND  token cache, XHR chunking, queue, resume, events
 lib/download.ts                           FRONTEND  anchor-click download helper
@@ -1114,6 +1117,7 @@ the row menu, where it is explicit.
 | `↑` / `↓` | move focus; with `Shift` extend the selection |
 | `Home` / `End` | first / last row |
 | `Enter` | open (directory) or download (file) |
+| `Space` | quick look: open the focused file in bb's preview panel (§8.9) |
 | `Backspace`, `Alt+←` | go to parent |
 | `F2` | rename (single selection only) |
 | `Alt+Enter` | properties of the selection, or of the current folder (§8.10) |
@@ -1261,6 +1265,102 @@ have mounted and so may never have published the backend's root — and asks
 `getState` for it on first open, which is also where its start folder comes
 from.
 
+### 8.9 Gallery and quick look (v0.7)
+
+Two answers to one question — *what is actually in this file?* — that the panel
+could not give before: a grid that shows the images instead of naming them, and
+a keystroke that opens the focused row in bb's preview panel.
+
+**Quick look — `Space`.** Bound in `handleKeyDown` below the `isTypingTarget`
+guard, so typing a space in the filter or in the path bar is untouched. It runs
+exactly the path a double-click runs — `previewEntry`, i.e.
+`experimental_openFilePreview` with `primaryHostId` (§8.2.1) — and differs from
+`Enter` in three ways, each deliberate:
+
+| Case | `Enter` | `Space` |
+| --- | --- | --- |
+| directory | navigates into it | nothing (there is nothing to preview) |
+| archive | opens `ExtractDialog` | previews the file |
+| host declines the preview | downloads | nothing |
+
+The download fallback is the difference that matters: a peek that silently puts
+a file in the downloads folder is not a peek. `preventDefault()` is called
+whenever a row holds the cursor — including for a folder — because the
+alternative is Space paging the listing out from under that row; with no row
+focused Space is left to the browser, per §8.3's rule about unhandled keys.
+One more guard has no equivalent anywhere else in the map: `isActivationTarget`
+skips the binding when the event target is a button, a link or a checkbox,
+because Space is *their* activation key and the panel root sees their events on
+the way up.
+
+**Gallery — `viewMode`.** A second surface for the same folder,
+`components/FileGallery.tsx`, rendered instead of `FileTable` inside the same
+scroll container and the same `ContextMenuTrigger`. Every handler is the
+panel's existing one: `handleRowClick`, `handleRowContextMenu`, `openEntry`,
+`handleRowDragStart` / `DragOver` / `DragLeave`, `handleToggleSelect`. Nothing
+about selection, the clipboard or drag & drop is reimplemented, which is what
+keeps the two views from drifting.
+
+What it deliberately does not have:
+
+* **no tree.** Expanding a folder in place is a list affordance; a grid has
+  nowhere to indent into. The gallery renders `directory.entries` for the
+  current folder only, filtered by the same query. `useTree` keeps running so
+  the list comes back with its expanded folders and cached child listings
+  intact, and the "first N rows" banner is hidden while the gallery is up —
+  it describes rows nobody can see.
+* **no sort headers.** There are no columns; the toolbar's sort menu is the
+  affordance in this view.
+* **no `..` row inside the grid.** `..` is a navigation, not a selectable
+  entry, so it renders above the listbox — a button among `role="option"`
+  children is neither valid ARIA nor reachable by the selection keys. It is
+  still a drop target.
+
+ARIA mirrors the table's treegrid one level down: the grid is
+`role="listbox" aria-multiselectable tabIndex={0}` with `aria-activedescendant`
+pointing at the focused tile, and tiles are `role="option"` with
+`aria-selected`. `ArrowLeft` / `ArrowRight` move to the previous and next tile
+— the tree meanings they carry in the list have nothing to act on here.
+
+**Thumbnails.** `createPreviewUrl` (RPC, `src/preview.ts`) clamps a folder with
+`resolveExistingDir` and hands it to `bb.sdk.files.createPreview({ rootPath,
+ttlMs: PREVIEW_TTL_MS })`; the panel appends each entry's name to the returned
+`baseUrl`, one URL-encoded segment at a time (`lib/preview.ts#previewUrl`).
+
+Three rules behind that shape:
+
+* **One call per folder, not per file.** The URL is folder-rooted, so a file
+  that appears while the gallery is open is already covered and an `fs` signal
+  costs no round trip.
+* **Bytes never travel over RPC.** A folder of photos is hundreds of megabytes;
+  reading it into JS to build data-URLs would hold all of it in the page. The
+  download route is not an option either — it is `octet-stream` +
+  `Content-Disposition` on purpose, which is the opposite of an `<img src>`.
+* **Failure is decoration failing.** A server with no preview transport rejects
+  with `unsupported`; `hooks/usePreviewBase.ts` swallows it, and every tile
+  shows its type icon. No toast: it is not the user's mistake, and it would
+  fire once per folder. A broken image (`onError`) falls back to the same icon,
+  remembered per `src` so a renewed URL gets its own attempt.
+
+`usePreviewBase` renews the URL 30 s before `expiresAtMs` while the gallery is
+open, and answers `null` for any folder but the one it was minted for — between
+a navigation and the next answer the previous folder's URL is still in state,
+and hanging a tile off it would request the wrong file.
+
+The chosen view is a preference like any other: `viewMode` in
+`preferencesSchema`, a `select` descriptor in `src/settings.ts`, written back
+through `savePreferences`. It rides in `getState` rather than `useSettings()`
+for `restoreLastFolder`'s reason — the panel must know which surface to paint
+in the tick it learns the root, not one render later.
+
+The switch lives in the toolbar in the wide chrome (one icon button, icon and
+label both naming the destination) and in the overflow menu in the compact one
+(`components/PanelActions.tsx`), because ~450px already carries the path bar,
+the filter and three buttons, and a sixth control there costs the path bar more
+width than a view switch is worth.
+
+---
+
 ### 8.10 Properties
 
 `components/dialogs/PropertiesDialog.tsx`, reached three ways: **Properties**
@@ -1383,8 +1483,6 @@ existing `navigateTo`, so the route rules of §10.1 hold unchanged.
 The two context menus of §8.2 carry the same toggle for the folder they were
 opened on — the row menu only for a single, non-escaping directory, because a
 bookmark is a place to go and a file is not one.
-
----
 
 ## 9. Visual & theming rules
 

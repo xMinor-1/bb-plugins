@@ -82,6 +82,7 @@ const STATE = {
     restoreLastFolder: true,
     sortField: "name" as const,
     sortDirection: "asc" as const,
+    viewMode: "list" as const,
   },
   chunkSizeBytes: 8 * 1024 * 1024,
   maxListEntries: 5000,

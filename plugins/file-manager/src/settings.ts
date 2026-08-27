@@ -9,6 +9,7 @@ import {
   MIN_CHUNK_BYTES,
   sortDirectionSchema,
   sortFieldSchema,
+  viewModeSchema,
   type Preferences,
 } from "../contract";
 import { fmError, mapNodeError } from "./errors";
@@ -65,6 +66,15 @@ export const settingsDescriptors = {
     options: ["asc", "desc"],
     default: "asc",
   },
+  viewMode: {
+    type: "select",
+    label: "Default view",
+    description:
+      "List shows a sortable table with folders you can expand in place. " +
+      "Gallery shows a grid of thumbnails for the current folder.",
+    options: ["list", "gallery"],
+    default: "list",
+  },
   uploadChunkMiB: {
     type: "select",
     label: "Upload chunk size (MiB)",
@@ -81,6 +91,7 @@ export interface FileManagerSettingsValues {
   confirmOnDelete: boolean;
   sortField: string;
   sortDirection: string;
+  viewMode: string;
   uploadChunkMiB: string;
 }
 
@@ -91,6 +102,7 @@ export interface SavePreferencesInput {
   confirmOnDelete?: boolean | undefined;
   sortField?: "name" | "size" | "modified" | "kind" | undefined;
   sortDirection?: "asc" | "desc" | undefined;
+  viewMode?: "list" | "gallery" | undefined;
   uploadChunkMiB?: "4" | "8" | "16" | "32" | "64" | undefined;
 }
 
@@ -121,12 +133,14 @@ function clampChunkBytes(uploadChunkMiB: string): number {
 function toPreferences(values: FileManagerSettingsValues): Preferences {
   const sortField = sortFieldSchema.safeParse(values.sortField);
   const sortDirection = sortDirectionSchema.safeParse(values.sortDirection);
+  const viewMode = viewModeSchema.safeParse(values.viewMode);
   return {
     showHiddenFiles: values.showHiddenFiles,
     confirmOnDelete: values.confirmOnDelete,
     restoreLastFolder: values.restoreLastFolder,
     sortField: sortField.success ? sortField.data : "name",
     sortDirection: sortDirection.success ? sortDirection.data : "asc",
+    viewMode: viewMode.success ? viewMode.data : "list",
   };
 }
 
@@ -178,6 +192,7 @@ export async function createSettings(bb: BbPluginApi): Promise<SettingsModule> {
       if (input.confirmOnDelete !== undefined) values.confirmOnDelete = input.confirmOnDelete;
       if (input.sortField !== undefined) values.sortField = input.sortField;
       if (input.sortDirection !== undefined) values.sortDirection = input.sortDirection;
+      if (input.viewMode !== undefined) values.viewMode = input.viewMode;
       if (input.uploadChunkMiB !== undefined) values.uploadChunkMiB = input.uploadChunkMiB;
 
       if (Object.keys(values).length > 0) {

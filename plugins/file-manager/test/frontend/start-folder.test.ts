@@ -49,6 +49,7 @@ describe("saveStartFolder", () => {
         restoreLastFolder: true,
         sortField: "name",
         sortDirection: "asc",
+        viewMode: "list",
       },
       chunkSizeBytes: 16 * 1024 * 1024,
     });
