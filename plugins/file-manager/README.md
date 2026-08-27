@@ -31,6 +31,8 @@ every path is re-resolved and clamped on the server before a single byte moves.
 - **Download** — streamed straight from disk with `Range` support, so a 10 GB
   file costs the browser no memory. It moved to the row menu, where it is a
   deliberate choice rather than the side effect of a double-click.
+- **Jump to the thread's own folder** — one button in the panel tab opens the
+  checkout the thread beside you is working in, instead of hunting for it.
 - **Hand a file to the agent** — `@` in any composer lists files from this
   machine, and *Add to chat* in the row menu does the same from the panel. The
   file is read when the message is sent, so the agent never gets a stale copy.
@@ -390,7 +392,7 @@ Straight from git, which builds during install — the released tag, or the tip
 of `main`:
 
 ```bash
-bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.6.0 \
+bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.7.0 \
   --plugin file-manager --tag-prefix file-manager/
 bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@main --plugin file-manager
 ```
@@ -588,12 +590,12 @@ scheme and the range rules live in the [repository README](../../README.md).
 The BB Community catalog entry is *not* kept in this directory. It lives as
 `entries/file-manager.json` in
 [get-bb/marketplace](https://github.com/get-bb/marketplace) — filed as
-[PR #90](https://github.com/get-bb/marketplace/pull/90), widened to the 0.6.x
+[PR #90](https://github.com/get-bb/marketplace/pull/90), widened to the 0.7.x
 line in [PR #122](https://github.com/get-bb/marketplace/pull/122) — and that
 copy is the source of truth; a draft next to the code only goes stale, as it
 did between 0.2.0 and 0.3.0. The entry resolves a source range against this
 repository's tags, so any release inside that range reaches the catalog on its
-own. On a `0.x` line `^0.6.0` covers `0.6.x` only, so the next minor needs a
+own. On a `0.x` line `^0.7.0` covers `0.7.x` only, so the next minor needs a
 new pull request there — as do moving the source, or changing the id, display
 name, description, tags or icon.
 
