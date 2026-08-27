@@ -11,6 +11,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 export { fileManagerContract } from "./contract";
 
 import { registerMentions } from "./src/mentions";
+import { createBookmarks } from "./src/bookmarks";
 import { registerRpc, type ArchiveSupport } from "./src/rpc";
 import { createSettings } from "./src/settings";
 import { getRoot, initRoot } from "./src/root";
@@ -34,6 +35,9 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   // against this value, after its own realpath.
   const root = await initRoot();
   const settings = await createSettings(bb);
+  // Synchronous on purpose: every kv access is per call, so there is nothing
+  // to warm up and nothing a failed read at load could take down (§8.11).
+  const bookmarks = createBookmarks(bb);
 
   /* ---------------- byte transfer (BACKEND-TRANSFER) ---------------- */
   const jobs = await createJobs(bb);
@@ -55,6 +59,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   /* ---------------- rpc ---------------- */
   registerRpc(bb, {
     settings,
+    bookmarks,
     archiveSupport,
     pluginVersion: PLUGIN_VERSION,
     transfer: {
@@ -106,6 +111,9 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
  *                        -> { uploadCreate, uploadStatus, uploadFinish,
  *                             uploadAbort, sweep() }
  *   src/http-routes.ts registerHttpRoutes(bb, { uploads }) -> void
+ *
+ * `src/bookmarks.ts` is BACKEND-CORE, not transfer: it carries no bytes and is
+ * handed to `registerRpc` as an ordinary dependency, like `settings`.
  *
  * All three factories are awaited, so returning a plain object is fine too.
  * `settings` is the SettingsModule from src/settings.ts (chunkSizeBytes(),

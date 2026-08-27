@@ -5,11 +5,13 @@
 // bar: the host paints a tab strip and hands the plugin the whole content
 // area. So the same actions ride here, inside the toolbar, and everything the
 // wide toolbar spreads across the strip — sort, hidden files, collapse all,
-// refresh — folds into the one overflow menu, because a side panel is ~450px
-// wide and the path bar has to keep its share of it.
+// refresh, the bookmark list — folds into the one overflow menu, because a
+// side panel is ~450px wide and the path bar has to keep its share of it.
 //
 // One action exists here and nowhere else: the jump into the thread's own
 // checkout (§10.3). Only this surface is told which thread it belongs to.
+import type { ReactNode } from "react";
+
 import type { SortDirection, SortField } from "../hooks/useDirectory";
 import type { PanelCommand } from "./panel-bus";
 import { Button } from "./ui/button";
@@ -55,6 +57,18 @@ export interface PanelActionsProps {
   sortDirection: SortDirection;
   /** How many folders the tree has open — drives the collapse-all rule. */
   expandedCount: number;
+  /**
+   * The bookmark list (§8.11), as ready-made menu items.
+   *
+   * It rides here rather than in the toolbar because a ~450px column has room
+   * for four icon buttons, and the path bar, the filter magnifier, upload, new
+   * folder, the bookmark star and this overflow already claim them. Of the two
+   * bookmark controls the star is the one that has to stay visible — it *is*
+   * the state — while the list is something you go looking for, which is
+   * exactly what an overflow menu is for. It sits at the top of the menu, not
+   * the bottom: it is the one item here that navigates.
+   */
+  bookmarks?: ReactNode;
   onCommand: (command: PanelCommand) => void;
   onSortFieldChange: (field: SortField) => void;
   onSortDirectionChange: (direction: SortDirection) => void;
@@ -70,6 +84,7 @@ export function PanelActions({
   sortField,
   sortDirection,
   expandedCount,
+  bookmarks,
   onCommand,
   onSortFieldChange,
   onSortDirectionChange,
@@ -149,13 +164,19 @@ export function PanelActions({
             <Icon name="MoreHorizontal" className="size-4" aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent align="end" className="max-h-96 w-56 overflow-y-auto">
           {blockedReason === null ? null : (
             <>
               <DropdownMenuItem disabled data-testid="fm-panel-thread-folder-blocked">
                 <Icon name="FolderGit" className="size-4" aria-hidden="true" />
                 {blockedReason}
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          {bookmarks === undefined ? null : (
+            <>
+              {bookmarks}
               <DropdownMenuSeparator />
             </>
           )}

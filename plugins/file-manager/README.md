@@ -50,6 +50,9 @@ every path is re-resolved and clamped on the server before a single byte moves.
   you leave the panel, reload the page or restart bb. A setting turns it off.
 - **Pick where it opens** — the plugin's settings page carries a folder
   browser for the start folder, so it is chosen rather than typed.
+- **Bookmark the folders you live in** — a star in the toolbar and a list
+  beside it, kept on the server, up to fifty. A folder that disappears is
+  marked rather than deleted behind your back.
 
 The panel appears in the bb sidebar as **File Manager** and is routed at
 `/plugins/file-manager/files/*`. While uploads are running, the sidebar row
@@ -291,6 +294,38 @@ and the answer is dropped.
 Select several rows first and you get a summary instead: how many files, how
 many folders, and the total size of the files. Folders are left out of that
 total — each one would need its own walk.
+## Bookmarks
+
+One start folder is one folder. Most people work in several, so the toolbar
+carries a **star**: it is lit when the folder on screen is bookmarked, and one
+click adds it or takes it away. The chevron beside the star opens the list, and
+one click on a row goes there.
+
+| Where | What is there |
+| --- | --- |
+| toolbar star | add / remove the folder on screen; lit means bookmarked |
+| the list beside it | every bookmark, in the order you added them; **Bookmark this folder** / **Remove bookmark** and **Rename this bookmark…** at the top |
+| right-click on empty space | **Bookmark this folder** / **Remove bookmark**, next to *Set as start folder* |
+| right-click on a folder row | **Bookmark** / **Remove bookmark** — folders only, one at a time |
+| the panel-tab overflow (`⋯`) | the same list, because a ~450px column has no room for a second trigger |
+
+A bookmark is a name and an absolute path. The name starts as the folder's own
+and **Rename this bookmark…** changes it — the folder on disk is untouched, so
+`~/Work/3. projects/x5transport` can be called *X5* without renaming anything.
+
+Fifty is the ceiling. The star still answers past it and says what to do
+instead of going grey.
+
+If a bookmarked folder is deleted or moved, the row does not vanish: the list
+shows it struck through and marked **Missing**, and choosing it removes the
+bookmark. Nothing self-deletes behind you — an unmounted share comes back, a
+list that quietly emptied itself does not. A bookmark that would now point
+outside the root (the same bb data directory on a machine with a different home
+folder) is dropped instead: it could never be opened from here.
+
+The list lives on the server, in the plugin's own storage, so it is the same in
+every browser and after a restart. That is deliberately different from *reopen
+the last folder*, which is one browser profile's memory of a moment.
 
 ## Requirements
 

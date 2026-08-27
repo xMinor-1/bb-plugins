@@ -4,6 +4,7 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 
 import { MAX_LIST_ENTRIES, fileManagerContract, type FileManagerContract } from "../contract";
+import type { BookmarksModule } from "./bookmarks";
 import { listDir, searchDir, statPath } from "./listing";
 import { locateFile, resolveThreadWorkspace } from "./locate";
 import {
@@ -40,6 +41,8 @@ export interface ArchiveSupport {
 
 export interface RpcDeps {
   settings: SettingsModule;
+  /** §8.11 folder shortcuts; the only reader/writer of the plugin's kv row. */
+  bookmarks: BookmarksModule;
   archiveSupport: ArchiveSupport;
   pluginVersion: string;
   transfer: TransferHandlers;
@@ -101,6 +104,11 @@ export function createCoreHandlers(
     copyEntries: (input) => copyEntries(bb, input),
 
     savePreferences: (input) => deps.settings.savePreferences(input),
+
+    listBookmarks: () => deps.bookmarks.list(),
+    addBookmark: (input) => deps.bookmarks.add(input),
+    removeBookmark: (input) => deps.bookmarks.remove(input),
+    renameBookmark: (input) => deps.bookmarks.rename(input),
   };
 }
 

@@ -40,6 +40,11 @@ export interface RowContextMenuProps {
   onDelete: () => void;
   onSetStartFolder: (entry: FileEntry) => void;
   onProperties: () => void;
+  /** True when the single directory row is already bookmarked (§8.11). */
+  bookmarked: boolean;
+  /** False only while the list has not arrived yet. */
+  canToggleBookmark: boolean;
+  onToggleBookmark: (entry: FileEntry) => void;
 }
 
 export function RowContextMenu({
@@ -61,6 +66,9 @@ export function RowContextMenu({
   onDelete,
   onSetStartFolder,
   onProperties,
+  bookmarked,
+  canToggleBookmark,
+  onToggleBookmark,
 }: RowContextMenuProps) {
   const single = entries.length === 1 ? entries[0] : undefined;
   const isDirectory = single !== undefined && effectiveKind(single) === "directory";
@@ -154,11 +162,23 @@ export function RowContextMenu({
         <Icon name="Paperclip" className="size-4" aria-hidden="true" />
         Copy path
       </ContextMenuItem>
+      {/* Folders only, and one at a time: a bookmark is a place to go, and a
+          file (or a selection of five) is not one. */}
       {single !== undefined && isDirectory && !escapes ? (
-        <ContextMenuItem onSelect={() => onSetStartFolder(single)}>
-          <Icon name="Pin" className="size-4" aria-hidden="true" />
-          Set as start folder
-        </ContextMenuItem>
+        <>
+          <ContextMenuItem onSelect={() => onSetStartFolder(single)}>
+            <Icon name="Pin" className="size-4" aria-hidden="true" />
+            Set as start folder
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!canToggleBookmark}
+            data-testid="fm-row-bookmark"
+            onSelect={() => onToggleBookmark(single)}
+          >
+            <Icon name={bookmarked ? "PinOff" : "Star"} className="size-4" aria-hidden="true" />
+            {bookmarked ? "Remove bookmark" : "Bookmark"}
+          </ContextMenuItem>
+        </>
       ) : null}
       <ContextMenuItem onSelect={onProperties}>
         <Icon name="Info" className="size-4" aria-hidden="true" />

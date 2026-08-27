@@ -984,8 +984,10 @@ Notes that are contract, not taste:
 
 ### 7.2 Storage
 
-* `bb.storage.kv` — **not used** in v0.1 (256 KB per value cap; settings cover
-  everything persistent).
+* `bb.storage.kv` — one row, `bookmarks:v1` (§8.11). Unused in v0.1: settings
+  covered everything persistent until the bookmark list, which is an ordered
+  list of records and has no descriptor type to live in. The 256 KB per-value
+  cap is what sets `MAX_BOOKMARKS`.
 * `bb.storage.database()` — **not used** in v0.1. Upload sessions live in
   sidecar JSON files precisely so the chunk handler never touches a `bb.*`
   handle that a reload can close under it.
@@ -1309,6 +1311,78 @@ panel already holds: how many files, how many folders, and the total of the
 files whose size is known. Folders have no size in a listing and a symlink's
 `sizeBytes` is the length of its target string rather than of the file, so
 neither is added up and the dialog says so.
+### 8.11 Bookmarks
+
+One `startFolder` is one folder; people work in several. A bookmark is a
+`{ path, name }` pair — an absolute folder plus the label the menu shows.
+
+**Storage.** One `bb.storage.kv` row, `bookmarks:v1`, holding the array in
+order (`src/bookmarks.ts`). It is server-side on purpose, unlike the
+last-folder memory of PATHBAR-SPEC §1: that is one browser profile's memory of
+a moment, this is a decision about this machine's folders and belongs to the
+machine. It is not a setting because §7.1 has four descriptor types and none of
+them is "list of records" — encoding JSON into the `string` type would put a
+blob on the settings form and turn every add into a read-modify-write through
+`sdk.plugins.updateSettings`. The version is in the key, so a shape change is a
+new key and never a migration.
+
+**Limits.** `MAX_BOOKMARKS = 50` and `MAX_BOOKMARK_NAME_LENGTH = 80`
+(contract.ts). The first exists because kv caps a value at 256 KB and
+50 × (PATH_MAX + a short name) fits with room to spare; the second because a
+label has to fit a menu row. The name is counted in **code points**, not bytes:
+it never becomes a file name, so §6's 255-byte rule does not apply and a byte
+budget would only punish non-Latin labels.
+
+**Path safety.** Two strengths, both from `src/root.ts`:
+
+| Operation | Clamp | Why |
+| --- | --- | --- |
+| `addBookmark` | `resolveExistingDir` — realpath, *then* the prefix test | the stored form must be one that cannot escape later, exactly like `validateStartFolder` |
+| `listBookmarks` | `normalize` + `isInside` per row | a folder that is gone has no realpath; a row outside the root is dropped, not shown |
+| `removeBookmark`, `renameBookmark` | `normalize` + `assertInside` | a dead bookmark must still be removable, and the value is only compared against stored strings — it never reaches `node:fs` |
+
+**Availability.** `listBookmarks` probes each row with `resolveExistingDir` and
+reports `available`. A missing folder is **marked, not dropped**: an unmounted
+share comes back and a list that deletes itself does not. A row whose path is
+outside the root *is* dropped — "unavailable" would invite the user to wait for
+something that can never open here.
+
+**Contract.** `listBookmarks`, `addBookmark`, `removeBookmark`,
+`renameBookmark`, appended after `savePreferences`. Every mutator answers with
+the **whole list**, so the panel replaces its state wholesale and has no
+reconciliation of its own to get wrong. `addBookmark` on a folder already
+bookmarked is a no-op (the star is a toggle, so a repeat is a double click),
+except that an explicit `name` still lands. The 51st is refused with
+`unsupported`; the panel refuses it first, with a sentence that says what to do
+(`lib/bookmarks.ts#BOOKMARKS_FULL_TEXT`).
+
+There is **no `reorderBookmarks`**. The list is insertion-ordered, and its only
+surface is a menu — not a drag surface. An RPC on a frozen contract that no
+affordance can reach is weight with no user behind it; reordering waits for a
+manage-bookmarks screen that would need it.
+
+**Frontend.** `hooks/useBookmarks.ts` holds the list and stamps every call at
+issue time, so a background re-read cannot land after a removal and undo it.
+`components/BookmarksMenu.tsx` renders the items and re-reads on every
+appearance (`available` describes *now*, and the content of a menu is mounted
+only while it is open).
+
+Placement, per chrome:
+
+| Control | Wide (nav panel) | Compact (panel tab, ~450px) |
+| --- | --- | --- |
+| star toggle | toolbar | toolbar — it *is* the state, and an overflow item cannot show state without being opened |
+| the list | its own dropdown in the toolbar | the panel-tab overflow menu (`components/PanelActions.tsx`), at the top, above Refresh |
+
+A *missing* row removes itself when selected instead of carrying a nested
+delete button: `DropdownMenuItem` renders as a `<button>` on compact
+viewports, and a button inside it would be invalid markup for an affordance
+nobody sees until they hover it. Navigation always goes through the panel's
+existing `navigateTo`, so the route rules of §10.1 hold unchanged.
+
+The two context menus of §8.2 carry the same toggle for the folder they were
+opened on — the row menu only for a single, non-escaping directory, because a
+bookmark is a place to go and a file is not one.
 
 ---
 
@@ -1578,6 +1652,7 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 | `http.test.ts` | **`registrations.httpRoutes` contains `{ method:"POST", path:"/upload/chunk", auth:"token" }`** (the fake host records auth but does not enforce it — this assertion is the only guard against regressing to `local`, which would 415 in production); download returns exact bytes, `content-type: application/octet-stream`, correct `content-disposition` incl. `filename*=UTF-8''` for a Cyrillic name; `Range: bytes=2-5` → 206 + `content-range`; `Range: bytes=999-` → 416; directory path → 404; escaping path → 403 |
 | `archives.test.ts` | zip and tar.gz extract into a subfolder; a member named `../escaped` never lands outside root; unsupported extension → `unsupported_archive`; job transitions `running → done`; cancel kills the child process and reports `canceled` |
 | `settings.test.ts` | invalid `startFolder` falls back to root; `savePreferences` calls `sdk.plugins.updateSettings` with exactly the changed keys (`harness.inspection.sdk.callsTo(...)`) |
+| `bookmarks.test.ts` | §8.11: `addBookmark` stores the realpath'ed folder and refuses `/etc`, a missing folder, a file and the 51st; `listBookmarks` marks a deleted folder `available: false` and keeps it, drops a row outside the root, dedupes and caps a corrupt row; `removeBookmark` and `renameBookmark` work on a folder that is gone and still reject an escaping path |
 
 **FRONTEND — `test/frontend/*.test.tsx`** (`loadPluginApp(() => import("../../app"))`
 — the thunk form is required, plus `renderSlot`)
@@ -1589,6 +1664,7 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 | `selection.test.tsx` | click / ctrl-click / shift-click / `Ctrl+A` / `Escape` produce the expected selections |
 | `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed |
 | `uploads.test.tsx` | dropping two `File`s calls `uploadCreate` twice and posts chunks in order (stub `XMLHttpRequest`); a 409 response resumes from `expected`; the tray shows percentages |
+| `bookmarks.test.tsx` | §8.11: the star lights up for a bookmarked folder and toggles `addBookmark` / `removeBookmark`; the list navigates through `navigateTo`; a missing row is marked and removes itself; the rename dialog sends `renameBookmark`; both context menus toggle; the compact chrome keeps the star and moves the list into the overflow; the 51st is refused client-side |
 
 ### 11.2 Shell smoke tests (copy-pasteable)
 

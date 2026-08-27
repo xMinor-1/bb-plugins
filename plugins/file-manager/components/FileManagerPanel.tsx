@@ -28,6 +28,7 @@ import {
   type FileEntry,
   type FileManagerErrorCode,
 } from "../contract";
+import { useBookmarks } from "../hooks/useBookmarks";
 import { useClipboard } from "../hooks/useClipboard";
 import { useRouteLocation, type FmLocation } from "../hooks/useFmLocation";
 import {
@@ -41,6 +42,13 @@ import { useSelection } from "../hooks/useSelection";
 import { threadWorkspaceBlockedText, useThreadWorkspace } from "../hooks/useThreadWorkspace";
 import { useTree, type UseTreeResult } from "../hooks/useTree";
 import { useUploads } from "../hooks/useUploads";
+import {
+  BOOKMARKS_FULL_TEXT,
+  BOOKMARK_ADD_FAILED_TEXT,
+  BOOKMARK_REMOVE_FAILED_TEXT,
+  BOOKMARK_RENAME_FAILED_TEXT,
+  findBookmark,
+} from "../lib/bookmarks";
 import { downloadEntry, downloadPaths } from "../lib/download";
 import {
   batchFailureText,
@@ -93,12 +101,14 @@ import {
 import type { UploadRequest } from "../lib/upload-manager";
 import { ActivityTray } from "./ActivityTray";
 import { BackgroundContextMenu } from "./BackgroundContextMenu";
+import { BookmarkMenuItems, BookmarksMenu } from "./BookmarksMenu";
 import { EmptyState, type EmptyStateKind } from "./EmptyState";
 import { ErrorBanner } from "./ErrorBanner";
 import { effectiveKind, isFileEntry } from "./FileRow";
 import { FileTable } from "./FileTable";
 import { RowContextMenu } from "./RowContextMenu";
 import { Toolbar } from "./Toolbar";
+import { BookmarkNameDialog } from "./dialogs/BookmarkNameDialog";
 import { ConfirmDeleteDialog } from "./dialogs/ConfirmDeleteDialog";
 import { ConflictDialog, type ConflictChoice } from "./dialogs/ConflictDialog";
 import { ExtractDialog, isFormatSupported, type ExtractSubmission } from "./dialogs/ExtractDialog";
@@ -131,6 +141,7 @@ type DialogState =
   | { kind: "delete"; entries: FileEntry[] }
   | { kind: "extract"; entry: FileEntry }
   | { kind: "properties"; target: PropertiesTarget }
+  | { kind: "bookmark-name"; path: string; name: string }
   | { kind: "picker"; mode: "move" | "copy"; paths: string[] }
   | {
       kind: "conflict";
@@ -605,6 +616,10 @@ export function FileManagerSurface({
   selectionRef.current = selection;
   const clipboard = useClipboard();
   const uploads = useUploads();
+  // §8.11. Independent of the bootstrap: the list is not about a folder, so it
+  // does not have to wait for one, and the star is simply disabled until it
+  // lands.
+  const bookmarks = useBookmarks();
   const refetchRef = useRef(directory.refetch);
   refetchRef.current = directory.refetch;
   const directoryDataRef = useRef(directory.data);
@@ -1360,6 +1375,51 @@ export function FileManagerSurface({
   );
 
   /* -------------------------------------------------------------- */
+  /* Bookmarks (§8.11)                                               */
+  /* -------------------------------------------------------------- */
+
+  const bookmarksRef = useRef(bookmarks);
+  bookmarksRef.current = bookmarks;
+
+  /**
+   * Add or remove, whichever the folder needs.
+   *
+   * The full-list refusal is spoken here rather than let through to the
+   * backend's `unsupported`: the panel knows the count and can say what to do
+   * about it, and a round trip to be told "no" is a round trip wasted.
+   */
+  const toggleBookmark = useCallback((path: string) => {
+    const state = bookmarksRef.current;
+    if (path === "" || state.loading) return;
+    if (state.isBookmarked(path)) {
+      void state.remove(path).catch((failure: unknown) => {
+        toast.error(errorToastText(failure, BOOKMARK_REMOVE_FAILED_TEXT));
+      });
+      return;
+    }
+    if (state.full) {
+      toast.error(BOOKMARKS_FULL_TEXT);
+      return;
+    }
+    void state.add(path).catch((failure: unknown) => {
+      toast.error(errorToastText(failure, BOOKMARK_ADD_FAILED_TEXT));
+    });
+  }, []);
+
+  /** The list's own "this folder is gone" row; see components/BookmarksMenu.tsx. */
+  const removeBookmark = useCallback((path: string) => {
+    void bookmarksRef.current.remove(path).catch((failure: unknown) => {
+      toast.error(errorToastText(failure, BOOKMARK_REMOVE_FAILED_TEXT));
+    });
+  }, []);
+
+  const openBookmarkRename = useCallback((path: string) => {
+    const bookmark = findBookmark(bookmarksRef.current.bookmarks, path);
+    if (bookmark === null) return;
+    setDialog({ kind: "bookmark-name", path: bookmark.path, name: bookmark.name });
+  }, []);
+
+  /* -------------------------------------------------------------- */
   /* Uploads                                                         */
   /* -------------------------------------------------------------- */
 
@@ -2030,6 +2090,25 @@ export function FileManagerSurface({
   const hiddenCount = directory.data?.hiddenCount ?? 0;
   const truncated = directory.data?.truncated ?? false;
 
+  /* Bookmarks (§8.11). The only thing that disables a bookmark control is not
+     knowing yet: a full list still answers, with the sentence that says what
+     to do about it (`toggleBookmark`). */
+  const currentBookmarked = bookmarks.isBookmarked(currentPath);
+  const canToggleCurrentBookmark = listingEnabled && !bookmarks.loading;
+  const rowMenuEntry = menuEntries.length === 1 ? menuEntries[0] : undefined;
+  const rowMenuBookmarked =
+    rowMenuEntry !== undefined && bookmarks.isBookmarked(rowMenuEntry.path);
+  const bookmarkItems = {
+    bookmarks: bookmarks.bookmarks,
+    currentBookmarked,
+    ready: canToggleCurrentBookmark,
+    onNavigate: navigateTo,
+    onToggleCurrent: () => toggleBookmark(currentPath),
+    onRenameCurrent: () => openBookmarkRename(currentPath),
+    onRemove: removeBookmark,
+    onRefresh: bookmarks.refresh,
+  };
+
   return (
     <div
       ref={rootRef}
@@ -2057,6 +2136,7 @@ export function FileManagerSurface({
               sortField={sortField}
               sortDirection={sortDirection}
               expandedCount={tree.expandedCount}
+              bookmarks={<BookmarkMenuItems {...bookmarkItems} />}
               onCommand={runCommand}
               onSortFieldChange={applySortField}
               onSortDirectionChange={applySortDirection}
@@ -2081,6 +2161,10 @@ export function FileManagerSurface({
         onRefresh={handleRefresh}
         refreshing={directory.isRefetching}
         hiddenCount={hiddenCount}
+        bookmarked={currentBookmarked}
+        canToggleBookmark={canToggleCurrentBookmark}
+        onToggleBookmark={() => toggleBookmark(currentPath)}
+        bookmarksMenu={<BookmarksMenu {...bookmarkItems} />}
         volume={directory.data?.volume ?? null}
         dropTargetPath={dropTarget}
         onDragOverCrumb={handleTargetDragOver}
@@ -2230,6 +2314,9 @@ export function FileManagerSurface({
             onDelete={() => requestDelete(menuEntries)}
             onSetStartFolder={(entry) => setStartFolder(entry.path)}
             onProperties={() => openProperties(menuEntries)}
+            bookmarked={rowMenuBookmarked}
+            canToggleBookmark={!bookmarks.loading}
+            onToggleBookmark={(entry) => toggleBookmark(entry.path)}
           />
         ) : (
           <BackgroundContextMenu
@@ -2247,6 +2334,9 @@ export function FileManagerSurface({
             onCopyPath={() => copyPathsToClipboard([currentPath])}
             onSetStartFolder={() => setStartFolder(currentPath)}
             onProperties={() => openProperties([])}
+            bookmarked={currentBookmarked}
+            canToggleBookmark={canToggleCurrentBookmark}
+            onToggleBookmark={() => toggleBookmark(currentPath)}
           />
         )}
       </ContextMenu>
@@ -2352,6 +2442,25 @@ export function FileManagerSurface({
             if (!open) setDialog({ kind: "none" });
           }}
           onSubmit={startExtract}
+        />
+      ) : null}
+
+      {dialog.kind === "bookmark-name" ? (
+        <BookmarkNameDialog
+          open
+          initialName={dialog.name}
+          pathLabel={dialog.path}
+          onOpenChange={(open) => {
+            if (!open) setDialog({ kind: "none" });
+          }}
+          // The dialog keeps its own inline error, so this one rejects rather
+          // than toasting: a message under the field beats a toast over a
+          // dialog the user is still looking at.
+          onSubmit={async (name) => {
+            await bookmarksRef.current.rename(dialog.path, name).catch((failure: unknown) => {
+              throw new Error(errorToastText(failure, BOOKMARK_RENAME_FAILED_TEXT));
+            });
+          }}
         />
       ) : null}
 

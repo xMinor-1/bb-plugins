@@ -29,6 +29,11 @@ export interface BackgroundContextMenuProps {
   onSetStartFolder: () => void;
   /** Properties of the folder on screen — there is no row to describe here. */
   onProperties: () => void;
+  /** True when this folder is already in the bookmark list (§8.11). */
+  bookmarked: boolean;
+  /** False only while the list has not arrived yet. */
+  canToggleBookmark: boolean;
+  onToggleBookmark: () => void;
 }
 
 export function BackgroundContextMenu({
@@ -46,6 +51,9 @@ export function BackgroundContextMenu({
   onCopyPath,
   onSetStartFolder,
   onProperties,
+  bookmarked,
+  canToggleBookmark,
+  onToggleBookmark,
 }: BackgroundContextMenuProps) {
   // Letting go of the right button must not run whatever it landed on.
   const pointerGuard = useMenuPointerGuard();
@@ -96,6 +104,16 @@ export function BackgroundContextMenu({
       <ContextMenuItem onSelect={onSetStartFolder}>
         <Icon name="Pin" className="size-4" aria-hidden="true" />
         Set as start folder
+      </ContextMenuItem>
+      {/* Next to the start folder because they answer the same question from
+          two sides: one folder you always open, many you jump between. */}
+      <ContextMenuItem
+        disabled={!canToggleBookmark}
+        data-testid="fm-background-bookmark"
+        onSelect={onToggleBookmark}
+      >
+        <Icon name={bookmarked ? "PinOff" : "Star"} className="size-4" aria-hidden="true" />
+        {bookmarked ? "Remove bookmark" : "Bookmark this folder"}
       </ContextMenuItem>
       <ContextMenuItem onSelect={onProperties}>
         <Icon name="Info" className="size-4" aria-hidden="true" />

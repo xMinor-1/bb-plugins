@@ -347,6 +347,40 @@ export const directorySizeSchema = z.strictObject({
   elapsedMs: z.number(),
 });
 export type DirectorySize = z.infer<typeof directorySizeSchema>;
+/* Bookmarks (§8.11)                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How many folders the bookmark list holds.
+ *
+ * The whole list is one `bb.storage.kv` row and kv caps a value at 256 KB, so
+ * the ceiling has to be a number that cannot blow it: 50 × (PATH_MAX 4096 +
+ * a short name + JSON overhead) still fits with room to spare. 50 is also well
+ * past the point where a menu stops being a menu.
+ */
+export const MAX_BOOKMARKS = 50;
+/**
+ * A bookmark name is a label, not a file name — it never reaches the
+ * filesystem — so the 255-byte rule of `validateName` does not apply. This is
+ * simply "long enough to be a sentence, short enough to fit a menu row".
+ */
+export const MAX_BOOKMARK_NAME_LENGTH = 80;
+
+export const bookmarkSchema = z.strictObject({
+  /** Absolute. Realpath'ed when written, re-clamped to the root when read. */
+  path: z.string(),
+  /** What the menu shows. Defaults to the folder's own base name. */
+  name: z.string(),
+  /** 0-based position in the list; the order the user added them in. */
+  order: z.number().int(),
+  /**
+   * Whether the folder is openable *right now*. A bookmark whose folder is
+   * gone is marked rather than dropped: an unmounted share or a renamed
+   * project comes back, and a list that quietly deletes itself does not.
+   */
+  available: z.boolean(),
+});
+export type Bookmark = z.infer<typeof bookmarkSchema>;
 
 /* ------------------------------------------------------------------ */
 /* RPC contract                                                        */
@@ -645,6 +679,41 @@ export const fileManagerContract = defineRpcContract({
       preferences: preferencesSchema,
       chunkSizeBytes: z.number().int(),
     }),
+  },
+
+  /* ---------------------------------------------------------------- */
+  /* Bookmarks (§8.11)                                                 */
+  /*                                                                   */
+  /* Every mutator answers with the whole list rather than with the row */
+  /* it touched: the panel then replaces its state wholesale and has no */
+  /* reconciliation of its own to get wrong, and the answer carries the */
+  /* fresh `available` flags for free.                                  */
+  /* ---------------------------------------------------------------- */
+
+  listBookmarks: {
+    input: z.null(),
+    output: z.strictObject({ bookmarks: z.array(bookmarkSchema) }),
+  },
+
+  /** Adding a folder that is already bookmarked is a no-op, not an error. */
+  addBookmark: {
+    input: z.strictObject({
+      path: z.string(),
+      /** Null (the default) means "use the folder's own name". */
+      name: z.string().nullable().default(null),
+    }),
+    output: z.strictObject({ bookmarks: z.array(bookmarkSchema) }),
+  },
+
+  /** Works on a bookmark whose folder is gone — that is the point of it. */
+  removeBookmark: {
+    input: z.strictObject({ path: z.string() }),
+    output: z.strictObject({ bookmarks: z.array(bookmarkSchema) }),
+  },
+
+  renameBookmark: {
+    input: z.strictObject({ path: z.string(), name: z.string() }),
+    output: z.strictObject({ bookmarks: z.array(bookmarkSchema) }),
   },
 });
 

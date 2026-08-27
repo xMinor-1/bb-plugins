@@ -36,9 +36,10 @@ export interface ToolbarProps {
    * "wide" is the nav panel: every control has its own button, and the title
    * bar carries upload / new folder / the overflow menu.
    * "compact" is a panel tab, a ~450px column with no title bar of its own:
-   * sort, hidden files, collapse-all and refresh move into `actions`'
-   * overflow menu, and the filter folds into a magnifier so the path bar keeps
-   * a readable width (components/PanelActions.tsx).
+   * sort, hidden files, collapse-all, refresh and the bookmark list move into
+   * `actions`' overflow menu, and the filter folds into a magnifier so the
+   * path bar keeps a readable width (components/PanelActions.tsx). The
+   * bookmark *star* stays on the strip in both variants.
    */
   variant?: "wide" | "compact";
   /** Rendered at the trailing edge; the compact variant's action cluster. */
@@ -65,6 +66,20 @@ export interface ToolbarProps {
   refreshing: boolean;
   /** How many rows the hidden filter is holding back right now. */
   hiddenCount: number;
+  /* --- bookmarks (§8.11) --- */
+  /** True when the folder on screen is in the bookmark list. */
+  bookmarked: boolean;
+  /**
+   * False only while the list has not arrived. A full list still toggles: the
+   * refusal is a sentence, not a grey button (lib/bookmarks.ts).
+   */
+  canToggleBookmark: boolean;
+  onToggleBookmark: () => void;
+  /**
+   * The bookmark *list*, as its own dropdown. Rendered in the wide toolbar
+   * only: see the compact split below.
+   */
+  bookmarksMenu?: ReactNode;
   volume: { totalBytes: number; freeBytes: number } | null;
   dropTargetPath?: string | null;
   onDragOverCrumb?: (path: string, event: DragEvent<HTMLElement>) => void;
@@ -104,6 +119,10 @@ export function Toolbar({
   onRefresh,
   refreshing,
   hiddenCount,
+  bookmarked,
+  canToggleBookmark,
+  onToggleBookmark,
+  bookmarksMenu,
   volume,
   dropTargetPath = null,
   onDragOverCrumb,
@@ -210,6 +229,33 @@ export function Toolbar({
           <Icon name={searchOpen ? "X" : "Search"} className="size-4" aria-hidden="true" />
         </Button>
       ) : null}
+
+      {/* §8.11. The star stays in *both* variants: it is the only control on
+          the strip whose state is the answer to a question ("is this folder
+          one of mine?"), and an overflow item cannot show state without being
+          opened. The list beside it is a browse action, not a per-folder one,
+          so compact hands it to the panel-tab overflow instead — a second
+          trigger button does not fit a ~450px column
+          (components/PanelActions.tsx). */}
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-8 w-8 shrink-0 p-0"
+        aria-pressed={bookmarked}
+        aria-label={bookmarked ? "Remove bookmark" : "Bookmark this folder"}
+        data-testid="fm-bookmark-toggle"
+        disabled={!canToggleBookmark}
+        onClick={onToggleBookmark}
+      >
+        <Icon
+          name="Star"
+          className={cn("size-4", bookmarked && "text-primary")}
+          aria-hidden="true"
+        />
+      </Button>
+
+      {compact ? null : bookmarksMenu}
 
       {compact ? null : (
       <DropdownMenu>
