@@ -10,6 +10,8 @@ import type { PluginRpcTestHandlers, RenderedSlot } from "@get-bb/plugin-sdk/tes
 
 import type { FileEntry, FileManagerContract } from "../../contract";
 
+const HOST_ID = "host_test";
+
 const toasts = vi.hoisted(() => ({ error: [] as string[], success: [] as string[] }));
 
 vi.mock("sonner", () => ({
@@ -68,6 +70,7 @@ function baseRpc(
       maxListEntries: 5000,
       archiveSupport: { zip: true, tar: true, sevenZip: false },
       pluginVersion: "0.1.0",
+      primaryHostId: HOST_ID,
     }),
     listDir: () => ({
       path: ROOT,

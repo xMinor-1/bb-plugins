@@ -11,6 +11,8 @@ import type { PluginRpcTestHandlers, RenderedSlot } from "@get-bb/plugin-sdk/tes
 
 import type { FileEntry, FileManagerContract } from "../../contract";
 
+const HOST_ID = "host_test";
+
 const toasts = vi.hoisted(() => ({
   error: [] as string[],
   success: [] as string[],
@@ -85,6 +87,7 @@ const STATE = {
   maxListEntries: 5000,
   archiveSupport: { zip: true, tar: true, sevenZip: false },
   pluginVersion: "0.1.0",
+  primaryHostId: HOST_ID,
 };
 
 const README = makeEntry({ name: "readme.md", sizeBytes: 1536 });
@@ -449,7 +452,87 @@ describe("FileManagerPanel navigation (§8.2)", () => {
     expect(listDirCalls(slot)[0]?.input).toEqual({ path: deep, showHidden: false });
   });
 
-  it("downloads a file on double click and refuses a link that leaves the root", async () => {
+  it("opens a file in bb's preview panel on double click (§8.2)", async () => {
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+
+    const slot = mount(rpcFor({ [ROOT]: listing(ROOT, [README]) }), {}, {
+      openFilePreview: () => true,
+    });
+    await slot.findByText("readme.md");
+
+    fireEvent.doubleClick(
+      slot.getAllByTestId("fm-row").find((row) => row.getAttribute("data-fm-path") === README.path)!,
+    );
+
+    expect(slot.inspection.navigateCalls).toEqual([
+      {
+        method: "experimental_openFilePreview",
+        options: {
+          target: { kind: "host", hostId: HOST_ID, path: README.path },
+          location: null,
+        },
+      },
+    ]);
+    // The preview took it, so nothing is downloaded.
+    expect(clicked).toHaveLength(0);
+  });
+
+  it("falls back to downloading when the host declines the preview", async () => {
+    // A client with no preview surface answers false; the file still has to
+    // arrive somehow, which is what double-click did before 0.7.
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+
+    const slot = mount(rpcFor({ [ROOT]: listing(ROOT, [README]) }), {}, {
+      openFilePreview: () => false,
+    });
+    await slot.findByText("readme.md");
+
+    fireEvent.doubleClick(
+      slot.getAllByTestId("fm-row").find((row) => row.getAttribute("data-fm-path") === README.path)!,
+    );
+
+    expect(clicked).toHaveLength(1);
+    expect(clicked[0]).toContain("/api/v1/plugins/file-manager/http/download?path=");
+    expect(clicked[0]).toContain(encodeURIComponent(README.path));
+  });
+
+  it("downloads instead of previewing when the server could not name its host", async () => {
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+
+    const slot = mount(
+      {
+        ...rpcFor({ [ROOT]: listing(ROOT, [README]) }),
+        getState: () => ({ ...STATE, primaryHostId: null }),
+      },
+      {},
+      { openFilePreview: () => true },
+    );
+    await slot.findByText("readme.md");
+
+    fireEvent.doubleClick(
+      slot.getAllByTestId("fm-row").find((row) => row.getAttribute("data-fm-path") === README.path)!,
+    );
+
+    expect(slot.inspection.navigateCalls).toHaveLength(0);
+    expect(clicked).toHaveLength(1);
+  });
+
+  it("refuses a link that leaves the root, without previewing or downloading", async () => {
     const clicked: string[] = [];
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
       this: HTMLAnchorElement,
@@ -464,17 +547,18 @@ describe("FileManagerPanel navigation (§8.2)", () => {
       isSymlink: true,
       escapesRoot: true,
     });
-    const slot = mount(rpcFor({ [ROOT]: listing(ROOT, [README, escaping]) }));
+    const slot = mount(rpcFor({ [ROOT]: listing(ROOT, [README, escaping]) }), {}, {
+      openFilePreview: () => true,
+    });
     await slot.findByText("readme.md");
 
-    const rows = slot.getAllByTestId("fm-row");
-    fireEvent.doubleClick(rows.find((row) => row.getAttribute("data-fm-path") === README.path)!);
-    expect(clicked).toHaveLength(1);
-    expect(clicked[0]).toContain("/api/v1/plugins/file-manager/http/download?path=");
-    expect(clicked[0]).toContain(encodeURIComponent(README.path));
+    fireEvent.doubleClick(
+      slot
+        .getAllByTestId("fm-row")
+        .find((row) => row.getAttribute("data-fm-path") === escaping.path)!,
+    );
 
-    fireEvent.doubleClick(rows.find((row) => row.getAttribute("data-fm-path") === escaping.path)!);
-    expect(clicked).toHaveLength(1);
+    expect(clicked).toHaveLength(0);
     expect(toasts.error).toContain("Link points outside /home/coder");
     expect(slot.inspection.navigateCalls).toHaveLength(0);
   });

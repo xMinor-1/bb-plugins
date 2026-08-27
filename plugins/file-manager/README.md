@@ -18,8 +18,13 @@ every path is re-resolved and clamped on the server before a single byte moves.
   directory. Children are fetched on first open and cached afterwards.
 - **Upload** — drag and drop files or whole folders. Uploads are chunked,
   resumable, and keep running while you browse elsewhere in bb.
+- **Open a file to read it** — double-click (or `Enter`) hands the file to bb's
+  own preview panel, so it opens as a tab beside the manager instead of
+  landing in your downloads folder. A client with no preview panel downloads
+  it as before, and an archive still opens the extract dialog.
 - **Download** — streamed straight from disk with `Range` support, so a 10 GB
-  file costs the browser no memory.
+  file costs the browser no memory. It moved to the row menu, where it is a
+  deliberate choice rather than the side effect of a double-click.
 - **Organize** — new folder, rename, delete, cut / copy / paste, drag to move.
   Batch operations report a result per path, and name collisions become
   `name (1).ext` instead of silently overwriting.
@@ -116,7 +121,7 @@ the folder — the two gestures are deliberately different.
 | `←` on an expanded folder | collapse it |
 | `←` on a nested row | move the cursor to its parent row |
 | `Alt`+`←`, `Backspace` | go up one directory |
-| `Enter` | open: a folder navigates in, a file downloads, an archive opens the extract dialog |
+| `Enter` | open: a folder navigates in, a file opens in bb's preview panel, an archive opens the extract dialog |
 | `Shift`+`F10`, the Menu key | open the context menu for the row under the cursor (the empty-space menu when no row is focused) |
 | `Ctrl`/`Cmd`+`L` | edit the path: the crumbs become a text field with the full path selected |
 | `Escape` | clear the selection (in the path bar it cancels, in the filter box it clears the filter) |

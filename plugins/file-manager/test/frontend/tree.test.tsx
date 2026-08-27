@@ -14,6 +14,8 @@ import type { PluginRpcTestHandlers, RenderedSlot, RpcCall } from "@get-bb/plugi
 
 import type { FileEntry, FileManagerContract } from "../../contract";
 
+const HOST_ID = "host_test";
+
 const toasts = vi.hoisted(() => ({ error: [] as string[], success: [] as string[] }));
 
 vi.mock("sonner", () => ({
@@ -99,6 +101,7 @@ const STATE = {
   maxListEntries: 5000,
   archiveSupport: { zip: true, tar: true, sevenZip: false },
   pluginVersion: "0.2.0",
+  primaryHostId: HOST_ID,
 };
 
 /** Mutable per test: delete and move really do change what `listDir` returns. */

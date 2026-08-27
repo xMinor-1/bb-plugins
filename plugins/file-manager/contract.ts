@@ -276,6 +276,13 @@ export const fileManagerContract = defineRpcContract({
         sevenZip: z.boolean(),
       }),
       pluginVersion: z.string(),
+      /**
+       * The host bb itself runs on — the machine whose home folder is the root
+       * (§8.2). The panel needs it to hand a file to bb's preview panel, which
+       * addresses a live file by host id. Null when the server could not name
+       * it, and then a double-click downloads as it did before 0.7.
+       */
+      primaryHostId: z.string().nullable(),
     }),
   },
 

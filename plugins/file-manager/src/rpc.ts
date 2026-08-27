@@ -44,6 +44,28 @@ export interface RpcDeps {
   transfer: TransferHandlers;
 }
 
+/**
+ * The id of the machine bb runs on, which is the machine this plugin reads.
+ *
+ * Resolved once and remembered: `getState` runs on every panel mount, and the
+ * answer cannot change without a server restart. A failure is not fatal — the
+ * panel falls back to downloading a double-clicked file — so it is cached as
+ * "unknown" only for this call and retried on the next one.
+ */
+async function resolvePrimaryHostId(bb: BbPluginApi): Promise<string | null> {
+  if (cachedPrimaryHostId !== undefined) return cachedPrimaryHostId;
+  try {
+    const config = await bb.sdk.system.config();
+    cachedPrimaryHostId = config.primaryHostId;
+    return cachedPrimaryHostId;
+  } catch (error) {
+    bb.log.warn(`could not resolve the primary host: ${String(error)}`);
+    return null;
+  }
+}
+
+let cachedPrimaryHostId: string | null | undefined;
+
 /** The metadata half of the contract — everything that never carries bytes. */
 export function createCoreHandlers(
   bb: BbPluginApi,
@@ -53,6 +75,7 @@ export function createCoreHandlers(
     async getState() {
       return {
         root: getRoot(),
+        primaryHostId: await resolvePrimaryHostId(bb),
         startFolder: await deps.settings.resolveStartFolder(),
         preferences: deps.settings.preferences(),
         chunkSizeBytes: deps.settings.chunkSizeBytes(),

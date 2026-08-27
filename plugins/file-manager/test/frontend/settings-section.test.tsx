@@ -31,6 +31,8 @@ import type {
 
 import type { FileEntry, FileManagerContract, Preferences } from "../../contract";
 
+const HOST_ID = "host_test";
+
 const toasts = vi.hoisted(() => ({ error: [] as string[], success: [] as string[] }));
 
 vi.mock("sonner", () => ({
@@ -120,6 +122,7 @@ function stateWith(startFolder: string) {
     maxListEntries: 5000,
     archiveSupport: { zip: true, tar: true, sevenZip: false },
     pluginVersion: "0.3.0",
+    primaryHostId: HOST_ID,
   };
 }
 

@@ -21,6 +21,8 @@ import type { PluginRpcTestHandlers, RenderedSlot } from "@get-bb/plugin-sdk/tes
 
 import type { FileEntry, FileManagerContract, Preferences } from "../../contract";
 
+const HOST_ID = "host_test";
+
 const toasts = vi.hoisted(() => ({
   error: [] as string[],
   success: [] as string[],
@@ -135,6 +137,7 @@ function rpcFor(options: RpcOptions = {}): Partial<PluginRpcTestHandlers<FileMan
       maxListEntries: 5000,
       archiveSupport: { zip: true, tar: true, sevenZip: false },
       pluginVersion: "0.4.0",
+      primaryHostId: HOST_ID,
     }),
     listDir: (input) => {
       const failure = options.failures?.[input.path];

@@ -1077,9 +1077,28 @@ lib/errors.ts                             FRONTEND  parseRpcError → { code, me
 | click on the checkbox cell | toggle without clearing others; anchor moves |
 | click on empty table space | clear selection |
 | double click on a directory | navigate into it (`toPluginPanel`) |
-| double click on a file | start a download |
+| double click on a file | open it in bb's preview panel; download when that is unavailable (§8.2.1) |
 | double click on an archive | open `ExtractDialog` |
 | double click on a row with `escapesRoot` | no-op + toast "Link points outside /home/coder" |
+
+#### 8.2.1 Opening a file (v0.7)
+
+Double-click (and `Enter`) hand the file to bb's own preview panel through
+`useBbNavigate().experimental_openFilePreview({ target: { kind: "host",
+hostId, path }, location: null })`, so it opens as a tab beside the manager
+instead of downloading. bb addresses a live file by host id, which is why
+`getState` carries `primaryHostId` — `bb.sdk.system.config()` on the backend,
+resolved once and remembered.
+
+Three ways this degrades, all to the pre-0.7 download: no `primaryHostId` (an
+older server, or a config call that failed), no `experimental_openFilePreview`
+on the client's runtime, and a host that answers `false` (a surface with no
+preview panel). A throw from the host is caught for the same reason — a slot
+component that throws takes the plugin's whole UI down.
+
+An archive still opens `ExtractDialog`: there is nothing in a `.zip` to
+preview, and extracting it is what the gesture is for. Downloading stays on
+the row menu, where it is explicit.
 | right click on a row | `RowContextMenu`; if the row is not selected, select it first |
 | right click on empty space | `BackgroundContextMenu` |
 | click on a breadcrumb | navigate to that ancestor |

@@ -19,7 +19,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import type { PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
+import { useBbNavigate, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
 import { MAX_LIST_ENTRIES, type FileEntry, type FileManagerErrorCode } from "../contract";
@@ -346,8 +346,17 @@ export function FileManagerSurface({
   const initialPathRef = useRef(initialPath);
 
   const [state, setState] = useState<GetState | null>(null);
+  /** Read from callbacks that must not re-create themselves per bootstrap. */
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [stateError, setStateError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+
+  // Folder navigation goes through `location`; this is the host's navigator,
+  // which is also how a file reaches bb's preview panel.
+  const navigate = useBbNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   const root = state?.root ?? getClientRoot();
   const currentPath = useMemo(() => subPathToAbsolute(subPath, root), [subPath, root]);
@@ -1159,6 +1168,36 @@ export function FileManagerSurface({
     void downloadPaths(files.map((entry) => entry.path));
   }, []);
 
+  /**
+   * Opening a file (double-click, or Enter) shows it in bb's preview panel
+   * beside the manager rather than downloading it (§8.2).
+   *
+   * bb addresses a live file by host id, which is why `getState` carries the
+   * machine bb runs on. Everything that can go wrong here ends in the old
+   * behaviour instead of nothing: no host id (an older server, or a config
+   * call that failed), no preview surface on this client, or a host that
+   * declined the open — all fall back to the download that used to be the
+   * whole action.
+   */
+  const previewEntry = useCallback(
+    (entry: FileEntry): boolean => {
+      const hostId = stateRef.current?.primaryHostId ?? null;
+      if (hostId === null) return false;
+      const open = navigateRef.current?.experimental_openFilePreview;
+      if (typeof open !== "function") return false;
+      try {
+        return open({
+          target: { kind: "host", hostId, path: entry.path },
+          location: null,
+        });
+      } catch {
+        // A throwing host must not take the panel's UI down with it.
+        return false;
+      }
+    },
+    [],
+  );
+
   const openEntry = useCallback(
     (entry: FileEntry) => {
       if (entry.escapesRoot) {
@@ -1171,12 +1210,14 @@ export function FileManagerSurface({
         return;
       }
       if (entry.archiveFormat !== null) {
+        // An archive has nothing to preview; extracting it is the useful open.
         setDialog({ kind: "extract", entry });
         return;
       }
+      if (previewEntry(entry)) return;
       downloadEntry(entry);
     },
-    [navigateTo, root],
+    [navigateTo, previewEntry, root],
   );
 
   const startExtract = useCallback(
