@@ -2272,7 +2272,10 @@ export function FileManagerSurface({
       ref={rootRef}
       data-testid="fm-panel"
       data-current-path={currentPath}
-      className="@container relative flex h-full min-h-0 flex-col bg-background text-foreground outline-none"
+      // `flex-1` beside `h-full`: BB mounts a file opener into a flex column,
+      // where a definite height comes from the flex line rather than from the
+      // parent's box, and the panel body is the same surface either way.
+      className="@container relative flex h-full min-h-0 flex-1 flex-col bg-background text-foreground outline-none"
       onKeyDown={handleKeyDown}
       onDragEnter={handleRootDragEnter}
       onDragOver={handleRootDragOver}

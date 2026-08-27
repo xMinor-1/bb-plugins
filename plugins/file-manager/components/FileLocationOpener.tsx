@@ -135,7 +135,7 @@ export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerPr
   }
 
   return (
-    <div className="@container flex h-full min-h-0 flex-col">
+    <div className="@container flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
         {/* The tab title already carries the file name, so this says the one
             thing it does not: which folder the file is in. */}
@@ -161,7 +161,17 @@ export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerPr
           <span className="hidden @md:inline">Open location</span>
         </Button>
       </div>
-      <div className="min-h-0 flex-1">
+      {/*
+       * A flex column, not a plain block, and this is the whole bug that
+       * shipped in 0.6: BB's own preview sizes itself with `flex-1`, which
+       * means nothing inside a block parent. It grew to content height with no
+       * scroll of its own — a document that would not scroll, and a tab that
+       * looked empty for anything taller than the panel. This wrapper
+       * reproduces the frame BB gives an opener (`flex h-full min-h-0 flex-1
+       * flex-col overflow-hidden`) so the preview lands in exactly the box it
+       * would have had without us.
+       */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden" data-testid="fm-opener-body">
         <Original />
       </div>
     </div>

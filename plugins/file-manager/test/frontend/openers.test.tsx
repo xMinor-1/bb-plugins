@@ -264,6 +264,23 @@ describe("Preview + location opener", () => {
     expect(slot.inspection.rpcCalls).toHaveLength(0);
   });
 
+  it("gives BB's preview the flex frame it sizes itself against", async () => {
+    // The regression that shipped in 0.6: the preview was wrapped in a plain
+    // block, so its own `flex-1` resolved against nothing. It grew to content
+    // height with no scrollbar — the document would not scroll and a tall file
+    // looked like an empty tab. BB mounts an opener in
+    // `flex h-full min-h-0 flex-1 flex-col overflow-hidden`; anything holding
+    // the preview has to be a flex column too.
+    const slot = mountOpener(previewOpener, baseRpc());
+    await slot.findByTestId("bb-preview");
+
+    const body = slot.getByTestId("fm-opener-body");
+    for (const className of ["flex", "flex-col", "flex-1", "min-h-0"]) {
+      expect(body.className).toContain(className);
+    }
+    expect(body.querySelector("[data-testid='bb-preview']")).not.toBeNull();
+  });
+
   it("switches to the file manager on the location button", async () => {
     const slot = mountOpener(previewOpener, baseRpc());
     await slot.findByTestId("bb-preview");
