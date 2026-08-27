@@ -298,6 +298,33 @@ describe("searchDir", () => {
     expect(withHidden.entries.map((entry) => entry.name)).not.toContain("report.part");
   });
 
+  // §8.8: the mention provider asks for a short list under a wall-clock
+  // budget, because bb drops its answer after 2s and an abandoned walk would
+  // otherwise keep reading directories nobody is waiting for.
+  it("stops at `limit` matches and reports the rest as truncated", async () => {
+    const result = await searchDir({
+      path: "",
+      query: "report",
+      showHidden: false,
+      maxDepth: 4,
+      limit: 2,
+    });
+    expect(result.entries).toHaveLength(2);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("stops when the budget is spent", async () => {
+    const result = await searchDir({
+      path: "",
+      query: "report",
+      showHidden: false,
+      maxDepth: 4,
+      budgetMs: 0,
+    });
+    expect(result.entries).toEqual([]);
+    expect(result.truncated).toBe(true);
+  });
+
   it("never follows a symlinked directory", async () => {
     await mkdir(path.join(outside, "escape"));
     await writeFile(path.join(outside, "escape", "report-out.txt"), "x");

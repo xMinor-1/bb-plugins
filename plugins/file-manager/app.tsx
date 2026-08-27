@@ -20,9 +20,15 @@
 // right-click menu of a file link reveals that file in the side panel, and the
 // preview wrapper keeps the automatic per-extension pick looking like bb's own
 // preview (§10.2).
+//
+// Plus one composer customization (v0.7): a row in the "+" menu that browses
+// the machine bb runs on, and the bare banner that is the only place its
+// dialog can be mounted from (§8.8).
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 
 import { LOCATION_OPENER_EXTENSIONS, PANEL_PATH } from "./contract";
+import { composerScopeKey, requestFilePick } from "./lib/composer-bus";
+import { ComposerFilePicker } from "./components/ComposerFilePicker";
 import { FileManagerPanel } from "./components/FileManagerPanel";
 import { FileLocationOpener, FilePreviewOpener } from "./components/FileLocationOpener";
 import { FileManagerNewThreadTab, FileManagerTab } from "./components/FileManagerTab";
@@ -88,5 +94,29 @@ export default definePluginApp((app) => {
     title: "File location",
     extensions: [...LOCATION_OPENER_EXTENSIONS],
     component: FileLocationOpener,
+  });
+
+  // §8.8 — the composer's "+" menu lists files from YOUR machine; this row
+  // lists files from the machine bb runs on, which is the only tree this
+  // plugin can see. `scopes` is omitted: every composer that can send a
+  // message to an agent can also want one of those files.
+  //
+  // The row is host-rendered, so `run` cannot open anything itself — it only
+  // names the composer it fired in, and the banner mounted in that composer
+  // opens the browser (lib/composer-bus.ts).
+  app.composer.customize({
+    id: "add-file",
+    plusMenu: [
+      {
+        id: "file-manager-pick",
+        label: "From File Manager…",
+        icon: "FolderOpen",
+        description: "Attach a file from the machine bb runs on.",
+        run: ({ view }) => {
+          requestFilePick(composerScopeKey(view.scope));
+        },
+      },
+    ],
+    banners: [{ id: "file-picker", chrome: "bare", component: ComposerFilePicker }],
   });
 });

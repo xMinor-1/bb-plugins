@@ -28,7 +28,12 @@ import {
   DOWNLOAD_ROUTE,
   UPLOAD_CHUNK_ROUTE,
 } from "../../src/http-routes";
-import { STAGING_DIR_NAME, PLUGIN_ID, UPLOAD_ID_PATTERN } from "../../contract";
+import {
+  MENTION_PROVIDER_ID,
+  STAGING_DIR_NAME,
+  PLUGIN_ID,
+  UPLOAD_ID_PATTERN,
+} from "../../contract";
 import { DEFAULT_ROOT as ROOT_PATH, initRoot } from "../../src/root";
 import plugin, { PLUGIN_VERSION, fileManagerContract } from "../../server";
 
@@ -114,6 +119,14 @@ describe("registrations", () => {
       "sortDirection",
       "uploadChunkMiB",
     ]);
+  });
+
+  // §8.8 — the composer's pills are inert without this: the panel inserts
+  // mentions naming `MENTION_PROVIDER_ID`, and only the factory registers the
+  // provider that resolves them at send time.
+  it("registers the §8.8 mention provider", () => {
+    const providers = host.harness.inspection.registrations.mentionProviders;
+    expect(providers.map((provider) => provider.id)).toEqual([MENTION_PROVIDER_ID]);
   });
 
   it("schedules the §5.2 upload GC and can run it", async () => {

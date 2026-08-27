@@ -97,6 +97,19 @@ export const UPLOAD_ID_PATTERN = /^[0-9a-f]{32}$/u;
 export const MIN_CHUNK_BYTES = 4 * 1024 * 1024;
 export const MAX_CHUNK_BYTES = 64 * 1024 * 1024;
 
+/**
+ * The `bb.ui.registerMentionProvider` id, and the section label its rows group
+ * under in the composer's mention menu (§8.8).
+ *
+ * Shared because both halves address it by name: the backend registers the
+ * provider under this id, and every "Add to chat" affordance in the panel
+ * inserts pills with `insertMention({ provider: MENTION_PROVIDER_ID, … })`.
+ * A mismatch is silent — the pill renders and then resolves to nothing at send
+ * time — so the string lives here rather than being typed twice.
+ */
+export const MENTION_PROVIDER_ID = "file";
+export const MENTION_PROVIDER_LABEL = "Files";
+
 /* ------------------------------------------------------------------ */
 /* Shared enums and schemas                                            */
 /* ------------------------------------------------------------------ */

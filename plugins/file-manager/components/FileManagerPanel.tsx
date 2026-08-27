@@ -19,10 +19,15 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { useBbNavigate, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
+import { useBbNavigate, useComposer, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
-import { MAX_LIST_ENTRIES, type FileEntry, type FileManagerErrorCode } from "../contract";
+import {
+  MAX_LIST_ENTRIES,
+  MENTION_PROVIDER_ID,
+  type FileEntry,
+  type FileManagerErrorCode,
+} from "../contract";
 import { useClipboard } from "../hooks/useClipboard";
 import { useRouteLocation, type FmLocation } from "../hooks/useFmLocation";
 import {
@@ -90,7 +95,7 @@ import { ActivityTray } from "./ActivityTray";
 import { BackgroundContextMenu } from "./BackgroundContextMenu";
 import { EmptyState, type EmptyStateKind } from "./EmptyState";
 import { ErrorBanner } from "./ErrorBanner";
-import { effectiveKind } from "./FileRow";
+import { effectiveKind, isFileEntry } from "./FileRow";
 import { FileTable } from "./FileTable";
 import { RowContextMenu } from "./RowContextMenu";
 import { Toolbar } from "./Toolbar";
@@ -370,6 +375,15 @@ export function FileManagerSurface({
   const navigate = useBbNavigate();
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
+
+  // The draft "Add to chat" writes into (§8.8). Which draft that is, is the
+  // host's call and depends on the surface: a panel tab beside a thread writes
+  // into that thread's composer, while the sidebar page seeds the composer of
+  // the next new thread. Held in a ref so the callback below never has to
+  // re-create itself when the host hands back a fresh api object.
+  const composer = useComposer();
+  const composerRef = useRef(composer);
+  composerRef.current = composer;
 
   const root = state?.root ?? getClientRoot();
   const currentPath = useMemo(() => subPathToAbsolute(subPath, root), [subPath, root]);
@@ -1233,6 +1247,35 @@ export function FileManagerSurface({
       return;
     }
     void downloadPaths(files.map((entry) => entry.path));
+  }, []);
+
+  /**
+   * "Add to chat" — one @-mention pill per selected file (§8.8).
+   *
+   * The pill carries the path, not the bytes: the backend's mention provider
+   * re-reads the file when the message is actually sent, so a file edited (or
+   * deleted) between picking and sending is not silently stale. Folders and
+   * links that leave the root are dropped rather than refused one by one —
+   * the menu item is disabled when the selection holds nothing else.
+   */
+  const addToChat = useCallback((entries: readonly FileEntry[]) => {
+    const files = entries.filter(isFileEntry);
+    if (files.length === 0) {
+      toast.error("Only files can be added to the chat.");
+      return;
+    }
+    for (const file of files) {
+      composerRef.current.insertMention({
+        provider: MENTION_PROVIDER_ID,
+        id: file.path,
+        label: file.name,
+      });
+    }
+    toast.success(
+      files.length === 1 && files[0] !== undefined
+        ? `${files[0].name} added to the chat`
+        : `${String(files.length)} files added to the chat`,
+    );
   }, []);
 
   /**
@@ -2163,6 +2206,7 @@ export function FileManagerSurface({
             }
             onOpen={openEntry}
             onDownload={() => downloadSelection(menuEntries)}
+            onAddToChat={() => addToChat(menuEntries)}
             onExtract={(entry) => setDialog({ kind: "extract", entry })}
             onCut={() => clipboard.cut(topLevelPaths(menuEntries.map((entry) => entry.path)))}
             onCopy={() => clipboard.copy(topLevelPaths(menuEntries.map((entry) => entry.path)))}

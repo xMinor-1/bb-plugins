@@ -27,6 +27,8 @@ export interface RowContextMenuProps {
   canExtract: boolean;
   onOpen: (entry: FileEntry) => void;
   onDownload: () => void;
+  /** One @-mention per selected file, into whatever composer is in reach (§8.8). */
+  onAddToChat: () => void;
   onExtract: (entry: FileEntry) => void;
   onCut: () => void;
   onCopy: () => void;
@@ -47,6 +49,7 @@ export function RowContextMenu({
   canExtract,
   onOpen,
   onDownload,
+  onAddToChat,
   onExtract,
   onCut,
   onCopy,
@@ -62,9 +65,11 @@ export function RowContextMenu({
   const single = entries.length === 1 ? entries[0] : undefined;
   const isDirectory = single !== undefined && effectiveKind(single) === "directory";
   const escapes = entries.some((entry) => entry.escapesRoot);
-  const downloadable = entries.some(
-    (entry) => !entry.escapesRoot && effectiveKind(entry) === "file",
-  );
+  // Both "Download" and "Add to chat" act on exactly the real files in the
+  // selection: a folder has no bytes to send, and a link out of the root is
+  // refused by the server anyway (§6).
+  const files = entries.filter((entry) => !entry.escapesRoot && effectiveKind(entry) === "file");
+  const downloadable = files.length > 0;
   const archive = single !== undefined && single.archiveFormat !== null ? single : undefined;
   // Letting go of the right button must not run whatever it landed on.
   const pointerGuard = useMenuPointerGuard();
@@ -87,6 +92,14 @@ export function RowContextMenu({
         <Icon name="Download" className="size-4" aria-hidden="true" />
         Download
         {entries.length > 1 ? <ContextMenuShortcut>{entries.length}</ContextMenuShortcut> : null}
+      </ContextMenuItem>
+
+      {/* Sits beside Download because it answers the same question — "take
+          this file somewhere" — with the other destination: the agent. */}
+      <ContextMenuItem disabled={!downloadable} onSelect={onAddToChat}>
+        <Icon name="MessageSquarePlus" className="size-4" aria-hidden="true" />
+        Add to chat
+        {files.length > 1 ? <ContextMenuShortcut>{files.length}</ContextMenuShortcut> : null}
       </ContextMenuItem>
 
       {archive === undefined ? null : (

@@ -251,6 +251,22 @@ export interface SearchDirInput {
   query: string;
   showHidden: boolean;
   maxDepth: number;
+  /**
+   * Stop after this many matches (default and ceiling: MAX_SEARCH_RESULTS).
+   *
+   * The panel wants every hit it can render, but the mention provider (§8.8)
+   * wants a short list per keystroke — and a lower cap is what ends the walk
+   * early instead of scanning the whole subtree first.
+   */
+  limit?: number;
+  /**
+   * Wall-clock budget for the walk, in ms. Omitted means "no budget", which is
+   * what the panel's own search uses: a user pressed a button and is watching.
+   * The mention provider passes one because bb time-boxes its `search` at 2s
+   * and drops the result — without a budget here the abandoned walk would keep
+   * reading directories long after nobody was waiting for it.
+   */
+  budgetMs?: number;
 }
 
 export interface SearchDirOutput {
@@ -266,6 +282,11 @@ export interface SearchDirOutput {
 export async function searchDir(input: SearchDirInput): Promise<SearchDirOutput> {
   const rootDir = await resolveExistingDir(input.path);
   const needle = input.query.toLowerCase();
+  const limit = Math.min(input.limit ?? MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS);
+  // A deadline, not a timer: the walk is a plain loop, so the only place it can
+  // be cut is between directories. `truncated` already means "there is more" —
+  // an exhausted budget is one more reason for it.
+  const deadline = input.budgetMs === undefined ? Infinity : Date.now() + input.budgetMs;
   const entries: FileEntry[] = [];
   let truncated = false;
 
@@ -273,6 +294,10 @@ export async function searchDir(input: SearchDirInput): Promise<SearchDirOutput>
   for (let depth = 1; depth <= input.maxDepth && frontier.length > 0 && !truncated; depth += 1) {
     const next: string[] = [];
     for (const dir of frontier) {
+      if (Date.now() >= deadline) {
+        truncated = true;
+        break;
+      }
       let names: string[];
       try {
         names = await readdir(dir);
@@ -290,7 +315,7 @@ export async function searchDir(input: SearchDirInput): Promise<SearchDirOutput>
           continue;
         }
         if (name.toLowerCase().includes(needle)) {
-          if (entries.length >= MAX_SEARCH_RESULTS) {
+          if (entries.length >= limit) {
             truncated = true;
             break;
           }

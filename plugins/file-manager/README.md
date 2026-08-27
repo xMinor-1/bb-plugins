@@ -25,6 +25,9 @@ every path is re-resolved and clamped on the server before a single byte moves.
 - **Download** — streamed straight from disk with `Range` support, so a 10 GB
   file costs the browser no memory. It moved to the row menu, where it is a
   deliberate choice rather than the side effect of a double-click.
+- **Hand a file to the agent** — `@` in any composer lists files from this
+  machine, and *Add to chat* in the row menu does the same from the panel. The
+  file is read when the message is sent, so the agent never gets a stale copy.
 - **Organize** — new folder, rename, delete, cut / copy / paste, drag to move.
   Batch operations report a result per path, and name collisions become
   `name (1).ext` instead of silently overwriting.
@@ -130,6 +133,36 @@ extension, so there is nothing for a plugin to claim.
 
 To take an extension back, use **Settings → File openers** and pin *BB preview*
 for it.
+
+## Hand a file to the agent
+
+The paperclip and the composer's **+** attach files from the machine your
+browser runs on. This plugin adds the other machine — the one bb itself runs on
+— in three places:
+
+- **Type `@`** in any composer and start typing a name. Matches from your home
+  folder appear under **Files**, with the folder they live in as the second
+  line.
+- **Right-click a row** in the file manager → **Add to chat**. Several files
+  selected means several mentions, one per file.
+- **+ → From File Manager…** opens a small browser over the composer, starting
+  in your start folder. Double-click a file, or select it and press *Add to
+  chat*.
+
+All three insert the same thing: an **@-mention pill**, not a copy. The file is
+read when you **send** the message, not when you pick it — so editing the file
+after picking it sends the new version, and picking a file at the top of a long
+draft still sends what is on disk at the end.
+
+What the agent receives is the path, the size, the modification time, and the
+content of text files up to 256 KB (longer files are cut off with a line saying
+by how much). A binary file, a folder or an empty file arrives as the metadata
+plus one sentence saying why there is no content. A file that was deleted
+between picking and sending says so instead of blocking the message.
+
+The same clamp applies as everywhere else: only files under the home folder of
+the user running bb can be mentioned, symlinks that point outside it are not
+offered, and the path is re-checked on the server when the message is sent.
 
 ## Folders expand in place
 

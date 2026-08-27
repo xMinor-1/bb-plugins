@@ -10,6 +10,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 // `useRpc<typeof fileManagerContract>()` against this re-export.
 export { fileManagerContract } from "./contract";
 
+import { registerMentions } from "./src/mentions";
 import { registerRpc, type ArchiveSupport } from "./src/rpc";
 import { createSettings } from "./src/settings";
 import { getRoot, initRoot } from "./src/root";
@@ -66,6 +67,11 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
       uploadAbort: uploads.uploadAbort,
     },
   });
+
+  /* ---------------- composer mentions (§8.8) ---------------- */
+  // Host-rendered, no frontend bundle involved: "@" in any composer now lists
+  // files from this machine, and the picked one is read fresh at send time.
+  registerMentions(bb);
 
   bb.log.info(
     `${PLUGIN_NAME} ${PLUGIN_VERSION} loaded — root ${root}` +

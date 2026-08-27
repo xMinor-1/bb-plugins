@@ -1195,6 +1195,70 @@ upload progress. `xhr.upload.onprogress` gives byte-accurate progress.
 Wire `AbortSignal` → `xhr.abort()`. Persist nothing to `localStorage` in v0.1;
 resume-after-reload works because `uploadCreate` matches the session key.
 
+### 8.8 Mentions and the composer (v0.7)
+
+bb's own attachment picker uploads from the machine the **browser** runs on.
+This plugin owns the other machine — the one bb itself runs on — so a file
+under the hard root reaches an agent as an **@-mention**, not as an upload.
+
+**The provider (`src/mentions.ts`, host-rendered, no frontend involved).**
+
+```ts
+bb.ui.registerMentionProvider({ id: MENTION_PROVIDER_ID, label: MENTION_PROVIDER_LABEL, search, resolve });
+```
+
+`MENTION_PROVIDER_ID` (`"file"`) and `MENTION_PROVIDER_LABEL` (`"Files"`) live
+in contract.ts because both halves address the provider by name: a pill the
+panel inserts with a different string renders fine and then resolves to nothing
+at send time. `triggers` is omitted — `@` is the default, and claiming `#` or
+`~` too would put these rows in menus they have no business in.
+
+- **`search({ query })`** reuses `searchDir` from the root: depth 4, hidden
+  files excluded, directories and root-escaping links dropped, at most 20 rows
+  of `{ id: <absolute path>, title: <name>, subtitle: "~/relative/path" }`. An
+  empty query returns nothing rather than walking the home folder to answer
+  "everything". bb time-boxes the handler at **2s** and treats failure as an
+  empty list, so nothing throws — and `searchDir` grew two optional inputs for
+  this caller: `limit` (stop after N matches) and `budgetMs` (a wall clock, so
+  an answer the host has already dropped stops costing the disk).
+- **`resolve(itemId)`** runs once per picked item **at send time**, and a throw
+  **blocks the send**. So every failure comes back as prose inside `context`
+  instead. The id round-trips through the draft, so it is re-clamped with
+  `resolveExisting` (§6) like any other input. The block is
+  `File: / Size: / Modified:` plus, for text, the content in a fence longer
+  than any backtick run inside it. Beyond `MAX_CONTEXT_BYTES` (256 KB) only the
+  head is read and a `[Truncated: …]` line says so; a binary file (NUL in the
+  first 8 KB, or a decode too lossy to be text), a directory and an empty file
+  get the metadata and one sentence saying why there is no content.
+
+**Entry 1 — the row menu.** `RowContextMenu` gains *Add to chat* beside
+*Download*, enabled on the same set (real files, no folders, nothing that
+escapes the root) and inserting one pill per selected file through
+`useComposer().insertMention`. Which draft that reaches is the host's call:
+a panel tab beside a thread writes into that thread's composer, the sidebar
+page seeds the next new thread's.
+
+**Entry 2 — the `+` menu.** `app.composer.customize` registers one row,
+*From File Manager…*, and one **banner**. The banner is the load-bearing part:
+a `plusMenu` row is host-rendered, so its `run({ composer, view })` is a
+callback with nowhere to mount a dialog, and of the two surfaces that do mount
+components the host **drops `actions` entirely in the compact layout** — the
+narrow surfaces where a file browser helps most. `banners` are mounted for
+every composer and `chrome: "bare"` renders the component with no wrapper, so
+an idle picker contributes no DOM. `run` therefore only publishes the composer
+scope on `lib/composer-bus.ts`, and the banner mounted in **that** scope opens
+`FilePickerDialog` (every composer on screen mounts one, so a thread's `+` must
+not open a dialog over the side chat beside it).
+
+`FilePickerDialog` is a sibling of `FolderPickerDialog`, not a mode inside it:
+the folder picker's confirm returns the folder you are standing in and it has
+no selection, while this one needs file rows, a selection that survives a
+navigation, and a confirm that is disabled until something is picked. It takes
+the root as a **prop** — it opens from the composer, where the panel may never
+have mounted and so may never have published the backend's root — and asks
+`getState` for it on first open, which is also where its start folder comes
+from.
+
 ### 8.10 Properties
 
 `components/dialogs/PropertiesDialog.tsx`, reached three ways: **Properties**
