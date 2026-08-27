@@ -71,6 +71,7 @@ const NOTES = makeEntry({ name: "notes.txt" });
 const OTHER = makeEntry({ name: "other.txt" });
 const FOLDER = makeEntry({ name: "docs", kind: "directory", path: DOCS });
 const INSIDE = makeEntry({ name: "inside.md", path: `${DOCS}/inside.md` });
+const REPORT = makeEntry({ name: "report.csv" });
 
 const PREFERENCES = {
   showHiddenFiles: false,
@@ -81,7 +82,7 @@ const PREFERENCES = {
 };
 
 function listingFor(path: string) {
-  const entries = path === ROOT ? [FOLDER, NOTES, OTHER] : [INSIDE];
+  const entries = path === ROOT ? [FOLDER, NOTES, OTHER, REPORT] : [INSIDE];
   return {
     path,
     parentPath: path === ROOT ? null : ROOT,
@@ -272,6 +273,7 @@ describe("+ menu → From File Manager… (§8.8)", () => {
     runPlusMenu(THREAD_SCOPE);
 
     const dialog = await slot.findByTestId("fm-file-picker");
+    await within(dialog).findByText("notes.txt");
     expect(within(dialog).getByText("notes.txt")).toBeDefined();
   });
 
@@ -290,6 +292,7 @@ describe("+ menu → From File Manager… (§8.8)", () => {
     const slot = mountPicker();
     runPlusMenu(THREAD_SCOPE);
     const dialog = await slot.findByTestId("fm-file-picker");
+    await within(dialog).findByText("notes.txt");
 
     // Confirming is refused until a file is picked — a folder is a step, not
     // an answer.
@@ -312,6 +315,7 @@ describe("+ menu → From File Manager… (§8.8)", () => {
     const slot = mountPicker();
     runPlusMenu(THREAD_SCOPE);
     const dialog = await slot.findByTestId("fm-file-picker");
+    await within(dialog).findByText("notes.txt");
 
     fireEvent.click(within(dialog).getByTestId("fm-picker-folder"));
 
@@ -324,10 +328,105 @@ describe("+ menu → From File Manager… (§8.8)", () => {
     ]);
   });
 
+  it("picks several files with the checkboxes, in the order they were ticked", async () => {
+    const slot = mountPicker();
+    runPlusMenu(THREAD_SCOPE);
+    const dialog = await slot.findByTestId("fm-file-picker");
+    await within(dialog).findByText("report.csv");
+
+    const checks = within(dialog).getAllByTestId("fm-picker-check");
+    fireEvent.click(checks[2]!); // report.csv
+    fireEvent.click(checks[0]!); // notes.txt
+
+    const confirm = within(dialog).getByTestId("fm-picker-confirm");
+    expect(confirm.textContent).toContain("(2)");
+    expect(within(dialog).getByTestId("fm-picker-summary").textContent).toContain(
+      "2 files selected",
+    );
+
+    fireEvent.click(confirm);
+    expect(slot.inspection.composer.mentions).toEqual([
+      { provider: MENTION_PROVIDER_ID, id: REPORT.path, label: REPORT.name },
+      { provider: MENTION_PROVIDER_ID, id: NOTES.path, label: NOTES.name },
+    ]);
+    expect(toasts.success).toEqual(["2 files added to the chat"]);
+  });
+
+  it("takes the whole run on a Shift click", async () => {
+    const slot = mountPicker();
+    runPlusMenu(THREAD_SCOPE);
+    const dialog = await slot.findByTestId("fm-file-picker");
+    await within(dialog).findByText("report.csv");
+
+    const rows = within(dialog).getAllByTestId("fm-picker-file");
+    fireEvent.click(within(rows[0]!).getByText("notes.txt"));
+    fireEvent.click(within(rows[2]!).getByText("report.csv"), { shiftKey: true });
+
+    // Extending never clears: the anchor row stays in, and the rows between
+    // come with it.
+    expect(rows.filter((row) => row.getAttribute("data-selected") === "true")).toHaveLength(3);
+    fireEvent.click(within(dialog).getByTestId("fm-picker-confirm"));
+    expect(slot.inspection.composer.mentions.map((mention) => mention.id)).toEqual([
+      NOTES.path,
+      OTHER.path,
+      REPORT.path,
+    ]);
+  });
+
+  it("selects and clears every file in the folder from one control", async () => {
+    const slot = mountPicker();
+    runPlusMenu(THREAD_SCOPE);
+    const dialog = await slot.findByTestId("fm-file-picker");
+    await within(dialog).findByText("report.csv");
+
+    const selectAll = within(dialog).getByTestId("fm-picker-select-all");
+    fireEvent.click(selectAll);
+    expect(within(dialog).getByTestId("fm-picker-confirm").textContent).toContain("(3)");
+
+    fireEvent.click(selectAll);
+    expect(
+      within(dialog).getByTestId("fm-picker-confirm").hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("keeps files picked in a folder the browser has left", async () => {
+    const slot = mountPicker();
+    runPlusMenu(THREAD_SCOPE);
+    const dialog = await slot.findByTestId("fm-file-picker");
+    await within(dialog).findByText("report.csv");
+
+    fireEvent.click(within(dialog).getAllByTestId("fm-picker-check")[0]!);
+    fireEvent.click(within(dialog).getByTestId("fm-picker-folder"));
+    await within(dialog).findByText("inside.md");
+    fireEvent.click(within(dialog).getAllByTestId("fm-picker-check")[0]!);
+
+    fireEvent.click(within(dialog).getByTestId("fm-picker-confirm"));
+    expect(slot.inspection.composer.mentions.map((mention) => mention.id)).toEqual([
+      NOTES.path,
+      INSIDE.path,
+    ]);
+  });
+
+  it("sends the whole selection on a double click, this row included", async () => {
+    const slot = mountPicker();
+    runPlusMenu(THREAD_SCOPE);
+    const dialog = await slot.findByTestId("fm-file-picker");
+    await within(dialog).findByText("report.csv");
+
+    fireEvent.click(within(dialog).getAllByTestId("fm-picker-check")[0]!);
+    fireEvent.doubleClick(within(dialog).getByText("report.csv"));
+
+    expect(slot.inspection.composer.mentions.map((mention) => mention.id)).toEqual([
+      NOTES.path,
+      REPORT.path,
+    ]);
+  });
+
   it("inserts nothing twice when the confirm button is clicked twice", async () => {
     const slot = mountPicker();
     runPlusMenu(THREAD_SCOPE);
     const dialog = await slot.findByTestId("fm-file-picker");
+    await within(dialog).findByText("notes.txt");
 
     fireEvent.click(within(dialog).getByText("notes.txt"));
     const confirm = within(dialog).getByRole("button", { name: "Add to chat" });

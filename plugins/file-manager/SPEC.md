@@ -1256,6 +1256,15 @@ scope on `lib/composer-bus.ts`, and the banner mounted in **that** scope opens
 `FilePickerDialog` (every composer on screen mounts one, so a thread's `+` must
 not open a dialog over the side chat beside it).
 
+The picker takes **any number of files** (v0.7.1). Rows carry a checkbox,
+`Shift`-click takes the run between the last row touched and this one — always
+adding, never clearing, because losing a ten-file pick to a stray modifier is
+the worst outcome available — and a folder-wide toggle sits above the list. The
+selection is a `Map` keyed by absolute path: it survives navigation, so files
+from several folders can go out together, and its insertion order is the order
+the mentions enter the draft. A double-click confirms the whole selection with
+that row added rather than replacing it.
+
 `FilePickerDialog` is a sibling of `FolderPickerDialog`, not a mode inside it:
 the folder picker's confirm returns the folder you are standing in and it has
 no selection, while this one needs file rows, a selection that survives a

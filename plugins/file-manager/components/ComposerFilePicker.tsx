@@ -1,10 +1,10 @@
 // components/ComposerFilePicker.tsx — the "+" menu's file browser (§8.8).
 //
 // bb's own "+" attaches files from the machine the *browser* runs on. This row
-// attaches one from the machine bb itself runs on — the tree this plugin
-// manages — as an @-mention that the backend re-reads at send time, so the
-// agent always sees the file as it is when the message goes out, not as it was
-// when it was picked.
+// attaches them from the machine bb itself runs on — the tree this plugin
+// manages — as @-mentions that the backend re-reads at send time, so the agent
+// always sees each file as it is when the message goes out, not as it was when
+// it was picked. The dialog picks any number of them at once (§8.8).
 //
 // The component renders nothing until asked. It is registered as a composer
 // banner with `chrome: "bare"` purely to have a place to mount from: the "+"
@@ -68,13 +68,23 @@ export function ComposerFilePicker() {
   }, [open, roots, rpc]);
 
   const choose = useCallback(
-    (entry: FileEntry) => {
-      composer.insertMention({
-        provider: MENTION_PROVIDER_ID,
-        id: entry.path,
-        label: entry.name,
-      });
-      toast.success(`${entry.name} added to the chat`);
+    (entries: readonly FileEntry[]) => {
+      // One mention per file, in the order they were picked: the draft reads
+      // as the list the user built.
+      for (const entry of entries) {
+        composer.insertMention({
+          provider: MENTION_PROVIDER_ID,
+          id: entry.path,
+          label: entry.name,
+        });
+      }
+      const first = entries[0];
+      if (first === undefined) return;
+      toast.success(
+        entries.length === 1
+          ? `${first.name} added to the chat`
+          : `${String(entries.length)} files added to the chat`,
+      );
     },
     [composer],
   );

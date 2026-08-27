@@ -158,8 +158,12 @@ browser runs on. This plugin adds the other machine — the one bb itself runs o
 - **Right-click a row** in the file manager → **Add to chat**. Several files
   selected means several mentions, one per file.
 - **+ → From File Manager…** opens a small browser over the composer, starting
-  in your start folder. Double-click a file, or select it and press *Add to
-  chat*.
+  in your start folder. Tick as many files as you need: a checkbox on every
+  row, `Shift`-click for the run between two of them, and *Select every file
+  here* for the whole folder. The tick marks stay while you browse, so a
+  question can carry files from three different folders; the line under the
+  list counts what is picked and what it weighs. Double-click sends the
+  selection with that row added, and *Add to chat* says how many are going.
 
 All three insert the same thing: an **@-mention pill**, not a copy. The file is
 read when you **send** the message, not when you pick it — so editing the file
