@@ -4,6 +4,10 @@
   "name": "xminor-bb-plugins",
   "plugins": [
     {
+      "name": "context-compact",
+      "source": "./plugins/context-compact"
+    },
+    {
       "name": "file-manager",
       "source": "./plugins/file-manager"
     },
