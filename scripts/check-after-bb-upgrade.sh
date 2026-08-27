@@ -115,6 +115,19 @@ note ""
 
 # --- 2. селекторы самих плагинов --------------------------------------------
 
+# Константу плагин держит либо прямо в app.tsx, либо в общем модуле рядом
+# (usage-meter с 0.2.3 берёт PLUGIN_ID из lib/limits.ts) — смотрим в оба места.
+const_of() {
+  local dir="$1" name="$2" value
+  value="$(sed -n "s/^\(export \)\{0,1\}const $name = \"\([^\"]*\)\";.*/\2/p" "$dir/app.tsx" 2>/dev/null | head -n 1)"
+  if [ -z "$value" ]; then
+    value="$(grep -rhs --include='*.ts' --include='*.tsx' \
+      --exclude-dir=node_modules --exclude-dir=dist -- "const $name = " "$dir" |
+      sed -n "s/^\(export \)\{0,1\}const $name = \"\([^\"]*\)\";.*/\2/p" | head -n 1)"
+  fi
+  printf '%s' "$value"
+}
+
 note "Селекторы плагинов"
 for name in "${plugins[@]}"; do
   src="$repo/plugins/$name/app.tsx"
@@ -122,10 +135,16 @@ for name in "${plugins[@]}"; do
     bad "$name — нет $src"
     continue
   fi
-  plugin_id="$(sed -n 's/^const PLUGIN_ID = "\([^"]*\)";.*/\1/p' "$src" | head -n 1)"
-  action_id="$(sed -n 's/^const ACTION_ID = "\([^"]*\)";.*/\1/p' "$src" | head -n 1)"
+  plugin_id="$(const_of "$repo/plugins/$name" PLUGIN_ID)"
+  action_id="$(const_of "$repo/plugins/$name" ACTION_ID)"
   if [ -z "$plugin_id" ] || [ -z "$action_id" ]; then
-    bad "$name — в app.tsx не нашлись PLUGIN_ID/ACTION_ID, якорь не вычислить"
+    bad "$name — нигде в исходниках не нашлись PLUGIN_ID/ACTION_ID, якорь не вычислить"
+    continue
+  fi
+  # Константы могут быть на месте, а сам селектор — переписан. Проверяем, что
+  # app.tsx по-прежнему собирает testid хоста именно из этой пары.
+  if ! grep -qF 'plugin-sidebar-footer-action-${PLUGIN_ID}-${ACTION_ID}' "$src"; then
+    bad "$name — BUTTON_SELECTOR в app.tsx собран уже не из PLUGIN_ID и ACTION_ID"
     continue
   fi
   # Плагин обязан звать себя так же, как его зовёт bb: иначе testid, который
