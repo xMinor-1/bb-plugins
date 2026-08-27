@@ -8,27 +8,30 @@
 // title-bar actions ride in the toolbar instead (a panel tab has no title bar).
 //
 // Two registrations because bb keeps the two launchers apart: a thread's panel
-// and the root New thread screen's panel. Neither prop is read — the file
-// manager is rooted at the user's home folder, not at a thread or a project —
-// but the host types them, so both wrappers exist to name that explicitly.
+// and the root New thread screen's panel. The file manager is still rooted at
+// the user's home folder rather than at a thread, so the only thing `threadId`
+// buys is the toolbar's jump into that thread's checkout (§10.3) — which is
+// why the thread wrapper forwards it and the New thread wrapper cannot.
 import type { PluginNewThreadPanelProps, PluginThreadPanelProps } from "@get-bb/plugin-sdk/app";
 
 import { useLocalLocation } from "../hooks/useFmLocation";
 import { FileManagerSurface } from "./FileManagerPanel";
 
-function FileManagerTabBody() {
+function FileManagerTabBody({ threadId = null }: { threadId?: string | null }) {
   // Starts at the root and lets the bootstrap redirect to the remembered or
   // configured folder, exactly as the nav panel does on a cold open (§1.5).
   const location = useLocalLocation("");
-  return <FileManagerSurface location={location} chrome="inline" />;
+  return <FileManagerSurface location={location} chrome="inline" threadId={threadId} />;
 }
 
 /** `threadPanelAction`: the panel launcher of an existing thread. */
-export function FileManagerTab(_props: PluginThreadPanelProps) {
-  return <FileManagerTabBody />;
+export function FileManagerTab({ threadId }: PluginThreadPanelProps) {
+  return <FileManagerTabBody threadId={threadId} />;
 }
 
 /** `experimental_newThreadPanelAction`: the root New thread screen's launcher. */
 export function FileManagerNewThreadTab(_props: PluginNewThreadPanelProps) {
+  // No thread has been created yet, so there is no workspace to jump into and
+  // the toolbar shows no Thread folder button at all.
   return <FileManagerTabBody />;
 }

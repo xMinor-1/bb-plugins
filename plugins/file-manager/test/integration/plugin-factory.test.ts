@@ -90,7 +90,7 @@ describe("registrations", () => {
   it("registers every contract method exactly once", () => {
     const registered = [...host.harness.inspection.registrations.rpcMethods].sort();
     expect(registered).toEqual(CONTRACT_METHODS);
-    expect(registered).toHaveLength(20);
+    expect(registered).toHaveLength(21);
   });
 
   it("mounts both §5 routes with the auth modes §5 requires", () => {
@@ -157,9 +157,10 @@ describe("reachability", () => {
       path: "does-not-exist",
       source: { kind: "host", threadId: null, environmentId: null, projectId: null },
     },
+    threadWorkspace: { threadId: "thr_does_not_exist" },
   };
 
-  it("covers all 20 methods with a probe", () => {
+  it("covers all 21 methods with a probe", () => {
     expect(Object.keys(probes).sort()).toEqual(CONTRACT_METHODS);
   });
 

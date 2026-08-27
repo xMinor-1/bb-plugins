@@ -160,6 +160,23 @@ export const fileOpenerSourceSchema = z.strictObject({
 });
 export type FileOpenerSourceInput = z.infer<typeof fileOpenerSourceSchema>;
 
+/**
+ * Why a thread's workspace folder cannot be opened (§10.3).
+ *
+ * Codes rather than sentences: the phrasing belongs to whichever control has
+ * to say it, and the panel is the side that speaks English to the user. All
+ * three are ordinary states of a healthy thread, not failures.
+ */
+export const threadWorkspaceReasonSchema = z.enum([
+  // The thread runs without an environment at all.
+  "no_environment",
+  // The environment has no directory on disk: unprovisioned, or destroyed.
+  "no_checkout",
+  // The checkout is real, but not under the hard root, so §6 forbids it.
+  "outside_root",
+]);
+export type ThreadWorkspaceReason = z.infer<typeof threadWorkspaceReasonSchema>;
+
 /** One directory entry. `path` is always absolute and inside the hard root. */
 export const entrySchema = z.strictObject({
   /** Base name as it appears on disk. */
@@ -433,6 +450,31 @@ export const fileManagerContract = defineRpcContract({
       isDirectory: z.boolean(),
       /** Filter text for a missing glob-ish name, else null. */
       matchHint: z.string().nullable(),
+    }),
+  },
+
+  /**
+   * The folder a thread's code lives in — its environment's checkout (§10.3).
+   *
+   * Answers, never refuses: a thread with no environment, an environment with
+   * no checkout and a checkout outside the hard root are all states the panel
+   * tab's toolbar has to render, so they come back as a `reason` instead of a
+   * throw. Only a thread bb cannot answer for rejects.
+   */
+  threadWorkspace: {
+    input: z.strictObject({ threadId: z.string().min(1) }),
+    output: z.strictObject({
+      /**
+       * The realpath'ed checkout directory, non-null exactly when it is a real
+       * directory on disk right now — including when it sits outside the root
+       * and is therefore unopenable, so the panel can say *where* it is rather
+       * than only that it cannot go.
+       */
+      path: z.string().nullable(),
+      /** True only when `path` is the hard root or below it: §6's prefix test. */
+      insideRoot: z.boolean(),
+      /** Null exactly when the panel may open `path`; a code otherwise. */
+      reason: threadWorkspaceReasonSchema.nullable(),
     }),
   },
 

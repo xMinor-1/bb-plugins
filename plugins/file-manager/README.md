@@ -78,6 +78,27 @@ a panel tab can stand in different folders at once. Both still share the
 settings, the upload queue and the "reopen where I was" memory, because those
 belong to the machine, not to a surface.
 
+## One click to the thread's own folder
+
+A panel tab opened beside a thread gets one button the other surfaces do not:
+**Thread folder**, in the toolbar's action cluster. It takes you straight to
+the checkout that thread is working in — the worktree the agent is editing —
+without typing a path or walking down from your home folder.
+
+It is only ever there when it can be used. bb runs plenty of threads that have
+no folder to go to, and rather than a button that does nothing, the reason
+moves into the overflow menu as a greyed-out line saying which of the three it
+is:
+
+- *this thread has no workspace* — the thread runs without an environment;
+- *the workspace has no folder yet* — the environment has not been provisioned,
+  or its worktree has already been removed;
+- *outside your home folder* — the checkout is real, but this plugin never
+  leaves your home folder, so it will not open it.
+
+If the lookup itself fails — bb restarting, say — the button stays live and the
+click retries; a second failure says so in a toast instead of doing nothing.
+
 ## Right-click a file link → show me where it is
 
 Right-click any file link in a message and bb's menu offers **Open with File

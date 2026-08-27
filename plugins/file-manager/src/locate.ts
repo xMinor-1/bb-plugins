@@ -1,4 +1,10 @@
-// src/locate.ts — "where does this file link actually live?".
+// src/locate.ts — turning a bb reference into a folder under the hard root.
+//
+// Two questions, one chain. "Where does this file link actually live?"
+// (`locateFile`, §10.2) and "where does this thread's code live?"
+// (`resolveThreadWorkspace`, §10.3) both start from an id the host handed the
+// panel and end at an absolute path the §6 clamp has approved, so they share
+// this module and the environment lookup inside it.
 //
 // bb hands a file opener a path that is relative to whatever surface produced
 // it: a worktree, a thread's storage directory, or nothing at all for a host
@@ -11,11 +17,12 @@
 // would have been in" is still the useful answer. So a missing target walks up
 // to the nearest folder that does exist, and reports the name it was looking
 // for so the panel can filter on it.
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
+import type { ThreadWorkspaceReason } from "../contract";
 import { fmError, isFileManagerError } from "./errors";
 import { assertInside, getRoot, isInside, normalize, resolveExisting } from "./root";
 
@@ -63,6 +70,22 @@ function globMatchHint(name: string): string | null {
 }
 
 /**
+ * The checkout directory bb records for an environment, or null when it has
+ * none: an environment that is unprovisioned, still provisioning or destroyed
+ * answers with no path at all.
+ *
+ * Shared by both questions this module answers — a workspace file link and a
+ * thread's own folder resolve through exactly the same SDK call.
+ */
+async function environmentCheckoutPath(
+  bb: BbPluginApi,
+  environmentId: string,
+): Promise<string | null> {
+  const environment = await bb.sdk.environments.get({ environmentId });
+  return environment.path === null || environment.path === "" ? null : environment.path;
+}
+
+/**
  * Absolute path for an opener's `(path, source)` pair.
  *
  * Workspace paths are worktree-relative, thread-storage paths are relative to
@@ -75,11 +98,11 @@ async function toAbsolutePath(bb: BbPluginApi, input: LocateFileInput): Promise<
     if (source.environmentId === null) {
       throw fmError("unsupported", "this workspace file has no environment");
     }
-    const environment = await bb.sdk.environments.get({ environmentId: source.environmentId });
-    if (!environment.path) {
+    const checkout = await environmentCheckoutPath(bb, source.environmentId);
+    if (checkout === null) {
       throw fmError("unsupported", "this environment has no checkout on disk yet");
     }
-    return path.resolve(environment.path, input.path);
+    return path.resolve(checkout, input.path);
   }
 
   if (source.kind === "thread-storage") {
@@ -169,4 +192,67 @@ export async function locateFile(
     isDirectory: false,
     matchHint: globMatchHint(name),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* §10.3 — the folder a thread's code lives in                         */
+/* ------------------------------------------------------------------ */
+
+export interface ThreadWorkspaceInput {
+  threadId: string;
+}
+
+export interface ThreadWorkspaceOutput {
+  /** Realpath'ed checkout, non-null exactly when it is a directory on disk. */
+  path: string | null;
+  /** True only when `path` is the hard root or below it. */
+  insideRoot: boolean;
+  /** Null exactly when the panel may open `path`. */
+  reason: ThreadWorkspaceReason | null;
+}
+
+/**
+ * `thread → environment → checkout`, clamped by §6.
+ *
+ * It answers "you cannot go there" instead of throwing it. A thread with no
+ * environment, an environment with no checkout and a checkout outside the home
+ * folder are ordinary states of a healthy bb, and the toolbar renders each of
+ * them differently — a rejection would flatten all three into one toast. Only
+ * a thread bb itself cannot answer for rejects.
+ */
+export async function resolveThreadWorkspace(
+  bb: BbPluginApi,
+  input: ThreadWorkspaceInput,
+): Promise<ThreadWorkspaceOutput> {
+  const thread = await bb.sdk.threads.get({ threadId: input.threadId });
+  if (thread.environmentId === null) {
+    return { path: null, insideRoot: false, reason: "no_environment" };
+  }
+
+  const checkout = await environmentCheckoutPath(bb, thread.environmentId);
+  if (checkout === null) {
+    return { path: null, insideRoot: false, reason: "no_checkout" };
+  }
+
+  // §6's order, done by hand rather than through resolveExisting: realpath
+  // BEFORE the prefix test, but a path outside the root is an *answer* here,
+  // not a refusal, and the panel has to be able to tell the two apart.
+  let real: string | null = null;
+  try {
+    const resolved = await realpath(normalize(checkout));
+    if ((await stat(resolved)).isDirectory()) real = resolved;
+  } catch {
+    // bb keeps the recorded path of a worktree that has since been destroyed,
+    // so a directory that is no longer there is still just "no checkout".
+  }
+  if (real === null) {
+    return { path: null, insideRoot: false, reason: "no_checkout" };
+  }
+
+  if (!isInside(real)) {
+    // Reported rather than hidden: bb can run threads on checkouts anywhere,
+    // and "outside your home folder" is a better answer than silence.
+    return { path: real, insideRoot: false, reason: "outside_root" };
+  }
+  return { path: real, insideRoot: true, reason: null };
 }

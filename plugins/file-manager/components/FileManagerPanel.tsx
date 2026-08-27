@@ -33,6 +33,7 @@ import {
 } from "../hooks/useDirectory";
 import { useJobs } from "../hooks/useJobs";
 import { useSelection } from "../hooks/useSelection";
+import { threadWorkspaceBlockedText, useThreadWorkspace } from "../hooks/useThreadWorkspace";
 import { useTree, type UseTreeResult } from "../hooks/useTree";
 import { useUploads } from "../hooks/useUploads";
 import { downloadEntry, downloadPaths } from "../lib/download";
@@ -108,7 +109,7 @@ import {
   type PanelCommand,
   type PanelSnapshot,
 } from "./panel-bus";
-import { PanelActions } from "./PanelActions";
+import { PanelActions, type ThreadFolderAction } from "./PanelActions";
 
 type GetState = RpcOutput<"getState">;
 type BatchResult = RpcOutput<"moveEntries">;
@@ -329,6 +330,15 @@ export interface FileManagerSurfaceProps {
   revealPath?: string | null;
   /** Seed for the in-folder filter; the compact chrome unfolds for it. */
   initialQuery?: string;
+  /**
+   * The thread this surface belongs to, when it belongs to one (§10.3).
+   *
+   * Only bb's thread panel names it, and it buys exactly one thing: the
+   * toolbar's jump into that thread's checkout. Null everywhere else — the
+   * nav panel, the New thread launcher and the file openers are rooted at the
+   * home folder, not at a thread.
+   */
+  threadId?: string | null;
 }
 
 export function FileManagerSurface({
@@ -337,6 +347,7 @@ export function FileManagerSurface({
   initialPath = null,
   revealPath = null,
   initialQuery = "",
+  threadId = null,
 }: FileManagerSurfaceProps) {
   const rpc = useFmRpc();
   const subPath = location.subPath;
@@ -892,6 +903,60 @@ export function FileManagerSurface({
   const goToParent = useCallback(() => {
     if (parentPath !== null) navigateTo(parentPath);
   }, [navigateTo, parentPath]);
+
+  /* -------------------------------------------------------------- */
+  /* Thread folder (§10.3)                                           */
+  /* -------------------------------------------------------------- */
+
+  const workspace = useThreadWorkspace(threadId);
+  // Read from the click handler, which must stay stable: it is handed to the
+  // memoized action cluster, and the lookup settles after the first render.
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+
+  /**
+   * Jump to the thread's own checkout, through the same `navigateTo` every
+   * other move uses — a second navigation path would be a second set of bugs.
+   *
+   * A "no" the lookup already knows about never reaches this handler: the
+   * button is not rendered then. What does reach it is a lookup that *failed*,
+   * because "bb did not answer" is not "there is nowhere to go" — so the click
+   * retries once, and only a second failure becomes a toast.
+   */
+  const openThreadWorkspace = useCallback(() => {
+    void (async () => {
+      const current = workspaceRef.current;
+      const answer =
+        current.state.status === "ready" ? current.state : await current.reload();
+      if (answer.status === "ready") {
+        navigateTo(answer.path);
+        return;
+      }
+      if (answer.status === "blocked") {
+        toast.message(threadWorkspaceBlockedText(answer.reason));
+        return;
+      }
+      if (answer.status === "failed") {
+        toast.error(`Could not find this thread's folder. ${answer.message}`);
+      }
+    })();
+  }, [navigateTo]);
+
+  const threadFolder = useMemo<ThreadFolderAction | null>(() => {
+    // Nothing for a surface with no thread — and nothing yet while the lookup
+    // is in flight, because a control that appears only to vanish half a tick
+    // later reads worse than one that arrives late.
+    const status = workspace.state.status;
+    if (status === "absent" || status === "loading") return null;
+    return {
+      available: status !== "blocked",
+      blockedReason:
+        workspace.state.status === "blocked"
+          ? threadWorkspaceBlockedText(workspace.state.reason)
+          : null,
+      onOpen: openThreadWorkspace,
+    };
+  }, [openThreadWorkspace, workspace.state]);
 
   /* -------------------------------------------------------------- */
   /* Path bar (§3, §5)                                               */
@@ -1952,6 +2017,7 @@ export function FileManagerSurface({
               onCommand={runCommand}
               onSortFieldChange={applySortField}
               onSortDirectionChange={applySortDirection}
+              threadFolder={threadFolder}
             />
           ) : null
         }

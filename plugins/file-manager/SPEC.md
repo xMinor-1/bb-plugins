@@ -1432,6 +1432,66 @@ The panel body takes three optional props for this (§10.1's surface):
 entry to select once its folder lists, through the same machinery the path bar
 uses) and `initialQuery` (the filter seed, which unfolds the compact filter).
 
+### 10.3 Thread workspace — the folder a thread's code lives in (v0.7)
+
+`threadPanelAction` is the one surface bb names a thread for, so it is the one
+surface that can offer a jump into that thread's checkout. `FileManagerTab`
+forwards its `threadId` into `FileManagerSurface` as a fourth optional prop;
+every other surface (the nav panel, the New thread launcher, both file openers)
+leaves it null, because the root is the home folder rather than a thread.
+
+**Resolution is a backend job**, and it is the same chain §10.2 walks for a
+workspace file link:
+
+```
+threads.get({ threadId }).environmentId
+  → environments.get({ environmentId }).path
+  → realpath → §6 prefix test
+```
+
+`threadWorkspace` (`src/locate.ts#resolveThreadWorkspace`, beside `locateFile`
+because both questions end at one clamped absolute path) answers
+`{ path, insideRoot, reason }`:
+
+| Case | `path` | `insideRoot` | `reason` |
+| --- | --- | --- | --- |
+| checkout under the root | realpath'ed dir | `true` | `null` |
+| thread has no environment | `null` | `false` | `no_environment` |
+| no path recorded, path gone, or not a directory | `null` | `false` | `no_checkout` |
+| checkout outside the root | realpath'ed dir | `false` | `outside_root` |
+
+**None of the three "no"s is a throw.** They are ordinary states of a healthy
+bb and the toolbar renders each of them differently; a rejection would flatten
+all three into one toast. `path` is non-null exactly when a real directory is
+there, `outside_root` included — reporting where it is beats saying nothing.
+Only a thread bb itself cannot answer for rejects. The clamp is applied to the
+realpath, never to the string bb handed over, so a symlink inside the root that
+lands outside it comes back `outside_root` rather than passing the prefix test.
+
+**The panel asks once, on mount** (`hooks/useThreadWorkspace.ts`), not on
+click: the toolbar has to know whether to offer the jump before the user
+reaches for it. A surface with no thread costs no request and no extra render —
+`absent` and `loading` are derived from the prop, tagged with the thread they
+belong to, because a stray commit between `getState` landing and `listDir`
+starting is enough to flash the empty state at the user.
+
+**Where the control lives** (`components/PanelActions.tsx`):
+
+- **can be used** → its own icon button (`FolderGit`) at the head of the compact
+  action cluster. A jump into the thread's code is why this tab sits beside the
+  thread; burying it in the overflow to save 32px would spend the feature.
+- **cannot be used** → no button, and a *disabled row* in the overflow menu
+  carrying the reason in full text. A disabled `<button>` cannot explain
+  itself: the vendored Tooltip is unusable (Radix tooltip is a devDependency,
+  so shipping it would break a catalog install) and browsers do not reliably
+  show a native `title` on a disabled control.
+- **never both**, and nothing at all while the lookup is in flight.
+
+The jump itself goes through `navigateTo`, the same call every other folder
+move uses — a second navigation path would be a second set of bugs. A lookup
+that *failed* keeps the button live, because "bb did not answer" is not "there
+is nowhere to go": the click retries once, and only then becomes a toast.
+
 ---
 
 ## 11. Test plan

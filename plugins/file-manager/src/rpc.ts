@@ -5,7 +5,7 @@ import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 
 import { MAX_LIST_ENTRIES, fileManagerContract, type FileManagerContract } from "../contract";
 import { listDir, searchDir, statPath } from "./listing";
-import { locateFile } from "./locate";
+import { locateFile, resolveThreadWorkspace } from "./locate";
 import {
   copyEntries,
   createFolder,
@@ -91,6 +91,7 @@ export function createCoreHandlers(
     directorySize: (input) => directorySize(input),
     statPath: (input) => statPath(input),
     resolveFileLocation: (input) => locateFile(bb, input),
+    threadWorkspace: (input) => resolveThreadWorkspace(bb, input),
     searchDir: (input) => searchDir(input),
 
     createFolder: (input) => createFolder(bb, input),
