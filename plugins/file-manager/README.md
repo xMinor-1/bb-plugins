@@ -157,6 +157,9 @@ browser runs on. This plugin adds the other machine — the one bb itself runs o
   line.
 - **Right-click a row** in the file manager → **Add to chat**. Several files
   selected means several mentions, one per file.
+- **On mobile**, tick one or more rows, then tap **Actions** in the selection
+  bar → **Add to chat**. The same drawer also contains download, organize,
+  rename, properties and delete actions for the selection.
 - **+ → From File Manager…** opens a small browser over the composer, starting
   in your start folder. Tick as many files as you need: a checkbox on every
   row, `Shift`-click for the run between two of them, and *Select every file
@@ -207,6 +210,12 @@ multi-select, the row context menu, rename, delete, cut / copy / paste,
 download, drag and drop, and upload. Dragging over a collapsed folder for about
 0.7 s springs it open so you can drop deeper; dropping onto a file row resolves
 to the folder that row lives in.
+
+On a compact mobile layout, tick a row or tile to reveal a persistent selection
+bar. **Actions** opens the selected-item menu as a bottom drawer; **Clear
+selection** removes the ticks. Native row dragging is disabled there so a long
+press cannot turn the item into a browser drag ghost. Desktop row dragging and
+right-click menus are unchanged.
 
 Three behaviors worth knowing:
 

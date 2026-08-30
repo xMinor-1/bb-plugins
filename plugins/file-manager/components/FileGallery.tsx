@@ -34,6 +34,7 @@ export interface FileGalleryProps {
   selectedPaths: ReadonlySet<string>;
   focusedPath: string | null;
   cutPaths: ReadonlySet<string>;
+  dragEnabled: boolean;
   /** Path currently highlighted as a drop target (a tile, or `..`). */
   dropTargetPath: string | null;
   /**
@@ -66,6 +67,7 @@ export interface FileGalleryProps {
 
 interface GalleryTileProps {
   entry: FileEntry;
+  dragEnabled: boolean;
   selected: boolean;
   focused: boolean;
   cut: boolean;
@@ -85,6 +87,7 @@ interface GalleryTileProps {
 
 function GalleryTileImpl({
   entry,
+  dragEnabled,
   selected,
   focused,
   cut,
@@ -119,7 +122,7 @@ function GalleryTileImpl({
       data-selected={selected ? "true" : undefined}
       data-drop-target={dropTarget ? "true" : undefined}
       tabIndex={-1}
-      draggable
+      draggable={dragEnabled}
       title={entry.name}
       className={cn(
         "group flex min-w-0 cursor-default flex-col gap-1 rounded-md p-1.5 select-none",
@@ -278,6 +281,7 @@ export function FileGallery(props: FileGalleryProps) {
               <GalleryTile
                 key={entry.path}
                 entry={entry}
+                dragEnabled={props.dragEnabled}
                 selected={selectedPaths.has(entry.path)}
                 focused={focusedPath === entry.path}
                 cut={cutPaths.has(entry.path)}

@@ -111,6 +111,7 @@ import { effectiveKind, isFileEntry } from "./FileRow";
 import { FileGallery } from "./FileGallery";
 import { FileTable } from "./FileTable";
 import { RowContextMenu } from "./RowContextMenu";
+import { SelectionActionBar } from "./SelectionActionBar";
 import { Toolbar } from "./Toolbar";
 import { BookmarkNameDialog } from "./dialogs/BookmarkNameDialog";
 import { ConfirmDeleteDialog } from "./dialogs/ConfirmDeleteDialog";
@@ -121,6 +122,7 @@ import { NewFolderDialog } from "./dialogs/NewFolderDialog";
 import { PropertiesDialog, type PropertiesTarget } from "./dialogs/PropertiesDialog";
 import { RenameDialog } from "./dialogs/RenameDialog";
 import { ContextMenu, ContextMenuTrigger } from "./ui/context-menu";
+import { useIsCompactViewport } from "./ui/hooks/use-compact-viewport";
 import {
   publishPanelSnapshot,
   resetPanelSnapshot,
@@ -385,6 +387,7 @@ export function FileManagerSurface({
   threadId = null,
 }: FileManagerSurfaceProps) {
   const rpc = useFmRpc();
+  const isCompactViewport = useIsCompactViewport();
   const subPath = location.subPath;
   const locationRef = useRef(location);
   locationRef.current = location;
@@ -2236,6 +2239,9 @@ export function FileManagerSurface({
   const rowMenuEntry = menuEntries.length === 1 ? menuEntries[0] : undefined;
   const rowMenuBookmarked =
     rowMenuEntry !== undefined && bookmarks.isBookmarked(rowMenuEntry.path);
+  const selectedActionEntry = selectedEntries.length === 1 ? selectedEntries[0] : undefined;
+  const selectedActionBookmarked =
+    selectedActionEntry !== undefined && bookmarks.isBookmarked(selectedActionEntry.path);
   const bookmarkItems = {
     bookmarks: bookmarks.bookmarks,
     currentBookmarked,
@@ -2345,6 +2351,49 @@ export function FileManagerSurface({
         pathFocusTick={pathFocusTick}
       />
 
+      {isCompactViewport && selectedEntries.length > 0 ? (
+        <SelectionActionBar
+          entries={selectedEntries}
+          writable={writable}
+          canPaste={canPaste}
+          canExtract={
+            selectedEntries.length === 1 &&
+            selectedEntries[0]?.archiveFormat != null &&
+            isFormatSupported(selectedEntries[0].archiveFormat, archiveSupport)
+          }
+          onOpen={openEntry}
+          onDownload={() => downloadSelection(selectedEntries)}
+          onAddToChat={() => addToChat(selectedEntries)}
+          onExtract={(entry) => setDialog({ kind: "extract", entry })}
+          onCut={() => clipboard.cut(topLevelPaths(selectedEntries.map((entry) => entry.path)))}
+          onCopy={() => clipboard.copy(topLevelPaths(selectedEntries.map((entry) => entry.path)))}
+          onPaste={paste}
+          onMoveTo={() =>
+            setDialog({
+              kind: "picker",
+              mode: "move",
+              paths: selectedEntries.map((entry) => entry.path),
+            })
+          }
+          onCopyTo={() =>
+            setDialog({
+              kind: "picker",
+              mode: "copy",
+              paths: selectedEntries.map((entry) => entry.path),
+            })
+          }
+          onRename={(entry) => setDialog({ kind: "rename", entry })}
+          onCopyPath={() => copyPathsToClipboard(selectedEntries.map((entry) => entry.path))}
+          onDelete={() => requestDelete(selectedEntries)}
+          onSetStartFolder={(entry) => setStartFolder(entry.path)}
+          onProperties={() => openProperties(selectedEntries)}
+          bookmarked={selectedActionBookmarked}
+          canToggleBookmark={!bookmarks.loading}
+          onToggleBookmark={(entry) => toggleBookmark(entry.path)}
+          onClear={selection.clear}
+        />
+      ) : null}
+
       {stateError === null ? null : (
         <ErrorBanner
           error={stateError}
@@ -2405,6 +2454,7 @@ export function FileManagerSurface({
                 selectedPaths={selection.selected}
                 focusedPath={selection.focus}
                 cutPaths={cutPaths}
+                dragEnabled={!isCompactViewport}
                 dropTargetPath={dropTarget}
                 previewBaseUrl={previewBaseUrl}
                 parentPath={parentPath}
@@ -2431,6 +2481,7 @@ export function FileManagerSurface({
                 selectedPaths={selection.selected}
                 focusedPath={selection.focus}
                 cutPaths={cutPaths}
+                dragEnabled={!isCompactViewport}
                 sortField={sortField}
                 sortDirection={sortDirection}
                 onSort={handleHeaderSort}

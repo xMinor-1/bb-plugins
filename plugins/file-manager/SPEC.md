@@ -1037,6 +1037,7 @@ components/FileTable.tsx                  FRONTEND  header row, sorting, rubber-
 components/FileRow.tsx                    FRONTEND  one row: icon, name, size, mtime, drag source/target
 components/FileGallery.tsx                FRONTEND  the gallery view: thumbnail grid over the same handlers (§8.9)
 components/RowContextMenu.tsx             FRONTEND  right-click menu for a selection
+components/SelectionActionBar.tsx          FRONTEND  compact/touch selected-item actions
 components/BackgroundContextMenu.tsx      FRONTEND  right-click menu for empty space
 components/ActivityTray.tsx               FRONTEND  upload progress + extract jobs, bottom-right
 components/EmptyState.tsx                 FRONTEND  empty dir / no search results / escapesRoot dir
@@ -1107,6 +1108,7 @@ preview, and extracting it is what the gesture is for. Downloading stays on
 the row menu, where it is explicit.
 | right click on a row | `RowContextMenu`; if the row is not selected, select it first |
 | right click on empty space | `BackgroundContextMenu` |
+| select a row on a compact viewport | show `SelectionActionBar`; **Actions** opens the same selected-item operations in a responsive bottom drawer |
 | click on a breadcrumb | navigate to that ancestor |
 | column header click | toggle sort field / direction (persisted via `savePreferences`) |
 
@@ -1152,7 +1154,10 @@ when the event target is an `input`, `textarea` or `[contenteditable]`.
 
 **Internal (row → folder)**
 
-* Rows are `draggable`. `dragstart`:
+* Rows are `draggable` on non-compact viewports. Compact viewports disable
+  native row/tile dragging so touch long-press cannot enter browser drag mode;
+  selected-item operations remain available from `SelectionActionBar`.
+* On a draggable row, `dragstart`:
   `dataTransfer.effectAllowed = "move"`,
   `setData("application/x-bb-file-manager", JSON.stringify(selectedPaths))`,
   plus a `text/plain` fallback of newline-joined paths. If the dragged row is
@@ -1769,7 +1774,7 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 | `registration.test.tsx` | `app.navPanels[0]` matches `{ id: "file-manager", title: "File Manager", icon: "FolderOpen", path: "files" }`; `headerContent` and `experimental_sidebarAccessory` are functions |
 | `panel.test.tsx` | renders rows from a stubbed `listDir`; hidden toggle re-issues `listDir` with `showHidden: true`; sorting by size reorders without an RPC; search filters client-side; `emitRealtime("fs", { paths:[cwd] })` triggers exactly one refetch; `setRealtimeConnectionState("connected")` refetches |
 | `selection.test.tsx` | click / ctrl-click / shift-click / `Ctrl+A` / `Escape` produce the expected selections |
-| `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed |
+| `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed; compact selection disables native dragging and exposes the same actions through the responsive drawer while desktop remains draggable |
 | `uploads.test.tsx` | dropping two `File`s calls `uploadCreate` twice and posts chunks in order (stub `XMLHttpRequest`); a 409 response resumes from `expected`; the tray shows percentages |
 | `bookmarks.test.tsx` | §8.11: the star lights up for a bookmarked folder and toggles `addBookmark` / `removeBookmark`; the list navigates through `navigateTo`; a missing row is marked and removes itself; the rename dialog sends `renameBookmark`; both context menus toggle; the compact chrome keeps the star and moves the list into the overflow; the 51st is refused client-side |
 

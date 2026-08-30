@@ -59,6 +59,8 @@ export function rowDomId(path: string): string {
 
 export interface FileRowProps {
   entry: FileEntry;
+  /** Native file dragging is disabled on compact touch-oriented layouts. */
+  dragEnabled: boolean;
   /** 0 for a row of the current directory; +1 per expanded ancestor. */
   depth: number;
   /** A navigable directory shallower than MAX_TREE_DEPTH gets a chevron. */
@@ -90,6 +92,7 @@ export interface FileRowProps {
 
 function FileRowImpl({
   entry,
+  dragEnabled,
   depth,
   expandable,
   expanded,
@@ -136,7 +139,7 @@ function FileRowImpl({
       data-selected={selected ? "true" : undefined}
       data-drop-target={dropTarget ? "true" : undefined}
       tabIndex={-1}
-      draggable
+      draggable={dragEnabled}
       title={title}
       className={cn(
         "h-9 border-b border-border-hairline text-sm select-none",

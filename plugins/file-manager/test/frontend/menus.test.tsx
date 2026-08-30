@@ -5,11 +5,13 @@
 // exactly these arguments" — the menu is the only place most of the contract's
 // mutations can be reached from.
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { PluginRpcTestHandlers, RenderedSlot, RpcCall } from "@get-bb/plugin-sdk/testing/app";
 
 import type { FileEntry, FileManagerContract, Job } from "../../contract";
+import { CompactViewportOverrideProvider } from "../../components/ui/hooks/use-compact-viewport";
 
 const HOST_ID = "host_test";
 
@@ -137,6 +139,26 @@ async function mountPanel(
   return slot;
 }
 
+async function mountCompactPanel(
+  handlers: Partial<PluginRpcTestHandlers<FileManagerContract>> = baseRpc(),
+): Promise<RenderedSlot> {
+  const Panel = registration.component;
+  function CompactPanel(props: ComponentProps<typeof Panel>) {
+    return (
+      <CompactViewportOverrideProvider isCompactViewport>
+        <Panel {...props} />
+      </CompactViewportOverrideProvider>
+    );
+  }
+  const slot = renderSlot(
+    { component: CompactPanel },
+    { subPath: "" },
+    { rpc: handlers as PluginRpcTestHandlers<FileManagerContract> },
+  );
+  await slot.findByText("notes.txt");
+  return slot;
+}
+
 function rowFor(slot: RenderedSlot, path: string): HTMLElement {
   return slot
     .getAllByTestId("fm-row")
@@ -237,6 +259,42 @@ describe("keyboard access to the menus (§8.3)", () => {
     fireEvent.keyDown(slot.getByTestId("fm-panel"), { key: "ContextMenu" });
 
     await slot.findByTestId("fm-background-menu");
+  });
+});
+
+describe("compact viewport selection actions", () => {
+  it("replaces native dragging with a touch-friendly selected-item menu", async () => {
+    const slot = await mountCompactPanel();
+    const row = rowFor(slot, NOTES.path);
+
+    fireEvent.click(within(row).getByRole("checkbox"));
+
+    expect(row.draggable).toBe(false);
+    expect(slot.getByTestId("fm-selection-bar").textContent).toContain("1 selected");
+
+    fireEvent.click(slot.getByRole("button", { name: "Actions for 1 selected item" }));
+    const menu = await slot.findByTestId("fm-selection-menu");
+    expect(menu.textContent).toContain("Download");
+    expect(menu.textContent).toContain("Add to chat");
+    expect(menu.textContent).toContain("Rename");
+    expect(menu.textContent).toContain("Delete");
+
+    clickItem(menu, "Copy path");
+    await waitFor(() => expect(clipboardWrites).toEqual([NOTES.path]));
+
+    fireEvent.click(slot.getByRole("button", { name: "Clear selection" }));
+    expect(row.getAttribute("data-selected")).toBeNull();
+    expect(slot.queryByTestId("fm-selection-bar")).toBeNull();
+  });
+
+  it("keeps native dragging and the context-menu UI on desktop", async () => {
+    const slot = await mountPanel();
+    const row = rowFor(slot, NOTES.path);
+
+    fireEvent.click(within(row).getByRole("checkbox"));
+
+    expect(row.draggable).toBe(true);
+    expect(slot.queryByTestId("fm-selection-bar")).toBeNull();
   });
 });
 
