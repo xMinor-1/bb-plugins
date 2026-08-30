@@ -1,11 +1,10 @@
-// Selected-entry actions for compact/touch layouts.
-//
-// A context menu is still the fastest desktop interaction, but it has no
-// discoverable or reliable equivalent on touch screens. This bar appears once
-// an entry is selected and opens the same actions in the responsive dropdown,
-// which becomes a bottom drawer on compact viewports.
-import type { FileEntry } from "../contract";
-import { effectiveKind } from "./FileRow";
+// Selected-entry actions for compact and coarse-pointer layouts.
+import { Fragment } from "react";
+
+import {
+  selectedEntryActionModel,
+  type SelectedEntryActionsProps,
+} from "./selected-entry-actions";
 import { Button } from "./ui/button";
 import {
   DropdownMenu,
@@ -16,46 +15,16 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { CompactViewportOverrideProvider } from "./ui/hooks/use-compact-viewport";
 import { Icon } from "./ui/icon";
-import type { RowContextMenuProps } from "./RowContextMenu";
 
-export interface SelectionActionBarProps extends RowContextMenuProps {
+export interface SelectionActionBarProps extends SelectedEntryActionsProps {
   onClear: () => void;
 }
 
-export function SelectionActionBar({
-  entries,
-  writable,
-  canPaste,
-  canExtract,
-  onOpen,
-  onDownload,
-  onAddToChat,
-  onExtract,
-  onCut,
-  onCopy,
-  onPaste,
-  onMoveTo,
-  onCopyTo,
-  onRename,
-  onCopyPath,
-  onDelete,
-  onSetStartFolder,
-  onProperties,
-  bookmarked,
-  canToggleBookmark,
-  onToggleBookmark,
-  onClear,
-}: SelectionActionBarProps) {
-  const single = entries.length === 1 ? entries[0] : undefined;
-  const isDirectory = single !== undefined && effectiveKind(single) === "directory";
-  const escapes = entries.some((entry) => entry.escapesRoot);
-  const files = entries.filter(
-    (entry) => !entry.escapesRoot && effectiveKind(entry) === "file",
-  );
-  const downloadable = files.length > 0;
-  const archive = single !== undefined && single.archiveFormat !== null ? single : undefined;
-  const count = entries.length;
+export function SelectionActionBar({ onClear, ...actionProps }: SelectionActionBarProps) {
+  const model = selectedEntryActionModel(actionProps);
+  const count = actionProps.entries.length;
   const itemWord = count === 1 ? "item" : "items";
 
   return (
@@ -67,122 +36,50 @@ export function SelectionActionBar({
         {String(count)} selected
       </span>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            aria-label={`Actions for ${String(count)} selected ${itemWord}`}
+      {/* This surface exists for touch use. Force the responsive menu into its
+          drawer renderer even on a wide coarse-pointer device. */}
+      <CompactViewportOverrideProvider isCompactViewport>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label={`Actions for ${String(count)} selected ${itemWord}`}
+            >
+              <Icon name="MoreHorizontal" aria-hidden="true" />
+              Actions
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="w-64"
+            mobileTitle={`${String(count)} selected ${itemWord}`}
+            data-testid="fm-selection-menu"
           >
-            <Icon name="MoreHorizontal" aria-hidden="true" />
-            Actions
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          className="w-64"
-          mobileTitle={`${String(count)} selected ${itemWord}`}
-          data-testid="fm-selection-menu"
-        >
-          <DropdownMenuLabel className="truncate">
-            {single === undefined ? `${String(count)} items` : single.name}
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-
-          {single !== undefined && isDirectory && !escapes ? (
-            <DropdownMenuItem onSelect={() => onOpen(single)}>
-              <Icon name="FolderOpen" aria-hidden="true" />
-              Open
-            </DropdownMenuItem>
-          ) : null}
-
-          <DropdownMenuItem disabled={!downloadable} onSelect={onDownload}>
-            <Icon name="Download" aria-hidden="true" />
-            Download
-            {entries.length > 1 ? <DropdownMenuShortcut>{entries.length}</DropdownMenuShortcut> : null}
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={!downloadable} onSelect={onAddToChat}>
-            <Icon name="MessageSquarePlus" aria-hidden="true" />
-            Add to chat
-            {files.length > 1 ? <DropdownMenuShortcut>{files.length}</DropdownMenuShortcut> : null}
-          </DropdownMenuItem>
-          {archive === undefined ? null : (
-            <DropdownMenuItem disabled={!canExtract || !writable} onSelect={() => onExtract(archive)}>
-              <Icon name="ArchiveRestore" aria-hidden="true" />
-              Extract…
-            </DropdownMenuItem>
-          )}
-
-          <DropdownMenuSeparator />
-
-          <DropdownMenuItem disabled={escapes} onSelect={onCut}>
-            <Icon name="Layers" aria-hidden="true" />
-            Cut
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={escapes} onSelect={onCopy}>
-            <Icon name="Copy" aria-hidden="true" />
-            Copy
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={!canPaste || !writable} onSelect={onPaste}>
-            <Icon name="PackageReceive" aria-hidden="true" />
-            Paste
-          </DropdownMenuItem>
-
-          <DropdownMenuSeparator />
-
-          <DropdownMenuItem disabled={escapes} onSelect={onMoveTo}>
-            <Icon name="FolderExport" aria-hidden="true" />
-            Move to…
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={escapes} onSelect={onCopyTo}>
-            <Icon name="Folder" aria-hidden="true" />
-            Copy to…
-          </DropdownMenuItem>
-
-          <DropdownMenuSeparator />
-
-          <DropdownMenuItem
-            disabled={single === undefined || !writable}
-            onSelect={() => {
-              if (single !== undefined) onRename(single);
-            }}
-          >
-            <Icon name="Edit" aria-hidden="true" />
-            Rename
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={onCopyPath}>
-            <Icon name="Paperclip" aria-hidden="true" />
-            Copy path
-          </DropdownMenuItem>
-          {single !== undefined && isDirectory && !escapes ? (
-            <>
-              <DropdownMenuItem onSelect={() => onSetStartFolder(single)}>
-                <Icon name="Pin" aria-hidden="true" />
-                Set as start folder
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!canToggleBookmark}
-                onSelect={() => onToggleBookmark(single)}
-              >
-                <Icon name={bookmarked ? "PinOff" : "Star"} aria-hidden="true" />
-                {bookmarked ? "Remove bookmark" : "Bookmark"}
-              </DropdownMenuItem>
-            </>
-          ) : null}
-          <DropdownMenuItem onSelect={onProperties}>
-            <Icon name="Info" aria-hidden="true" />
-            Properties
-          </DropdownMenuItem>
-
-          <DropdownMenuSeparator />
-
-          <DropdownMenuItem disabled={!writable} variant="destructive" onSelect={onDelete}>
-            <Icon name="Trash2" aria-hidden="true" />
-            Delete
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+            <DropdownMenuLabel className="truncate">{model.label}</DropdownMenuLabel>
+            {model.groups.map((group, groupIndex) => (
+              <Fragment key={group[0]?.id ?? String(groupIndex)}>
+                <DropdownMenuSeparator />
+                {group.map((action) => (
+                  <DropdownMenuItem
+                    key={action.id}
+                    disabled={action.disabled}
+                    variant={action.destructive ? "destructive" : "default"}
+                    onSelect={action.run}
+                  >
+                    <Icon name={action.icon} aria-hidden="true" />
+                    <span data-fm-selected-action={action.id}>{action.label}</span>
+                    {action.trailing === undefined ? null : (
+                      <DropdownMenuShortcut>{action.trailing}</DropdownMenuShortcut>
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </Fragment>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </CompactViewportOverrideProvider>
 
       <Button
         type="button"

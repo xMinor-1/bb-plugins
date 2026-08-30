@@ -211,11 +211,12 @@ download, drag and drop, and upload. Dragging over a collapsed folder for about
 0.7 s springs it open so you can drop deeper; dropping onto a file row resolves
 to the folder that row lives in.
 
-On a compact mobile layout, tick a row or tile to reveal a persistent selection
-bar. **Actions** opens the selected-item menu as a bottom drawer; **Clear
-selection** removes the ticks. Native row dragging is disabled there so a long
-press cannot turn the item into a browser drag ghost. Desktop row dragging and
-right-click menus are unchanged.
+On a compact layout or a coarse-pointer device, tick a row or tile to reveal a
+persistent selection bar. **Actions** opens the selected-item menu as a bottom
+drawer; **Clear selection** removes the ticks. Native row dragging is disabled
+there so a long press cannot turn the item into a browser drag ghost. This also
+covers landscape phones and tablets; desktop row dragging and right-click menus
+are unchanged.
 
 Three behaviors worth knowing:
 
