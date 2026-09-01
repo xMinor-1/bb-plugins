@@ -26,6 +26,10 @@
     {
       "name": "usage-meter",
       "source": "./plugins/usage-meter"
+    },
+    {
+      "name": "voice-ink",
+      "source": "./plugins/voice-ink"
     }
   ]
 }
