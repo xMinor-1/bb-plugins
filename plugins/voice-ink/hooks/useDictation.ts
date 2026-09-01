@@ -17,6 +17,25 @@ interface UseDictationOptions {
   warmUp(): void;
 }
 
+/** A segment that has not come back by then is treated as lost, not awaited forever. */
+const SEGMENT_TIMEOUT_MS = 180_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(onTimeout()), ms);
+    void work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        throw error;
+      },
+    );
+  });
+}
+
 interface OrderedCommitter {
   next: number;
   ready: Map<number, string>;
@@ -55,8 +74,18 @@ export function useDictation(options: UseDictationOptions) {
         onError: (message) => optionsRef.current.onError(message),
         onSegment: ({ index, wav }) => {
           setPending((count) => count + 1);
-          void optionsRef.current
-            .transcribe({ audioBase64: toBase64(wav), mimeType: "audio/wav" })
+          void withTimeout(
+            optionsRef.current.transcribe({
+              audioBase64: toBase64(wav),
+              mimeType: "audio/wav",
+            }),
+            SEGMENT_TIMEOUT_MS,
+            () => ({
+              ok: false as const,
+              code: "timeout",
+              message: "Recognition took too long and was dropped",
+            }),
+          )
             .then((result) => {
               if (result.ok) {
                 commit(index, result.text);

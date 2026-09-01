@@ -4,7 +4,13 @@
 // This one sends speech to the local model in pieces while you talk, so after
 // "stop" only the last piece is still being recognized.
 import { useCallback, useEffect } from "react";
-import { definePluginApp, useComposer, useComposerView, useRpc } from "@get-bb/plugin-sdk/app";
+import {
+  definePluginApp,
+  useComposer,
+  useComposerView,
+  useRpc,
+  useSettings,
+} from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import { Icon } from "@/components/ui/icon";
 import { useDictation } from "@/hooks/useDictation";
@@ -15,6 +21,7 @@ function VoiceButton() {
   const composer = useComposer();
   const view = useComposerView();
   const rpc = useRpc<typeof rpcContract>();
+  const settings = useSettings();
 
   const appendText = useCallback(
     (text: string) => {
@@ -54,6 +61,10 @@ function VoiceButton() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [cancel, listening]);
+
+  // bb's own microphone button already reaches every client, including the
+  // phone app, so a second button in the composer is opt-in.
+  if (settings.values?.composerButton !== true) return null;
 
   const label = listening
     ? "Stop dictation (Esc cancels)"

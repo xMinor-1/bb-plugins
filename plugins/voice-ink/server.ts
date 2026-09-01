@@ -65,8 +65,16 @@ export default async function plugin(bb: BbPluginApi) {
       default: "int8",
     },
     threads: { type: "string", label: "CPU threads", default: "4" },
-    batchSize: { type: "string", label: "Batch size", default: "4" },
+    // Batching shaves about a tenth off long audio but hands the model
+    // VAD-split chunks whose opening words the smaller models drop, so it is
+    // off unless someone deliberately turns it on.
+    batchSize: { type: "string", label: "Batch size", default: "1" },
     pythonPath: { type: "string", label: "Python interpreter", default: "" },
+    composerButton: {
+      type: "boolean",
+      label: "Show this plugin's own microphone button",
+      default: false,
+    },
   });
 
   async function currentConfig(): Promise<EngineConfig> {

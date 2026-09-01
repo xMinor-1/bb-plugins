@@ -11,12 +11,14 @@ running next to bb.
 
 ## What you get
 
-- **Its own microphone button in the composer.** Speech is cut at pauses and
-  recognized while you keep talking, so after "stop" only the last segment is
-  still running. Escape cancels a recording.
-- **bb's built-in microphone button**, once `BB_TRANSCRIPTION` names this
-  plugin (see below).
+- **bb's own microphone button**, working again — every client has it,
+  including the phone app. Point `BB_TRANSCRIPTION` at this plugin (below).
 - **`bb voice-ink transcribe <file>`** for anything already recorded.
+- **An optional second button in the composer** (setting: *Show this plugin's
+  own microphone button*, off by default). It cuts speech at pauses and
+  recognizes it while you keep talking, and has no per-request time limit —
+  useful with a slower model on a machine that can spare the CPU. It renders
+  only where plugin frontends run, so not in the phone app.
 
 ## Requirements
 
@@ -54,13 +56,13 @@ already loaded:
 
 | model | wait after "stop" | quality |
 |---|---|---|
-| `small` | ~2.5 s | usable, drops or mangles rarer words |
-| `medium` | ~7 s | noticeably better, keeps punctuation |
+| `small` (default) | 3 s for a short phrase, ~6 s for fifteen seconds | usable, mangles rarer terms |
+| `medium` | 7–15 s depending on how busy the machine is | noticeably better |
 | `large-v3-turbo` | ~11 s | no better than `medium` at int8 on this CPU |
 
 bb's own microphone button gives a plugin **10 seconds per attempt**, which
-only `small` clears with room to spare. The plugin's own button has no such
-limit, so `medium` is the better default there.
+only `small` clears with room to spare on this hardware. `medium` is worth it
+only through the plugin's own button, which has no such limit.
 
 A machine with an NVIDIA GPU is a different story: set **Precision** to
 `float16` and the same models run several times faster.
@@ -73,7 +75,8 @@ A machine with an NVIDIA GPU is a different story: set **Precision** to
 | Spoken language | `auto`, `ru`, `en` — naming the language avoids misdetection on short phrases |
 | Vocabulary hints | names and terms fed to the model as context, one line |
 | Precision | `int8` (CPU), `int8_float32`, `float32` |
-| CPU threads / Batch size | leave alone unless the machine is bigger or busier |
+| CPU threads / Batch size | leave alone unless the machine is bigger or busier; batching is off because it hands the model VAD-split chunks whose opening words the smaller models drop |
+| Show this plugin's own microphone button | a second, streaming button in the composer next to bb's own |
 | Python interpreter | absolute path when `faster-whisper` lives in a virtualenv |
 
 Changing a setting retires the resident worker; the next phrase runs on the new

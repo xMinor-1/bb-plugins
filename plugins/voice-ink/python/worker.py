@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 import traceback
@@ -33,6 +34,37 @@ import traceback
 # anything long enough to hold several windows and costs setup time on short clips,
 # so short segments take the plain path.
 BATCH_MIN_AUDIO_SEC = 8.0
+
+
+def normalize(text: str) -> str:
+    return " ".join(text.lower().split()).strip(" .,!?…-")
+
+
+def join_segments(texts: list) -> str:
+    """Drop Whisper's repetition loops without touching real speech.
+
+    On a phrase that runs out mid-word the model sometimes emits the same
+    fragment again and again. A repetition penalty stops that but also deletes
+    genuine sentences, so the loop is removed after the fact: a fragment
+    repeated back to back survives once.
+    """
+    kept = []
+    previous = None
+    repeats = 0
+    for text in texts:
+        current = normalize(text)
+        if current == "":
+            continue
+        if current == previous:
+            repeats += 1
+            if repeats >= 1:
+                continue
+        else:
+            repeats = 0
+        previous = current
+        kept.append(text.strip())
+    joined = " ".join(kept)
+    return re.sub(r"(\b[^.!?…]{2,40}[.!?…]\s*)\1{2,}", r"\1", joined).strip()
 
 
 def emit(payload: dict) -> None:
@@ -129,6 +161,10 @@ def main() -> int:
         options = {
             "beam_size": 1,
             "vad_filter": True,
+            # faster-whisper waits two seconds of silence before splitting, which
+            # on a dictated phrase leaves one long block whose opening words the
+            # smaller models drop. Splitting at half a second keeps them.
+            "vad_parameters": {"min_silence_duration_ms": 500},
             "condition_on_previous_text": False,
             "language": request.get("language") or None,
             "initial_prompt": request.get("prompt") or None,
@@ -138,7 +174,7 @@ def main() -> int:
                 segments, _ = batched.transcribe(audio, batch_size=args.batch_size, **options)
             else:
                 segments, _ = model.transcribe(audio, **options)
-            text = " ".join(segment.text.strip() for segment in segments).strip()
+            text = join_segments([segment.text for segment in segments])
         except Exception as error:  # noqa: BLE001
             emit(failure(
                 request_id,
