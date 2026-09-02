@@ -25,6 +25,7 @@ export interface FileTableProps {
   selectedPaths: ReadonlySet<string>;
   focusedPath: string | null;
   cutPaths: ReadonlySet<string>;
+  dragEnabled: boolean;
   sortField: SortField;
   sortDirection: SortDirection;
   onSort: (field: SortField) => void;
@@ -313,6 +314,7 @@ export function FileTable(props: FileTableProps) {
                 <FileRow
                   key={row.key}
                   entry={row.entry}
+                  dragEnabled={props.dragEnabled}
                   depth={row.depth}
                   expandable={row.expandable}
                   expanded={row.expanded}

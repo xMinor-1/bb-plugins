@@ -5,11 +5,14 @@
 // exactly these arguments" — the menu is the only place most of the contract's
 // mutations can be reached from.
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { PluginRpcTestHandlers, RenderedSlot, RpcCall } from "@get-bb/plugin-sdk/testing/app";
 
 import type { FileEntry, FileManagerContract, Job } from "../../contract";
+import { CompactViewportOverrideProvider } from "../../components/ui/hooks/use-compact-viewport";
+import { CoarsePointerOverrideProvider } from "../../components/ui/hooks/use-coarse-pointer";
 
 const HOST_ID = "host_test";
 
@@ -137,6 +140,35 @@ async function mountPanel(
   return slot;
 }
 
+async function mountPanelForInteraction(
+  interaction: { compact: boolean; coarsePointer: boolean },
+  handlers: Partial<PluginRpcTestHandlers<FileManagerContract>> = baseRpc(),
+): Promise<RenderedSlot> {
+  const Panel = registration.component;
+  function InteractionPanel(props: ComponentProps<typeof Panel>) {
+    return (
+      <CompactViewportOverrideProvider isCompactViewport={interaction.compact}>
+        <CoarsePointerOverrideProvider isCoarsePointer={interaction.coarsePointer}>
+          <Panel {...props} />
+        </CoarsePointerOverrideProvider>
+      </CompactViewportOverrideProvider>
+    );
+  }
+  const slot = renderSlot(
+    { component: InteractionPanel },
+    { subPath: "" },
+    { rpc: handlers as PluginRpcTestHandlers<FileManagerContract> },
+  );
+  await slot.findByText("notes.txt");
+  return slot;
+}
+
+async function mountCompactPanel(
+  handlers: Partial<PluginRpcTestHandlers<FileManagerContract>> = baseRpc(),
+): Promise<RenderedSlot> {
+  return mountPanelForInteraction({ compact: true, coarsePointer: true }, handlers);
+}
+
 function rowFor(slot: RenderedSlot, path: string): HTMLElement {
   return slot
     .getAllByTestId("fm-row")
@@ -237,6 +269,113 @@ describe("keyboard access to the menus (§8.3)", () => {
     fireEvent.keyDown(slot.getByTestId("fm-panel"), { key: "ContextMenu" });
 
     await slot.findByTestId("fm-background-menu");
+  });
+});
+
+describe("compact viewport selection actions", () => {
+  it("replaces native dragging with a touch-friendly selected-item menu", async () => {
+    const slot = await mountCompactPanel();
+    const row = rowFor(slot, NOTES.path);
+
+    fireEvent.click(within(row).getByRole("checkbox"));
+
+    expect(row.draggable).toBe(false);
+    expect(slot.getByTestId("fm-selection-bar").textContent).toContain("1 selected");
+
+    fireEvent.click(slot.getByRole("button", { name: "Actions for 1 selected item" }));
+    const menu = await slot.findByTestId("fm-selection-menu");
+    expect(menu.textContent).toContain("Download");
+    expect(menu.textContent).toContain("Add to chat");
+    expect(menu.textContent).toContain("Rename");
+    expect(menu.textContent).toContain("Delete");
+
+    clickItem(menu, "Copy path");
+    await waitFor(() => expect(clipboardWrites).toEqual([NOTES.path]));
+
+    fireEvent.click(slot.getByRole("button", { name: "Clear selection" }));
+    expect(row.getAttribute("data-selected")).toBeNull();
+    expect(slot.queryByTestId("fm-selection-bar")).toBeNull();
+  });
+
+  it("keeps native dragging and the context-menu UI on desktop", async () => {
+    const slot = await mountPanel();
+    const row = rowFor(slot, NOTES.path);
+
+    fireEvent.click(within(row).getByRole("checkbox"));
+
+    expect(row.draggable).toBe(true);
+    expect(slot.queryByTestId("fm-selection-bar")).toBeNull();
+  });
+
+  it("uses touch actions on a wide coarse-pointer device", async () => {
+    const slot = await mountPanelForInteraction({ compact: false, coarsePointer: true });
+    const row = rowFor(slot, NOTES.path);
+
+    fireEvent.click(within(row).getByRole("checkbox"));
+
+    expect(row.draggable).toBe(false);
+    expect(slot.getByTestId("fm-selection-bar").textContent).toContain("1 selected");
+  });
+
+  it("disables native gallery-tile dragging on a wide coarse-pointer device", async () => {
+    const slot = await mountPanelForInteraction(
+      { compact: false, coarsePointer: true },
+      baseRpc({
+        getState: () => ({
+          root: ROOT,
+          startFolder: ROOT,
+          preferences: { ...PREFERENCES, viewMode: "gallery" },
+          chunkSizeBytes: 8 * 1024 * 1024,
+          maxListEntries: 5000,
+          archiveSupport: { zip: true, tar: true, sevenZip: false },
+          pluginVersion: "0.1.0",
+          primaryHostId: HOST_ID,
+        }),
+      }),
+    );
+    const tile = (await slot.findAllByTestId("fm-tile")).find(
+      (candidate) => candidate.getAttribute("data-fm-path") === NOTES.path,
+    )!;
+
+    expect(tile.draggable).toBe(false);
+    fireEvent.click(within(tile).getByRole("checkbox"));
+    expect(slot.getByTestId("fm-selection-bar").textContent).toContain("1 selected");
+  });
+
+  it("keeps desktop and touch action availability in parity", async () => {
+    const desktopSlot = await mountPanel();
+    const desktopMenu = await openRowMenu(desktopSlot, NOTES.path);
+    const desktopActions = within(desktopMenu)
+      .getAllByRole("menuitem")
+      .map((item) => ({
+        id:
+          item
+            .querySelector("[data-fm-selected-action]")
+            ?.getAttribute("data-fm-selected-action") ?? null,
+        disabled: item.getAttribute("aria-disabled") === "true",
+      }));
+
+    cleanup();
+    window.localStorage.clear();
+    resetLastFolderStore();
+
+    const touchSlot = await mountCompactPanel();
+    const row = rowFor(touchSlot, NOTES.path);
+    fireEvent.click(within(row).getByRole("checkbox"));
+    fireEvent.click(touchSlot.getByRole("button", { name: "Actions for 1 selected item" }));
+    const touchMenu = await touchSlot.findByTestId("fm-selection-menu");
+    const touchActions = within(touchMenu)
+      .getAllByRole("menuitem")
+      .map((item) => ({
+        id:
+          item
+            .querySelector("[data-fm-selected-action]")
+            ?.getAttribute("data-fm-selected-action") ?? null,
+        disabled: item.getAttribute("aria-disabled") === "true",
+      }));
+
+    expect(touchActions).toEqual(desktopActions);
+    expect(touchActions.every((action) => action.id !== null)).toBe(true);
   });
 });
 
