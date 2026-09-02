@@ -18,6 +18,8 @@ export const engineConfigSchema = z
     vocabulary: z.string().nullable(),
     /** Interpreter with faster-whisper installed; null means "discover one". */
     pythonPath: z.string().nullable(),
+    /** Retire the model after this long without a request; 0 keeps it loaded. */
+    idleUnloadMs: z.number().int().nonnegative(),
   })
   .strict();
 export type EngineConfig = z.infer<typeof engineConfigSchema>;

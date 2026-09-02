@@ -38,6 +38,11 @@ function parsePositiveInt(value: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseNonNegativeInt(value: string, fallback: number): number {
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     model: {
@@ -70,6 +75,11 @@ export default async function plugin(bb: BbPluginApi) {
     // off unless someone deliberately turns it on.
     batchSize: { type: "string", label: "Batch size", default: "1" },
     pythonPath: { type: "string", label: "Python interpreter", default: "" },
+    idleMinutes: {
+      type: "string",
+      label: "Unload the model after N idle minutes (0 = keep it loaded)",
+      default: "0",
+    },
     composerButton: {
       type: "boolean",
       label: "Show this plugin's own microphone button",
@@ -88,6 +98,10 @@ export default async function plugin(bb: BbPluginApi) {
       language: values.language === "auto" ? null : values.language,
       vocabulary: values.vocabulary.trim() === "" ? null : values.vocabulary.trim(),
       pythonPath: values.pythonPath.trim() === "" ? null : values.pythonPath.trim(),
+      // Loading a model takes longer than bb's ten-second budget for one
+      // transcription attempt, so by default it is never unloaded: the first
+      // phrase after a quiet hour must not be the one that fails.
+      idleUnloadMs: parseNonNegativeInt(values.idleMinutes, 0) * 60_000,
     };
   }
 
@@ -142,7 +156,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.background.service("configure", {
     async start(signal) {
       try {
-        const status = await applyConfig(false);
+        const status = await applyConfig(true);
         bb.log.info(`recognition configured: ${status.state}, model ${status.model ?? "-"}`);
       } catch (error) {
         if (!signal.aborted) {

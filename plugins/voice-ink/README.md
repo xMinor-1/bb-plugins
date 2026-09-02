@@ -78,6 +78,7 @@ A machine with an NVIDIA GPU is a different story: set **Precision** to
 | CPU threads / Batch size | leave alone unless the machine is bigger or busier; batching is off because it hands the model VAD-split chunks whose opening words the smaller models drop |
 | Show this plugin's own microphone button | a second, streaming button in the composer next to bb's own |
 | Python interpreter | absolute path when `faster-whisper` lives in a virtualenv |
+| Unload the model after N idle minutes | `0` keeps it loaded; unloading means the next phrase pays for the load again, which bb's own button has no time for |
 
 Changing a setting retires the resident worker; the next phrase runs on the new
 configuration.
@@ -93,8 +94,13 @@ python/worker.py resident faster-whisper process, model kept in memory
 ```
 
 Loading a model costs seconds and recognizing a phrase costs less than that, so
-the Python process stays alive between phrases and is retired after 20 idle
-minutes or a settings change.
+the Python process stays alive between phrases and, by default, is never
+retired for being idle — only a settings change restarts it.
+
+The daemon may still stop the host worker (and with it the model) on its own.
+The configuration is therefore mirrored to `<host data dir>/config.json`: a
+worker that comes back up reads it instead of refusing the request, and loads
+the model itself.
 
 `python/worker.py` is embedded into the host bundle as a string, because the
 host artifact ships as a single JavaScript file. After editing it, run:

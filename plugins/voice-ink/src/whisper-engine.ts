@@ -37,8 +37,6 @@ export interface WhisperEngineOptions {
   tempDir: string;
   /** Path to worker.py inside the installed plugin. */
   workerScript: string;
-  /** Stop the Python process after this long without a request; 0 keeps it forever. */
-  idleUnloadMs: number;
   log(message: string, fields?: Record<string, unknown>): void;
   /** Keeps the host worker (and with it this process) alive while recognition is warm. */
   retainWorker(): WorkerLease;
@@ -89,6 +87,8 @@ export class WhisperEngine {
   private stdoutBuffer = "";
   private stderrTail: string[] = [];
   private readonly pending = new Map<string, PendingRequest>();
+  /** Mirrors the configured policy; 0 keeps the model loaded for good. */
+  private idleUnloadMs = 0;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly options: WhisperEngineOptions) {}
@@ -109,6 +109,7 @@ export class WhisperEngine {
   async configure(config: EngineConfig): Promise<EngineStatus> {
     const previous = this.config;
     this.config = config;
+    this.idleUnloadMs = config.idleUnloadMs;
     const restartNeeded =
       previous !== null &&
       (previous.model !== config.model ||
@@ -417,11 +418,11 @@ export class WhisperEngine {
 
   private scheduleIdleUnload(): void {
     this.clearIdleUnload();
-    if (this.options.idleUnloadMs <= 0 || this.pending.size > 0) return;
+    if (this.idleUnloadMs <= 0 || this.pending.size > 0) return;
     this.idleTimer = setTimeout(() => {
       this.options.log("unloading idle recognition worker");
       void this.stop("idle");
-    }, this.options.idleUnloadMs);
+    }, this.idleUnloadMs);
     this.idleTimer.unref?.();
   }
 

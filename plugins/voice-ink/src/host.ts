@@ -1,7 +1,7 @@
 // The `bb.host` entry: it owns the recognition worker on the machine bb runs
 // on, and answers both bb's own voice service (the built-in microphone button)
 // and the plugin's streaming methods (its own button).
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
@@ -10,7 +10,13 @@ import {
   type ExperimentalAiInferenceCompleteOutput,
   type ExperimentalAiVoiceTranscribeOutput,
 } from "@get-bb/plugin-sdk/ai-services";
-import { voiceHostContract, type EngineStatus, type TranscriptionResult } from "../contract.js";
+import {
+  engineConfigSchema,
+  voiceHostContract,
+  type EngineConfig,
+  type EngineStatus,
+  type TranscriptionResult,
+} from "../contract.js";
 import { WhisperEngine } from "./whisper-engine.js";
 import { WORKER_SOURCE } from "./worker-source.js";
 
@@ -27,6 +33,21 @@ const hostContract = defineRpcContract({
 const SEGMENT_TIMEOUT_MS = 600_000;
 /** Leaves the caller room to hear our answer before its own deadline fires. */
 const TIMEOUT_GRACE_MS = 500;
+
+/**
+ * What to run when nobody has configured anything yet — a worker the daemon
+ * restarted answers with these rather than refusing the request.
+ */
+const DEFAULT_CONFIG: EngineConfig = {
+  model: "small",
+  computeType: "int8",
+  threads: 4,
+  batchSize: 1,
+  language: null,
+  vocabulary: null,
+  pythonPath: null,
+  idleUnloadMs: 0,
+};
 
 interface HostPaths {
   readonly dataDir: string;
@@ -65,7 +86,6 @@ async function engineFor(context: HostContext): Promise<WhisperEngine> {
       dataDir,
       tempDir,
       workerScript,
-      idleUnloadMs: 20 * 60_000,
       log: (message, fields) => {
         console.log(`[voice-ink] ${message}${fields ? ` ${JSON.stringify(fields)}` : ""}`);
       },
@@ -79,6 +99,9 @@ async function engineFor(context: HostContext): Promise<WhisperEngine> {
       },
       { once: true },
     );
+    // The daemon may retire this worker between phrases; the settings live in
+    // the server, so they are mirrored here and reread on the way back up.
+    await created.configure(await readStoredConfig(dataDir));
     engine = created;
     return created;
   })().finally(() => {
@@ -86,6 +109,21 @@ async function engineFor(context: HostContext): Promise<WhisperEngine> {
   });
 
   return preparing;
+}
+
+function configPath(dataDir: string): string {
+  return join(dataDir, "config.json");
+}
+
+async function readStoredConfig(dataDir: string): Promise<EngineConfig> {
+  try {
+    const parsed = engineConfigSchema.safeParse(
+      JSON.parse(await readFile(configPath(dataDir), "utf8")),
+    );
+    return parsed.success ? parsed.data : DEFAULT_CONFIG;
+  } catch {
+    return DEFAULT_CONFIG;
+  }
 }
 
 function serviceMismatch(serviceId: string): { ok: false; code: "request_failed"; message: string } {
@@ -144,7 +182,13 @@ export default experimental_defineHostEntry({
 
     "voice.configure": async ({ config }, context): Promise<EngineStatus> => {
       const active = await engineFor(context as HostContext);
-      return active.configure(config);
+      const status = await active.configure(config);
+      await writeFile(
+        configPath(context.experimental_paths.dataDir),
+        JSON.stringify(config),
+        "utf8",
+      );
+      return status;
     },
 
     "voice.status": async ({ warmUp }, context): Promise<EngineStatus> => {
