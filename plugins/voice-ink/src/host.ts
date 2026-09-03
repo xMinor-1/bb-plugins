@@ -48,6 +48,8 @@ const DEFAULT_CONFIG: EngineConfig = {
   vocabulary: null,
   pythonPath: null,
   idleUnloadMs: 0,
+  punctuate: true,
+  paragraphPauseSec: 1.2,
   polish: {
     provider: "off",
     apiKey: null,

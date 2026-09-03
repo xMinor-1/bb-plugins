@@ -35,12 +35,69 @@ import traceback
 # so short segments take the plain path.
 BATCH_MIN_AUDIO_SEC = 8.0
 
+# Whisper hears words, not writing: it punctuates unevenly, rarely marks a
+# question and never starts a paragraph. A small ONNX model trained for exactly
+# this restores punctuation, sentence boundaries and capitalization in about
+# half a second on CPU — no API key, no network, nothing leaves the machine.
+PUNCTUATION_MODEL = "1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase"
+# The model expects unpunctuated input; feeding it Whisper's own commas back
+# produces ",,," runs.
+PUNCTUATION_STRIP = re.compile(r"[.,!?;:…]+")
+
+
+class Punctuator:
+    """The punctuation model, loaded once and reused."""
+
+    def __init__(self, enabled: bool):
+        self.model = None
+        self.error = None
+        if not enabled:
+            return
+        try:
+            from punctuators.models import PunctCapSegModelONNX
+
+            self.model = PunctCapSegModelONNX.from_pretrained(PUNCTUATION_MODEL)
+        except Exception as error:  # noqa: BLE001 - absence is not fatal
+            self.error = f"{type(error).__name__}: {error}"
+
+    def apply(self, blocks: list) -> list:
+        """Punctuate each block of speech; a block becomes one paragraph."""
+        if self.model is None:
+            return blocks
+        prepared = [PUNCTUATION_STRIP.sub("", block).lower().strip() for block in blocks]
+        prepared = [block for block in prepared if block != ""]
+        if not prepared:
+            return []
+        try:
+            return [" ".join(sentences) for sentences in self.model.infer(prepared)]
+        except Exception:  # noqa: BLE001 - keep the transcript rather than lose it
+            return blocks
+
+
+def split_into_blocks(segments: list, pause_sec: float) -> list:
+    """Group Whisper segments into paragraphs, cutting where the speaker paused."""
+    blocks = []
+    current = []
+    previous_end = None
+    for segment in segments:
+        text = segment.text.strip()
+        if text == "":
+            continue
+        if previous_end is not None and segment.start - previous_end >= pause_sec and current:
+            blocks.append(" ".join(current))
+            current = []
+        current.append(text)
+        previous_end = segment.end
+    if current:
+        blocks.append(" ".join(current))
+    return blocks
+
 
 def normalize(text: str) -> str:
     return " ".join(text.lower().split()).strip(" .,!?…-")
 
 
-def join_segments(texts: list) -> str:
+def deduplicate(segments: list) -> list:
     """Drop Whisper's repetition loops without touching real speech.
 
     On a phrase that runs out mid-word the model sometimes emits the same
@@ -50,21 +107,15 @@ def join_segments(texts: list) -> str:
     """
     kept = []
     previous = None
-    repeats = 0
-    for text in texts:
-        current = normalize(text)
+    for segment in segments:
+        current = normalize(segment.text)
         if current == "":
             continue
         if current == previous:
-            repeats += 1
-            if repeats >= 1:
-                continue
-        else:
-            repeats = 0
+            continue
         previous = current
-        kept.append(text.strip())
-    joined = " ".join(kept)
-    return re.sub(r"(\b[^.!?…]{2,40}[.!?…]\s*)\1{2,}", r"\1", joined).strip()
+        kept.append(segment)
+    return kept
 
 
 def emit(payload: dict) -> None:
@@ -84,6 +135,7 @@ def main() -> int:
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--download-root", default=None)
+    parser.add_argument("--punctuate", default="on", choices=["on", "off"])
     args = parser.parse_args()
 
     try:
@@ -114,9 +166,14 @@ def main() -> int:
         })
         return 1
 
+    punctuator = Punctuator(args.punctuate == "on")
+    if punctuator.error is not None:
+        emit({"event": "note", "message": f"punctuation disabled: {punctuator.error}"})
+
     emit({
         "event": "ready",
         "model": args.model,
+        "punctuation": punctuator.model is not None,
         "computeType": args.compute_type,
         "device": args.device,
     })
@@ -171,10 +228,13 @@ def main() -> int:
         }
         try:
             if batched is not None and audio_sec >= BATCH_MIN_AUDIO_SEC:
-                segments, _ = batched.transcribe(audio, batch_size=args.batch_size, **options)
+                raw, _ = batched.transcribe(audio, batch_size=args.batch_size, **options)
             else:
-                segments, _ = model.transcribe(audio, **options)
-            text = join_segments([segment.text for segment in segments])
+                raw, _ = model.transcribe(audio, **options)
+            segments = deduplicate(list(raw))
+            pause_sec = float(request.get("paragraphPauseSec") or 1.2)
+            blocks = punctuator.apply(split_into_blocks(segments, pause_sec))
+            text = "\n\n".join(block.strip() for block in blocks if block.strip() != "")
         except Exception as error:  # noqa: BLE001
             emit(failure(
                 request_id,

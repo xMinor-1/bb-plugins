@@ -121,7 +121,10 @@ export class WhisperEngine {
         previous.computeType !== config.computeType ||
         previous.threads !== config.threads ||
         previous.batchSize !== config.batchSize ||
-        previous.pythonPath !== config.pythonPath);
+        previous.pythonPath !== config.pythonPath ||
+        // The punctuation model is loaded at startup, so switching it needs a
+        // fresh process.
+        previous.punctuate !== config.punctuate);
     if (restartNeeded) {
       await this.stop("configuration changed");
     }
@@ -189,6 +192,7 @@ export class WhisperEngine {
           path: audioPath,
           language: args.language ?? config.language,
           prompt: args.prompt ?? config.vocabulary,
+          paragraphPauseSec: config.paragraphPauseSec,
         },
         args.timeoutMs,
       );
@@ -238,6 +242,8 @@ export class WhisperEngine {
         String(config.batchSize),
         "--download-root",
         join(this.options.dataDir, "models"),
+        "--punctuate",
+        config.punctuate ? "on" : "off",
       ],
       { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, PYTHONUNBUFFERED: "1" } },
     ) as ChildProcessWithoutNullStreams;
@@ -333,6 +339,14 @@ export class WhisperEngine {
     }
 
     if (payload.event === "ready") return "ready";
+    if (payload.event === "note") {
+      // Something optional is missing (the punctuation model, usually);
+      // recognition still works, so this is a log line, not a failure.
+      this.options.log(
+        typeof payload.message === "string" ? payload.message : "worker note",
+      );
+      return null;
+    }
     if (payload.event === "error") {
       return typeof payload.message === "string" ? payload.message : "worker failed to start";
     }

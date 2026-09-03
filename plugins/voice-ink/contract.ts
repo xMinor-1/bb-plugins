@@ -20,6 +20,10 @@ export const engineConfigSchema = z
     pythonPath: z.string().nullable(),
     /** Retire the model after this long without a request; 0 keeps it loaded. */
     idleUnloadMs: z.number().int().nonnegative(),
+    /** Restore punctuation, sentence boundaries and capitalization locally. */
+    punctuate: z.boolean(),
+    /** A pause at least this long starts a new paragraph. */
+    paragraphPauseSec: z.number().positive(),
     /** Language model that turns the raw transcript into written text. */
     polish: z
       .object({

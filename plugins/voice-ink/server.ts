@@ -46,6 +46,11 @@ function parsePositiveInt(value: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parsePositiveFloat(value: string, fallback: number): number {
+  const parsed = Number.parseFloat(value.trim());
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function parseNonNegativeInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(value.trim(), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -88,9 +93,19 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Unload the model after N idle minutes (0 = keep it loaded)",
       default: "0",
     },
-    // Whisper writes what it hears; punctuation, paragraphs and the odd
-    // misheard word are what a small language model fixes in under a second.
-    // The audio stays on this machine either way — only the transcript is sent.
+    punctuation: {
+      type: "boolean",
+      label: "Restore punctuation and sentence boundaries (runs on this machine)",
+      default: true,
+    },
+    paragraphPause: {
+      type: "string",
+      label: "Start a new paragraph after a pause of N seconds",
+      default: "1.2",
+    },
+    // The local pass fixes punctuation but not misheard words. A language model
+    // does both — at the cost of a key and of the transcript (never the audio)
+    // leaving this machine.
     cleanup: {
       type: "select",
       label: "Clean the transcript up with a language model",
@@ -136,6 +151,8 @@ export default async function plugin(bb: BbPluginApi) {
       // transcription attempt, so by default it is never unloaded: the first
       // phrase after a quiet hour must not be the one that fails.
       idleUnloadMs: parseNonNegativeInt(values.idleMinutes, 0) * 60_000,
+      punctuate: values.punctuation,
+      paragraphPauseSec: parsePositiveFloat(values.paragraphPause, 1.2),
       polish: {
         provider: parseCleanupProvider(values.cleanup),
         apiKey: values.cleanupApiKey?.trim() === "" ? null : (values.cleanupApiKey ?? null),
@@ -188,7 +205,9 @@ export default async function plugin(bb: BbPluginApi) {
   // Settings are applied to the host, not read there: a model change retires the
   // resident worker so the next phrase runs on what the user just chose.
   settings.onChange(() => {
-    void applyConfig(false).catch((error: unknown) => {
+    // Warm up as well as reconfigure: a model change retires the worker, and
+    // loading the new one takes longer than bb allows for one transcription.
+    void applyConfig(true).catch((error: unknown) => {
       bb.log.warn(`could not apply settings to the recognition host: ${String(error)}`);
     });
   });

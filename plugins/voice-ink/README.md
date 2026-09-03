@@ -29,6 +29,11 @@ running next to bb.
   Point the **Python interpreter** setting at a virtualenv if you keep one.
 - Roughly 1.5 GB of RAM for the `medium` model and 0.5 GB for `small`; the
   model is downloaded on first use into the plugin's data directory.
+- For local punctuation, `punctuators` in the same interpreter:
+  ```sh
+  pip install punctuators
+  ```
+  Without it recognition still works, unpunctuated, and the worker logs why.
 
 ## Install
 
@@ -47,21 +52,27 @@ npx bb-app config set BB_TRANSCRIPTION voice-ink/local
 The part after the slash is a label; the model comes from the plugin's
 settings.
 
-## Cleaning the transcript up
+## From speech to writing
 
-Whisper writes what it hears: few question marks, no paragraphs, and the
-occasional wrong word where the audio was ambiguous. MyInk solves this the same
-way — a language model rewrites the transcript into what you would have typed.
+Whisper hears words; it punctuates unevenly, rarely marks a question and never
+starts a paragraph. Two passes turn its output into text you would have typed,
+and the first one needs no key and no network:
 
-Set **Clean the transcript up with a language model** to `groq`, `anthropic` or
-`openai-compatible`, paste a key into **Cleanup API key**, and the transcript
-(never the audio) is sent for a pass that restores punctuation, sentence and
-paragraph boundaries, and fixes words the recognizer clearly got wrong. On Groq
-this costs under a second; failures fall through and you get the raw transcript
-rather than nothing.
+**Punctuation (on by default, runs on this machine).** A small ONNX model
+restores punctuation, sentence boundaries, question marks and capitalization in
+about half a second on CPU. Paragraphs come from the recording itself — a pause
+of at least **Start a new paragraph after a pause of N seconds** starts a new
+one.
 
-**Vocabulary hints** are handed to the cleanup model as preferred spellings, so
-names and jargon come back written the way you write them.
+**Vocabulary hints** are fed to the recognizer as context. This is the cheapest
+quality win there is: adding `супервизор` turned a stubborn *скривизору* into the
+right word.
+
+**Cleanup with a language model (optional, needs a key).** The local pass fixes
+punctuation but cannot fix a misheard word. Set **Clean the transcript up with a
+language model** to `groq`, `anthropic` or `openai-compatible` and paste a key,
+and the transcript — never the audio — is sent for a pass that also repairs
+words the recognizer got wrong. Failures fall through to the unpolished text.
 
 ## Choosing a model
 
