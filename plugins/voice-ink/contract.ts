@@ -20,6 +20,16 @@ export const engineConfigSchema = z
     pythonPath: z.string().nullable(),
     /** Retire the model after this long without a request; 0 keeps it loaded. */
     idleUnloadMs: z.number().int().nonnegative(),
+    /** Language model that turns the raw transcript into written text. */
+    polish: z
+      .object({
+        provider: z.enum(["off", "groq", "anthropic", "openai-compatible"]),
+        apiKey: z.string().nullable(),
+        model: z.string(),
+        baseUrl: z.string().nullable(),
+        extraInstruction: z.string().nullable(),
+      })
+      .strict(),
   })
   .strict();
 export type EngineConfig = z.infer<typeof engineConfigSchema>;

@@ -17,6 +17,7 @@ import {
   type EngineStatus,
   type TranscriptionResult,
 } from "../contract.js";
+import { polishTranscript } from "./polish.js";
 import { WhisperEngine } from "./whisper-engine.js";
 import { WORKER_SOURCE } from "./worker-source.js";
 
@@ -47,6 +48,13 @@ const DEFAULT_CONFIG: EngineConfig = {
   vocabulary: null,
   pythonPath: null,
   idleUnloadMs: 0,
+  polish: {
+    provider: "off",
+    apiKey: null,
+    model: "",
+    baseUrl: null,
+    extraInstruction: null,
+  },
 };
 
 interface HostPaths {
@@ -111,6 +119,24 @@ async function engineFor(context: HostContext): Promise<WhisperEngine> {
   return preparing;
 }
 
+/**
+ * Cleanup gets whatever is left of the caller's budget after recognition, minus
+ * the grace the caller itself needs: an unpolished transcript beats a timeout.
+ */
+async function polish(
+  text: string,
+  config: EngineConfig,
+  budgetMs: number,
+): Promise<string> {
+  if (budgetMs < 500) return text;
+  return polishTranscript({
+    text,
+    config: { ...config.polish, vocabulary: config.vocabulary },
+    timeoutMs: budgetMs,
+    log: (message) => console.log(`[voice-ink] ${message}`),
+  });
+}
+
 function configPath(dataDir: string): string {
   return join(dataDir, "config.json");
 }
@@ -170,6 +196,7 @@ export default experimental_defineHostEntry({
     "ai.voice.transcribe": async (input, context): Promise<ExperimentalAiVoiceTranscribeOutput> => {
       if (input.serviceId !== VOICE_INK_SERVICE_ID) return serviceMismatch(input.serviceId);
       const active = await engineFor(context as HostContext);
+      const deadline = Date.now() + input.timeoutMs - TIMEOUT_GRACE_MS;
       const result = await active.transcribe({
         audioBase64: input.audioBase64,
         mimeType: input.mimeType,
@@ -177,7 +204,11 @@ export default experimental_defineHostEntry({
         prompt: input.prompt,
         timeoutMs: Math.max(1_000, input.timeoutMs - TIMEOUT_GRACE_MS),
       });
-      return toVoiceOutput(input.model, result);
+      if (!result.ok) return toVoiceOutput(input.model, result);
+      const config = active.currentConfig();
+      const text =
+        config === null ? result.text : await polish(result.text, config, deadline - Date.now());
+      return { ok: true, model: input.model, text };
     },
 
     "voice.configure": async ({ config }, context): Promise<EngineStatus> => {
@@ -198,13 +229,19 @@ export default experimental_defineHostEntry({
 
     "voice.transcribeSegment": async (input, context): Promise<TranscriptionResult> => {
       const active = await engineFor(context as HostContext);
-      return active.transcribe({
+      const result = await active.transcribe({
         audioBase64: input.audioBase64,
         mimeType: input.mimeType,
         language: input.language,
         prompt: null,
         timeoutMs: SEGMENT_TIMEOUT_MS,
       });
+      if (!result.ok) return result;
+      const config = active.currentConfig();
+      return {
+        ...result,
+        text: config === null ? result.text : await polish(result.text, config, 30_000),
+      };
     },
   },
   dispose: async () => {

@@ -47,6 +47,22 @@ npx bb-app config set BB_TRANSCRIPTION voice-ink/local
 The part after the slash is a label; the model comes from the plugin's
 settings.
 
+## Cleaning the transcript up
+
+Whisper writes what it hears: few question marks, no paragraphs, and the
+occasional wrong word where the audio was ambiguous. MyInk solves this the same
+way — a language model rewrites the transcript into what you would have typed.
+
+Set **Clean the transcript up with a language model** to `groq`, `anthropic` or
+`openai-compatible`, paste a key into **Cleanup API key**, and the transcript
+(never the audio) is sent for a pass that restores punctuation, sentence and
+paragraph boundaries, and fixes words the recognizer clearly got wrong. On Groq
+this costs under a second; failures fall through and you get the raw transcript
+rather than nothing.
+
+**Vocabulary hints** are handed to the cleanup model as preferred spellings, so
+names and jargon come back written the way you write them.
+
 ## Choosing a model
 
 Whisper always runs its encoder over a 30-second window, so a three-second

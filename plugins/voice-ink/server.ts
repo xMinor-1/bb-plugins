@@ -25,6 +25,14 @@ export type { EngineStatus, TranscriptionResult };
 /** Must match VOICE_INK_SERVICE_ID in src/host.ts: it is the BB_TRANSCRIPTION prefix. */
 const SERVICE_ID = "voice-ink";
 
+/** Cleanup backends the settings offer; the value is validated on the way out. */
+const CLEANUP_PROVIDERS = ["off", "groq", "anthropic", "openai-compatible"] as const;
+type CleanupProvider = (typeof CLEANUP_PROVIDERS)[number];
+
+function parseCleanupProvider(value: string): CleanupProvider {
+  return CLEANUP_PROVIDERS.find((candidate) => candidate === value) ?? "off";
+}
+
 /** Models offered in settings, fastest first. Measurements are in the README. */
 const MODEL_OPTIONS = ["small", "medium", "large-v3-turbo"] as const;
 
@@ -80,6 +88,32 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Unload the model after N idle minutes (0 = keep it loaded)",
       default: "0",
     },
+    // Whisper writes what it hears; punctuation, paragraphs and the odd
+    // misheard word are what a small language model fixes in under a second.
+    // The audio stays on this machine either way — only the transcript is sent.
+    cleanup: {
+      type: "select",
+      label: "Clean the transcript up with a language model",
+      options: [...CLEANUP_PROVIDERS],
+      default: "off",
+    },
+    cleanupApiKey: { type: "string", label: "Cleanup API key", secret: true },
+    cleanupModel: {
+      type: "string",
+      label: "Cleanup model",
+      default: "llama-3.3-70b-versatile",
+    },
+    cleanupBaseUrl: {
+      type: "string",
+      label: "Cleanup endpoint (openai-compatible only)",
+      default: "",
+    },
+    cleanupInstruction: {
+      type: "string",
+      label: "Extra cleanup instruction",
+      experimental_multiline: true,
+      default: "",
+    },
     composerButton: {
       type: "boolean",
       label: "Show this plugin's own microphone button",
@@ -102,6 +136,14 @@ export default async function plugin(bb: BbPluginApi) {
       // transcription attempt, so by default it is never unloaded: the first
       // phrase after a quiet hour must not be the one that fails.
       idleUnloadMs: parseNonNegativeInt(values.idleMinutes, 0) * 60_000,
+      polish: {
+        provider: parseCleanupProvider(values.cleanup),
+        apiKey: values.cleanupApiKey?.trim() === "" ? null : (values.cleanupApiKey ?? null),
+        model: values.cleanupModel.trim(),
+        baseUrl: values.cleanupBaseUrl.trim() === "" ? null : values.cleanupBaseUrl.trim(),
+        extraInstruction:
+          values.cleanupInstruction.trim() === "" ? null : values.cleanupInstruction.trim(),
+      },
     };
   }
 

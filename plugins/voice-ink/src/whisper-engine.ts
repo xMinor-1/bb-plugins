@@ -93,6 +93,11 @@ export class WhisperEngine {
 
   constructor(private readonly options: WhisperEngineOptions) {}
 
+  /** The configuration in force, or null before the first `configure`. */
+  currentConfig(): EngineConfig | null {
+    return this.config;
+  }
+
   status(): EngineStatus {
     return {
       state: this.state,
