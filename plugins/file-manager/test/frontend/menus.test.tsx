@@ -468,6 +468,40 @@ describe("row context menu (§8.2)", () => {
       ]);
     });
   });
+
+  it("offers Open for a file row too, and shows it (§8.12)", async () => {
+    // Until 0.8 the row menu had an Open only for folders, which left the
+    // panel's most ordinary action reachable by double-click and by nothing
+    // else — invisible on the surface where double-click had nowhere to open
+    // the file into.
+    const slot = await mountPanel(
+      baseRpc({
+        readTextFile: (input) => ({
+          path: input.path,
+          text: "notes\n",
+          sizeBytes: 6,
+          readBytes: 6,
+          truncated: false,
+        }),
+      }),
+    );
+
+    clickItem(await openRowMenu(slot, NOTES.path), "Open");
+
+    const viewer = await slot.findByTestId("fm-viewer");
+    expect(within(viewer).getByTestId("bb-source-code").getAttribute("data-path")).toBe("notes.txt");
+  });
+
+  it("offers no Open for several rows at once — there is no single destination", async () => {
+    const slot = await mountPanel();
+
+    fireEvent.click(rowFor(slot, NOTES.path));
+    fireEvent.click(rowFor(slot, OTHER.path), { ctrlKey: true });
+    const many = await openRowMenu(slot, OTHER.path);
+    expect(within(many).queryAllByRole("menuitem").map((item) => item.textContent)).not.toContain(
+      "Open",
+    );
+  });
 });
 
 describe("background context menu (§8.2)", () => {

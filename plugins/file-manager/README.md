@@ -18,13 +18,18 @@ every path is re-resolved and clamped on the server before a single byte moves.
   directory. Children are fetched on first open and cached afterwards.
 - **Upload** — drag and drop files or whole folders. Uploads are chunked,
   resumable, and keep running while you browse elsewhere in bb.
-- **Open a file to read it** — double-click (or `Enter`) hands the file to bb's
-  own preview panel, so it opens as a tab beside the manager instead of
-  landing in your downloads folder. A client with no preview panel downloads
-  it as before, and an archive still opens the extract dialog.
-- **Quick look** — `Space` on the selected row opens the same preview without
-  taking your hands off the keyboard. It never downloads and never opens a
-  folder, so holding `↓` and tapping `Space` is a way to skim a folder.
+- **Open a file to read it** — double-click, `Enter`, or **Open** in the
+  right-click menu. Beside a thread the file goes to bb's own preview panel, so
+  it opens as a tab next to the manager; on the standalone File Manager page,
+  where bb has no preview panel to offer, the plugin shows the file itself:
+  images, PDFs, video and audio play in place, Markdown is rendered (with the
+  source one click away), and everything else — including `Makefile`,
+  `LICENSE` and files with no extension at all — opens in bb's source viewer
+  with syntax highlighting. Anything that turns out not to be text says so and
+  offers the download. An archive still opens the extract dialog.
+- **Quick look** — `Space` on the selected row does the same without taking
+  your hands off the keyboard. It never downloads and never opens a folder, so
+  holding `↓` and tapping `Space` is a way to skim a folder.
 - **Gallery** — a grid of thumbnails instead of a list, for the folders where
   the file names are not the point. Images are shown, everything else keeps
   its type icon, and the choice is remembered.
@@ -195,8 +200,8 @@ the folder — the two gestures are deliberately different.
 | `←` on an expanded folder | collapse it |
 | `←` on a nested row | move the cursor to its parent row |
 | `Alt`+`←`, `Backspace` | go up one directory |
-| `Enter` | open: a folder navigates in, a file opens in bb's preview panel, an archive opens the extract dialog |
-| `Space` | quick look: open the selected file in bb's preview panel. A folder does nothing — that is `Enter`'s job — and nothing is ever downloaded |
+| `Enter` | open: a folder navigates in, a file opens (bb's preview panel beside a thread, the built-in viewer otherwise), an archive opens the extract dialog |
+| `Space` | quick look: show the selected file the same way. A folder does nothing — that is `Enter`'s job — and nothing is ever downloaded |
 | `Shift`+`F10`, the Menu key | open the context menu for the row under the cursor (the empty-space menu when no row is focused) |
 | `Ctrl`/`Cmd`+`L` | edit the path: the crumbs become a text field with the full path selected |
 | `Escape` | clear the selection (in the path bar it cancels, in the filter box it clears the filter) |
@@ -396,7 +401,7 @@ Straight from git, which builds during install — the released tag, or the tip
 of `main`:
 
 ```bash
-bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.7.0 \
+bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.8.0 \
   --plugin file-manager --tag-prefix file-manager/
 bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@main --plugin file-manager
 ```
@@ -599,9 +604,9 @@ line in [PR #122](https://github.com/get-bb/marketplace/pull/122) — and that
 copy is the source of truth; a draft next to the code only goes stale, as it
 did between 0.2.0 and 0.3.0. The entry resolves a source range against this
 repository's tags, so any release inside that range reaches the catalog on its
-own. On a `0.x` line `^0.7.0` covers `0.7.x` only, so the next minor needs a
-new pull request there — as do moving the source, or changing the id, display
-name, description, tags or icon.
+own. On a `0.x` line `^0.7.0` covers `0.7.x` only, so **0.8.0 is not yet in the
+catalog range** and needs a pull request widening it — as do moving the source,
+or changing the id, display name, description, tags or icon.
 
 ## License
 

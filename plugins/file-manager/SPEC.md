@@ -1047,6 +1047,7 @@ components/dialogs/ConfirmDeleteDialog.tsx FRONTEND
 components/dialogs/ExtractDialog.tsx      FRONTEND
 components/dialogs/PropertiesDialog.tsx   FRONTEND  §8.10: one path in full, or a summary of a selection
 components/dialogs/FolderPickerDialog.tsx FRONTEND  own folder browser (native picker is macOS-only)
+components/dialogs/FileViewerDialog.tsx  FRONTEND  §8.12: the file itself, when this surface has no bb preview panel
 hooks/useDirectory.ts                     FRONTEND  listDir + realtime refetch + sort/filter memo
 hooks/useSelection.ts                     FRONTEND  anchor/range/toggle logic
 hooks/useClipboard.ts                     FRONTEND  cut/copy/paste state
@@ -1054,6 +1055,7 @@ hooks/useUploads.ts                       FRONTEND  React binding for lib/upload
 hooks/useJobs.ts                          FRONTEND  extract job list + JOB_CHANNEL
 hooks/usePreviewBase.ts                   FRONTEND  one createPreviewUrl per folder, renewed before it lapses (§8.9)
 lib/preview.ts                            FRONTEND  which entries have thumbnails, and baseUrl + name → URL (§8.9)
+lib/viewer.ts                             FRONTEND  which renderer a file name gets, and what is a question for the server (§8.12)
 lib/fm-rpc.ts                             FRONTEND  typed useRpc wrapper + error parsing
 lib/upload-manager.ts                     FRONTEND  token cache, XHR chunking, queue, resume, events
 lib/download.ts                           FRONTEND  anchor-click download helper
@@ -1083,28 +1085,38 @@ lib/errors.ts                             FRONTEND  parseRpcError → { code, me
 | click on the checkbox cell | toggle without clearing others; anchor moves |
 | click on empty table space | clear selection |
 | double click on a directory | navigate into it (`toPluginPanel`) |
-| double click on a file | open it in bb's preview panel; download when that is unavailable (§8.2.1) |
+| double click on a file | open it in bb's preview panel, or in the built-in viewer when this surface has none (§8.2.1) |
 | double click on an archive | open `ExtractDialog` |
 | double click on a row with `escapesRoot` | no-op + toast "Link points outside /home/coder" |
 
-#### 8.2.1 Opening a file (v0.7)
+#### 8.2.1 Opening a file (v0.7, reworked in v0.8)
 
-Double-click (and `Enter`) hand the file to bb's own preview panel through
+Double-click (and `Enter`, and the row menu's **Open**) hand the file to bb's
+own preview panel through
 `useBbNavigate().experimental_openFilePreview({ target: { kind: "host",
-hostId, path }, location: null })`, so it opens as a tab beside the manager
-instead of downloading. bb addresses a live file by host id, which is why
-`getState` carries `primaryHostId` — `bb.sdk.system.config()` on the backend,
-resolved once and remembered.
+hostId, path }, location: null })`, so it opens as a tab beside the manager.
+bb addresses a live file by host id, which is why `getState` carries
+`primaryHostId` — `bb.sdk.system.config()` on the backend, resolved once and
+remembered.
 
-Three ways this degrades, all to the pre-0.7 download: no `primaryHostId` (an
-older server, or a config call that failed), no `experimental_openFilePreview`
-on the client's runtime, and a host that answers `false` (a surface with no
-preview panel). A throw from the host is caught for the same reason — a slot
-component that throws takes the plugin's whole UI down.
+Three ways that call answers `false`: no `primaryHostId` (an older server, or
+a config call that failed), no `experimental_openFilePreview` on the client's
+runtime, and a host with no preview panel on this surface. A throw is caught
+for the same reason a slot component never throws — it takes the plugin's
+whole UI down.
 
-An archive still opens `ExtractDialog`: there is nothing in a `.zip` to
-preview, and extracting it is what the gesture is for. Downloading stays on
-the row menu, where it is explicit.
+**All three end in the built-in viewer (§8.12), not in a download.** That
+correction is the whole of v0.8. bb wires `openFilePreview` into exactly two
+surfaces — the thread split view and the right-hand plugin panel host — so the
+third answer was not an edge case at all: on the sidebar's own full-page File
+Manager, *every* file answered `false`, and every double-click quietly put a
+copy in ~/Downloads instead of showing anything. Downloading stays where it was
+always explicit: the row menu, and a button inside the viewer.
+
+An archive still opens `ExtractDialog`: there is nothing in a `.zip` to read,
+and extracting it is what the gesture is for. A socket, fifo or device node
+still downloads — there is no content to render, and the bytes are the only
+thing that can be handed over.
 | right click on a row | `RowContextMenu`; if the row is not selected, select it first |
 | right click on empty space | `BackgroundContextMenu` |
 | click on a breadcrumb | navigate to that ancestor |
@@ -1282,18 +1294,21 @@ a keystroke that opens the focused row in bb's preview panel.
 
 **Quick look — `Space`.** Bound in `handleKeyDown` below the `isTypingTarget`
 guard, so typing a space in the filter or in the path bar is untouched. It runs
-exactly the path a double-click runs — `previewEntry`, i.e.
-`experimental_openFilePreview` with `primaryHostId` (§8.2.1) — and differs from
-`Enter` in three ways, each deliberate:
+exactly the path a double-click runs — `showEntry`, i.e. bb's preview panel
+where there is one and the built-in viewer where there is not (§8.2.1, §8.12)
+— and differs from `Enter` in two ways, each deliberate:
 
 | Case | `Enter` | `Space` |
 | --- | --- | --- |
-| directory | navigates into it | nothing (there is nothing to preview) |
-| archive | opens `ExtractDialog` | previews the file |
-| host declines the preview | downloads | nothing |
+| directory | navigates into it | nothing (there is nothing to read) |
+| archive | opens `ExtractDialog` | shows the file |
+| file, no preview panel on this surface | built-in viewer | built-in viewer |
 
-The download fallback is the difference that matters: a peek that silently puts
-a file in the downloads folder is not a peek. `preventDefault()` is called
+The third row was the difference that mattered until v0.8, and it read
+"downloads / nothing": a peek that silently puts a file in the downloads folder
+is not a peek, so Space did nothing at all rather than that. Now both do the
+same right thing and the rule survives only as "quick look never downloads".
+`preventDefault()` is called
 whenever a row holds the cursor — including for a folder — because the
 alternative is Space paging the listing out from under that row; with no row
 focused Space is left to the browser, per §8.3's rule about unhandled keys.
@@ -1492,6 +1507,69 @@ existing `navigateTo`, so the route rules of §10.1 hold unchanged.
 The two context menus of §8.2 carry the same toggle for the folder they were
 opened on — the row menu only for a single, non-escaping directory, because a
 bookmark is a place to go and a file is not one.
+
+---
+
+### 8.12 The built-in viewer (v0.8)
+
+`components/dialogs/FileViewerDialog.tsx` — what shows a file when this surface
+has no bb preview panel to delegate to.
+
+**Why it exists.** §8.2.1 delegated to `experimental_openFilePreview` and, on a
+`false`, downloaded. bb provides that capability from exactly two places — the
+thread split view and the right-hand plugin panel host — and from a default of
+`() => false` everywhere else. The sidebar's own full-page File Manager is one
+of the "everywhere else", so on the surface the panel is most used from, *no*
+file ever opened: every double-click and every row-menu Open put a copy in
+~/Downloads and showed nothing. That is the bug v0.8 fixes, and no amount of
+correcting the call site would have: the surface has no preview panel to open
+into, so the panel has to be one.
+
+bb's panel still wins wherever it exists (`showEntry` asks it first). It sits
+*beside* the manager and survives navigation, which a modal cannot.
+
+**Two transports, split by what the renderer needs.**
+
+| Kind | Source | Rendered with |
+| --- | --- | --- |
+| image (`lib/preview.ts#isImageName`) | `createPreviewUrl` + the file name | `<img>` |
+| `pdf` | same | `<iframe>` |
+| video (`mp4 m4v webm ogv mov`) | same | `<video controls>` |
+| audio (`mp3 wav ogg oga m4a aac flac opus weba`) | same | `<audio controls>` |
+| `md` / `markdown` / `mdx` | `readTextFile` | bb's `Markdown`, with a **Source** toggle |
+| everything else | `readTextFile` | bb's `experimental_SourceCode` |
+
+The URL half is the gallery's transport (§8.9) reused unchanged — folder-rooted,
+one mint per folder, bytes that never enter JS. The string half is new, and it
+is the only thing in this plugin that reads file content over RPC: a renderer
+needs the text *as a string*, and the download route is
+`application/octet-stream` + `Content-Disposition` on purpose.
+
+**"Is this text?" is answered from the bytes, never from the name**
+(`src/preview.ts#readTextFile`). `lib/viewer.ts` decides only the four
+browser-painted kinds from the extension, because getting *those* wrong costs a
+request for bytes nothing can display; every other name — including `tool.bin`
+and `bundle.zip` — falls to `text`, which is a **question for the server**, not
+a claim. That is the only way `Makefile`, `LICENSE`, `.gitignore` and the
+extension nobody has heard of yet ever open, and it is why the codec lists above
+are short: `mkv`, `avi` and `wmv` are named on disk and unplayable in a
+`<video>`, so they take the text branch and end in the honest download offer
+rather than in a black rectangle.
+
+The server's rules, in order: `resolveExisting` (§6, unchanged), must be a
+regular file, read at most `MAX_TEXT_PREVIEW_BYTES` (1 MiB) from offset 0, and
+then two tests — a NUL byte anywhere in the window, and `TextDecoder("utf-8",
+{ fatal: true })`. Either failure throws `unsupported`, which the viewer renders
+as "No preview for this kind of file" plus the download, and which is
+deliberately distinct from a real `permission_denied` or `io_error`. A cap that
+lands mid-character is not a binary file: a truncated window retries the decode
+up to three bytes earlier, an untruncated one gets exactly one attempt.
+
+**Reach.** Double-click, `Enter`, `Space` (§8.9) and the row menu's **Open**,
+all through the panel's single `openEntry` / `showEntry` pair — the menu does
+not get a second opinion about what "open" means. `Open` on a row was
+directory-only before v0.8; it now covers any single non-escaping file, which
+is what made the action visible at all.
 
 ## 9. Visual & theming rules
 
@@ -1758,6 +1836,7 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 | `uploads.test.ts` | create→chunk→finish writes exact bytes; wrong offset → 409 with `expected`; resume after a partial chunk; duplicate `uploadCreate` resumes the same session; `conflict: "rename"` produces `name (1).ext`; abort removes both sidecar files; GC drops stale sessions |
 | `http.test.ts` | **`registrations.httpRoutes` contains `{ method:"POST", path:"/upload/chunk", auth:"token" }`** (the fake host records auth but does not enforce it — this assertion is the only guard against regressing to `local`, which would 415 in production); download returns exact bytes, `content-type: application/octet-stream`, correct `content-disposition` incl. `filename*=UTF-8''` for a Cyrillic name; `Range: bytes=2-5` → 206 + `content-range`; `Range: bytes=999-` → 416; directory path → 404; escaping path → 403 |
 | `archives.test.ts` | zip and tar.gz extract into a subfolder; a member named `../escaped` never lands outside root; unsupported extension → `unsupported_archive`; job transitions `running → done`; cancel kills the child process and reports `canceled` |
+| `preview.test.ts` | §8.9 + §8.12: `createPreviewUrl` mints for a folder under the root and refuses `/etc`, a symlink out, a missing folder and a file; `readTextFile` returns a short file whole, opens a name with no extension, caps a long one and says `truncated`, keeps a multi-byte character split by the cap, and throws `unsupported` for a NUL byte and for non-UTF-8 — but `not_a_file` / `not_found` / `path_escape` for the failures that are not about the bytes |
 | `settings.test.ts` | invalid `startFolder` falls back to root; `savePreferences` calls `sdk.plugins.updateSettings` with exactly the changed keys (`harness.inspection.sdk.callsTo(...)`) |
 | `bookmarks.test.ts` | §8.11: `addBookmark` stores the realpath'ed folder and refuses `/etc`, a missing folder, a file and the 51st; `listBookmarks` marks a deleted folder `available: false` and keeps it, drops a row outside the root, dedupes and caps a corrupt row; `removeBookmark` and `renameBookmark` work on a folder that is gone and still reject an escaping path |
 
@@ -1771,6 +1850,7 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 | `selection.test.tsx` | click / ctrl-click / shift-click / `Ctrl+A` / `Escape` produce the expected selections |
 | `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed |
 | `uploads.test.tsx` | dropping two `File`s calls `uploadCreate` twice and posts chunks in order (stub `XMLHttpRequest`); a 409 response resumes from `expected`; the tray shows percentages |
+| `viewer.test.tsx` | §8.12: markdown renders through bb's `Markdown` and toggles to `experimental_SourceCode`; every other text file goes straight to the source viewer, including one with no extension; an image / PDF / video / audio hangs off the folder's preview URL with its name percent-encoded and never calls `readTextFile`; `unsupported` renders the download offer while `permission_denied` renders a failure; a host that *does* take the preview never opens the dialog at all |
 | `bookmarks.test.tsx` | §8.11: the star lights up for a bookmarked folder and toggles `addBookmark` / `removeBookmark`; the list navigates through `navigateTo`; a missing row is marked and removes itself; the rename dialog sends `renameBookmark`; both context menus toggle; the compact chrome keeps the star and moves the list into the overflow; the 51st is refused client-side |
 
 ### 11.2 Shell smoke tests (copy-pasteable)

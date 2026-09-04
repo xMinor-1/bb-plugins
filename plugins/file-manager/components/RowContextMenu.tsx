@@ -7,6 +7,7 @@
 // see the same `contextmenu` event.
 import type { FileEntry } from "../contract";
 import { useMenuPointerGuard } from "../hooks/useMenuPointerGuard";
+import { isViewableEntry } from "../lib/viewer";
 import {
   ContextMenuContent,
   ContextMenuItem,
@@ -25,6 +26,11 @@ export interface RowContextMenuProps {
   canPaste: boolean;
   /** True when at least one extractor exists for the selected archive. */
   canExtract: boolean;
+  /**
+   * What `Enter` and a double-click do: walk into a folder, extract an
+   * archive, show a file. One callback for all three because the menu should
+   * not be the second place that decides which is which.
+   */
   onOpen: (entry: FileEntry) => void;
   onDownload: () => void;
   /** One @-mention per selected file, into whatever composer is in reach (§8.8). */
@@ -79,6 +85,11 @@ export function RowContextMenu({
   const files = entries.filter((entry) => !entry.escapesRoot && effectiveKind(entry) === "file");
   const downloadable = files.length > 0;
   const archive = single !== undefined && single.archiveFormat !== null ? single : undefined;
+  // One row, one Open: a folder to walk into, an archive to extract, or a file
+  // to read. Multiple rows have no single destination, and a link out of the
+  // root has nothing this plugin is allowed to follow.
+  const openable =
+    single !== undefined && !escapes && (isDirectory || isViewableEntry(single)) ? single : undefined;
   // Letting go of the right button must not run whatever it landed on.
   const pointerGuard = useMenuPointerGuard();
 
@@ -89,12 +100,20 @@ export function RowContextMenu({
       </ContextMenuLabel>
       <ContextMenuSeparator />
 
-      {single !== undefined && isDirectory && !escapes ? (
-        <ContextMenuItem onSelect={() => onOpen(single)}>
-          <Icon name="FolderOpen" className="size-4" aria-hidden="true" />
+      {/* Files got no Open row at all until 0.8, which left the panel's most
+          ordinary action reachable only by double-click — and on a surface
+          where double-click had nothing to open it into, invisible. */}
+      {openable === undefined ? null : (
+        <ContextMenuItem onSelect={() => onOpen(openable)}>
+          <Icon
+            name={isDirectory ? "FolderOpen" : openable.archiveFormat !== null ? "ArchiveRestore" : "Eye"}
+            className="size-4"
+            aria-hidden="true"
+          />
           Open
+          <ContextMenuShortcut>Enter</ContextMenuShortcut>
         </ContextMenuItem>
-      ) : null}
+      )}
 
       <ContextMenuItem disabled={!downloadable} onSelect={onDownload}>
         <Icon name="Download" className="size-4" aria-hidden="true" />

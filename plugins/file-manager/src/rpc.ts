@@ -14,7 +14,7 @@ import {
   moveEntries,
   renameEntry,
 } from "./mutations";
-import { createPreviewUrl } from "./preview";
+import { createPreviewUrl, readTextFile } from "./preview";
 import { directorySize, pathProperties } from "./properties";
 import { getRoot } from "./root";
 import type { SettingsModule } from "./settings";
@@ -95,6 +95,7 @@ export function createCoreHandlers(
     directorySize: (input) => directorySize(input),
     statPath: (input) => statPath(input),
     createPreviewUrl: (input) => createPreviewUrl(bb, input),
+    readTextFile: (input) => readTextFile(input),
     resolveFileLocation: (input) => locateFile(bb, input),
     threadWorkspace: (input) => resolveThreadWorkspace(bb, input),
     searchDir: (input) => searchDir(input),

@@ -146,6 +146,17 @@ export type ViewMode = z.infer<typeof viewModeSchema>;
 export const PREVIEW_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * Hard cap on what `readTextFile` returns, in bytes.
+ *
+ * The built-in viewer (§8.12) reads text over RPC rather than over the byte
+ * routes, because it needs the *whole* string in the page to hand to a
+ * renderer. One mebibyte is far more than anyone reads in a dialog and small
+ * enough that a stray click on a 4 GB log costs one bounded read; past it the
+ * viewer says how much it is showing and offers the download.
+ */
+export const MAX_TEXT_PREVIEW_BYTES = 1024 * 1024;
+
+/**
  * Stable error codes. Handlers throw `Error` whose message is exactly
  * `"<code>: <human readable message>"`; the wire delivers it as
  * `{ code: "handler_error", message }`. The frontend splits on the first
@@ -522,6 +533,38 @@ export const fileManagerContract = defineRpcContract({
       path: z.string(),
       /** Wall-clock expiry; the panel renews shortly before it. */
       expiresAtMs: z.number().int(),
+    }),
+  },
+
+  /**
+   * The text of one file, capped, for the built-in viewer (§8.12).
+   *
+   * The counterpart of `createPreviewUrl`: images, PDFs and media are *shown*
+   * from a URL and never travel through JS, while text has to be a string in
+   * the page before bb's Markdown or source renderer can take it.
+   *
+   * "Is this text?" is answered here rather than from the file name, because
+   * the names that carry no extension — `Makefile`, `LICENSE`, `.gitignore` —
+   * are exactly the ones a viewer must still open. A NUL byte in the read
+   * window, or bytes that are not valid UTF-8, throw `unsupported`; the viewer
+   * turns that into "no preview" plus a download button.
+   */
+  readTextFile: {
+    input: z.strictObject({
+      /** Absolute path, or a path relative to root. */
+      path: z.string(),
+    }),
+    output: z.strictObject({
+      /** The realpath'ed file, echoed back. */
+      path: z.string(),
+      /** Decoded UTF-8, at most `MAX_TEXT_PREVIEW_BYTES` of it. */
+      text: z.string(),
+      /** Size of the whole file, so the viewer can say what it left out. */
+      sizeBytes: z.number().int(),
+      /** Bytes actually decoded into `text`. */
+      readBytes: z.number().int(),
+      /** True when the file is longer than what `text` holds. */
+      truncated: z.boolean(),
     }),
   },
 

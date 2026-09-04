@@ -102,6 +102,7 @@ import {
   START_FOLDER_SAVE_FAILED_TEXT,
 } from "../lib/start-folder";
 import type { UploadRequest } from "../lib/upload-manager";
+import { isViewableEntry } from "../lib/viewer";
 import { ActivityTray } from "./ActivityTray";
 import { BackgroundContextMenu } from "./BackgroundContextMenu";
 import { BookmarkMenuItems, BookmarksMenu } from "./BookmarksMenu";
@@ -116,6 +117,7 @@ import { BookmarkNameDialog } from "./dialogs/BookmarkNameDialog";
 import { ConfirmDeleteDialog } from "./dialogs/ConfirmDeleteDialog";
 import { ConflictDialog, type ConflictChoice } from "./dialogs/ConflictDialog";
 import { ExtractDialog, isFormatSupported, type ExtractSubmission } from "./dialogs/ExtractDialog";
+import { FileViewerDialog } from "./dialogs/FileViewerDialog";
 import { FolderPickerDialog } from "./dialogs/FolderPickerDialog";
 import { NewFolderDialog } from "./dialogs/NewFolderDialog";
 import { PropertiesDialog, type PropertiesTarget } from "./dialogs/PropertiesDialog";
@@ -147,6 +149,7 @@ type DialogState =
   | { kind: "rename"; entry: FileEntry }
   | { kind: "delete"; entries: FileEntry[] }
   | { kind: "extract"; entry: FileEntry }
+  | { kind: "view"; entry: FileEntry }
   | { kind: "properties"; target: PropertiesTarget }
   | { kind: "bookmark-name"; path: string; name: string }
   | { kind: "picker"; mode: "move" | "copy"; paths: string[] }
@@ -1392,11 +1395,12 @@ export function FileManagerSurface({
    * beside the manager rather than downloading it (§8.2).
    *
    * bb addresses a live file by host id, which is why `getState` carries the
-   * machine bb runs on. Everything that can go wrong here ends in the old
-   * behaviour instead of nothing: no host id (an older server, or a config
-   * call that failed), no preview surface on this client, or a host that
-   * declined the open — all fall back to the download that used to be the
-   * whole action.
+   * machine bb runs on. Everything that can go wrong here answers `false`
+   * rather than throwing: no host id (an older server, or a config call that
+   * failed), no preview surface on this client, or a host that declined the
+   * open. `showEntry` turns that `false` into the built-in viewer (§8.12) —
+   * which is the ordinary case, not the exception, because the sidebar's own
+   * File Manager page is a surface bb wires no preview panel into.
    */
   const previewEntry = useCallback(
     (entry: FileEntry): boolean => {
@@ -1417,6 +1421,23 @@ export function FileManagerSurface({
     [],
   );
 
+  /**
+   * Show one file: bb's shared preview panel when this surface has one, the
+   * built-in viewer when it does not (§8.12).
+   *
+   * The order is not a preference for our own dialog — it is the opposite.
+   * bb's panel sits *beside* the manager and survives navigation, so it wins
+   * wherever it exists; the viewer is what the standalone page gets, where
+   * the alternative was silently dropping the file in ~/Downloads.
+   */
+  const showEntry = useCallback(
+    (entry: FileEntry) => {
+      if (previewEntry(entry)) return;
+      setDialog({ kind: "view", entry });
+    },
+    [previewEntry],
+  );
+
   const openEntry = useCallback(
     (entry: FileEntry) => {
       if (entry.escapesRoot) {
@@ -1429,14 +1450,19 @@ export function FileManagerSurface({
         return;
       }
       if (entry.archiveFormat !== null) {
-        // An archive has nothing to preview; extracting it is the useful open.
+        // An archive has nothing to read; extracting it is the useful open.
         setDialog({ kind: "extract", entry });
         return;
       }
-      if (previewEntry(entry)) return;
-      downloadEntry(entry);
+      if (!isViewableEntry(entry)) {
+        // A socket, a fifo, a device node: there is no content to show, and
+        // the bytes are still the one thing that can be handed over.
+        downloadEntry(entry);
+        return;
+      }
+      showEntry(entry);
     },
-    [navigateTo, previewEntry, root],
+    [navigateTo, root, showEntry],
   );
 
   const startExtract = useCallback(
@@ -1992,13 +2018,14 @@ export function FileManagerSurface({
           // be, scrolling the listing out from under the cursor is not it.
           event.preventDefault();
           // A folder is Enter's business, not quick look's — there is nothing
-          // to preview, and opening it would make Space a second Enter. A link
+          // to read, and opening it would make Space a second Enter. A link
           // that leaves the root is not readable through this plugin at all.
-          if (focusedEntry.escapesRoot || effectiveKind(focusedEntry) === "directory") return;
-          // No download fallback, unlike `openEntry`: a peek that silently
-          // puts a file in the downloads folder is not a peek. A client with
-          // no preview surface simply gets nothing, which is what it can do.
-          previewEntry(focusedEntry);
+          if (!isViewableEntry(focusedEntry)) return;
+          // Still no download fallback, unlike `openEntry`: a peek that
+          // silently puts a file in the downloads folder is not a peek. What
+          // 0.7 could not do is the rest of it — a surface with no preview
+          // panel got nothing at all, and now gets the built-in viewer.
+          showEntry(focusedEntry);
           return;
         }
         case "Backspace":
@@ -2097,7 +2124,7 @@ export function FileManagerSurface({
       openPathBar,
       openProperties,
       paste,
-      previewEntry,
+      showEntry,
       inlineChrome,
       requestDelete,
       rowByPath,
@@ -2644,6 +2671,16 @@ export function FileManagerSurface({
             await bookmarksRef.current.rename(dialog.path, name).catch((failure: unknown) => {
               throw new Error(errorToastText(failure, BOOKMARK_RENAME_FAILED_TEXT));
             });
+          }}
+        />
+      ) : null}
+
+      {dialog.kind === "view" ? (
+        <FileViewerDialog
+          open
+          entry={dialog.entry}
+          onOpenChange={(open) => {
+            if (!open) setDialog({ kind: "none" });
           }}
         />
       ) : null}
