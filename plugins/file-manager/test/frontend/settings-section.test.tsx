@@ -64,6 +64,7 @@ const PREFERENCES: Preferences = {
   showHiddenFiles: false,
   confirmOnDelete: true,
   restoreLastFolder: true,
+  openThreadWorkspace: false,
   sortField: "name",
   sortDirection: "asc",
   viewMode: "list",
@@ -807,6 +808,7 @@ describe("SettingsSection — which folder actually opens (§2.2)", () => {
     const settings: Record<string, string | boolean> = {
       startFolder: WORK,
       restoreLastFolder: true,
+      openThreadWorkspace: false,
     };
     let restore = true;
     const slot = await mountSection(
