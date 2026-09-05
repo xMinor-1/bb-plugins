@@ -149,14 +149,14 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
   // Someone else wrote the setting (the form above, the panel, the CLI, another
   // window): the host has already refetched its copy, so re-read the state the
   // section shows. The first delivery is the query resolving, not a change.
-  const lastRawRef = useRef<string | boolean | undefined>(undefined);
+  const lastRawRef = useRef<string | number | boolean | undefined>(undefined);
   useEffect(() => {
     const previous = lastRawRef.current;
     lastRawRef.current = rawStartFolder;
     if (isExternalSettingChange(previous, rawStartFolder)) refresh();
   }, [rawStartFolder, refresh]);
 
-  const lastRawRestoreRef = useRef<string | boolean | undefined>(undefined);
+  const lastRawRestoreRef = useRef<string | number | boolean | undefined>(undefined);
   useEffect(() => {
     const previous = lastRawRestoreRef.current;
     lastRawRestoreRef.current = rawRestoreLastFolder;
