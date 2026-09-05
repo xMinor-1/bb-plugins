@@ -340,6 +340,12 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
             : state.preferences.restoreLastFolder
               ? "Reopening the last folder is on, so this is where the panel opens the first time and whenever the last folder is gone."
               : "Reopening the last folder is off, so the panel always opens here."}
+          {/* The thread-folder toggle outranks both of the rules above, but
+              only on a thread's panel tab — saying so here is the only place
+              the two settings are seen together. */}
+          {state !== null && state.preferences.openThreadWorkspace
+            ? " Opening the thread's project folder is on, so a File Manager tab inside a thread starts in that thread's folder instead."
+            : null}
           {root === null ? null : ` Everything stays inside ${root}.`}
         </p>
         <div className="flex shrink-0 items-center gap-3">
