@@ -173,11 +173,33 @@ describe("$WORKTREE start folder", () => {
     const slot = renderSlot(
       { component: newThreadAction.component },
       { projectId: "prj_1", params: null },
-      { rpc: baseRpc() as PluginRpcTestHandlers<FileManagerContract> },
+      {
+        rpc: baseRpc() as PluginRpcTestHandlers<FileManagerContract>,
+        context: { threadId: "thr_unrelated", projectId: "prj_unrelated" },
+      },
     ) as RenderedSlot;
 
     expect(await slot.findByText("package.json")).toBeDefined();
     expect(currentPath(slot)).toBe(PROJECT);
+    expect(followCalls(slot)).toEqual([
+      { method: "workspaceFolder", input: { threadId: null, projectId: "prj_1" } },
+    ]);
+  });
+
+  it("does not mix a surface thread with the app's unrelated project", async () => {
+    const slot = renderSlot(
+      { component: threadAction.component },
+      { threadId: "thr_surface", params: null },
+      {
+        rpc: baseRpc() as PluginRpcTestHandlers<FileManagerContract>,
+        context: { threadId: "thr_unrelated", projectId: "prj_unrelated" },
+      },
+    ) as RenderedSlot;
+
+    await slot.findByText("README.md");
+    expect(followCalls(slot)).toEqual([
+      { method: "workspaceFolder", input: { threadId: "thr_surface", projectId: null } },
+    ]);
   });
 
   it("follows the thread bb is showing when the surface names none", async () => {

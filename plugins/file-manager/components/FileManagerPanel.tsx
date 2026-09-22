@@ -405,8 +405,8 @@ export function FileManagerSurface({
   // `initialPath`: the bootstrap runs once per mount.
   const bbContext = useBbContext();
   const followTargetRef = useRef({
-    threadId: threadId ?? bbContext.threadId ?? null,
-    projectId: projectId ?? bbContext.projectId ?? null,
+    threadId: threadId ?? (projectId === null ? bbContext.threadId : null) ?? null,
+    projectId: projectId ?? (threadId === null ? bbContext.projectId : null) ?? null,
   });
   const subPath = location.subPath;
   const locationRef = useRef(location);
