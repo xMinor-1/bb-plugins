@@ -261,8 +261,8 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
 
   return (
     <div className="w-full space-y-2" data-testid="fm-settings-section">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+      <div className="space-y-2">
+        <div className="flex min-h-9 min-w-0 flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
           <Icon
             name="Folder"
             className="size-4 shrink-0 text-muted-foreground"
@@ -289,7 +289,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
             </>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Deliberately still enabled while a save runs: Radix hands focus
               back to whatever opened the dialog, and focus() on a disabled
               button is a no-op that drops it on <body>. */}
@@ -325,12 +325,13 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
             variant="ghost"
             size="sm"
             disabled={!ready || saving || atRoot}
+            className="max-w-full"
             data-testid="fm-settings-reset"
             onClick={() => {
               if (state !== null) choose(state.root);
             }}
           >
-            {root === null ? "Reset" : `Reset to ${root}`}
+            <span className="truncate">{root === null ? "Reset" : `Reset to ${root}`}</span>
           </Button>
           {/* Pure client-side: no RPC, no settings write. The memory is a
               trace in this browser profile, not a stored decision (§1.9). */}
@@ -352,12 +353,12 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
         </div>
       </div>
 
-      <div className="flex min-h-5 items-start justify-between gap-4">
+      <div className="flex min-h-5 flex-wrap items-start justify-between gap-x-4 gap-y-2">
         {/* The one thing the host's own checkbox cannot say: which of the two
             folders is actually in effect. "The panel opens here every time" is
             only true with the toggle off, so it is now a pair (§2.2). */}
         <p
-          className="text-xs leading-relaxed text-muted-foreground"
+          className="min-w-0 flex-1 basis-64 break-words text-xs leading-relaxed text-muted-foreground"
           data-testid="fm-settings-open-rule"
         >
           {state === null
@@ -369,7 +370,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
               : "Reopening the last folder is off, so the panel always opens here."}
           {root === null ? null : ` Everything stays inside ${root}.`}
         </p>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3 break-words">
           {loadError !== null ? (
             <>
               <span className="text-xs text-destructive" role="alert">
