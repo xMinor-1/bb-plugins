@@ -426,7 +426,7 @@ Change them in bb's settings UI, from the panel, or with
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `startFolder` | string | home folder | Absolute path under the root the panel opens on its first open, after you forget the remembered folder, and whenever the last folder is gone — or every time, with `restoreLastFolder` off. Shown in the form as **Start folder (typed path)**, and set with a folder browser by the **Start folder** section below it. Re-validated on every read; a deleted or out-of-root path falls back to the root. |
+| `startFolder` | string | home folder | Absolute path under the root the panel opens on its first open, after you forget the remembered folder, and whenever the last folder is gone — or every time, with `restoreLastFolder` off. Shown in the form as **Start folder (typed path)**, and set with a folder browser by the **Start folder** section below it. Re-validated on every read; a deleted or out-of-root path falls back to the root. Set it to `$WORKTREE` (or press **Use current worktree**) to open the worktree of the thread beside the panel instead, then the project's local folder; with neither, or when that folder is outside the root, the ordinary rules apply. `$WORKTREE` outranks the remembered folder. |
 | `restoreLastFolder` | boolean | `true` | Reopen the folder you were last in instead of the start folder. |
 | `showHiddenFiles` | boolean | `false` | Show dot-files and dot-directories. |
 | `confirmOnDelete` | boolean | `true` | Ask before deleting. |

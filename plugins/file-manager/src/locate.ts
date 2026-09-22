@@ -22,7 +22,7 @@ import path from "node:path";
 
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
-import type { ThreadWorkspaceReason } from "../contract";
+import type { ThreadWorkspaceReason, WorkspaceFolderSource } from "../contract";
 import { fmError, isFileManagerError } from "./errors";
 import { assertInside, getRoot, isInside, normalize, resolveExisting } from "./root";
 
@@ -255,4 +255,74 @@ export async function resolveThreadWorkspace(
     return { path: real, insideRoot: false, reason: "outside_root" };
   }
   return { path: real, insideRoot: true, reason: null };
+}
+
+export interface WorkspaceFolderInput {
+  threadId: string | null;
+  projectId: string | null;
+}
+
+export interface WorkspaceFolderOutput {
+  /** A realpath'ed folder inside the hard root, or null for "nothing to follow". */
+  path: string | null;
+  source: WorkspaceFolderSource | null;
+}
+
+const NOTHING: WorkspaceFolderOutput = { path: null, source: null };
+
+/** Realpath of `candidate` when it is a directory inside the root, else null. */
+async function openableDirectory(candidate: string): Promise<string | null> {
+  try {
+    const real = await realpath(normalize(candidate));
+    if (!(await stat(real)).isDirectory()) return null;
+    return isInside(real) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where a `$WORKTREE` start folder points for this surface: the thread's
+ * worktree, else its project's local folder.
+ *
+ * Every miss is an answer, not an error. The panel treats null as "use the
+ * ordinary rules", so a thread bb cannot find, a project with no local source
+ * and a folder outside the home folder all end the same way. A project can
+ * list several sources; the default one is tried first, and sources on other
+ * machines drop out because their paths do not exist here.
+ */
+export async function resolveWorkspaceFolder(
+  bb: BbPluginApi,
+  input: WorkspaceFolderInput,
+): Promise<WorkspaceFolderOutput> {
+  let projectId = input.projectId;
+
+  if (input.threadId !== null) {
+    try {
+      const thread = await bb.sdk.threads.get({ threadId: input.threadId });
+      projectId = projectId ?? thread.projectId ?? null;
+      if (thread.environmentId !== null) {
+        const checkout = await environmentCheckoutPath(bb, thread.environmentId);
+        const real = checkout === null ? null : await openableDirectory(checkout);
+        if (real !== null) return { path: real, source: "worktree" };
+      }
+    } catch (error) {
+      bb.log.warn(`workspaceFolder: thread ${input.threadId} lookup failed (${String(error)})`);
+    }
+  }
+
+  if (projectId === null) return NOTHING;
+  try {
+    const project = await bb.sdk.projects.get({ projectId });
+    const sources = [...project.sources].sort(
+      (a, b) => Number(b.isDefault) - Number(a.isDefault),
+    );
+    for (const source of sources) {
+      const real = await openableDirectory(source.path);
+      if (real !== null) return { path: real, source: "project" };
+    }
+  } catch (error) {
+    bb.log.warn(`workspaceFolder: project ${projectId} lookup failed (${String(error)})`);
+  }
+  return NOTHING;
 }

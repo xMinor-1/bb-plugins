@@ -6,7 +6,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createFakePluginHost, type FakePluginHost } from "@get-bb/plugin-sdk/testing";
 
-import { MAX_CHUNK_BYTES, MIN_CHUNK_BYTES, PLUGIN_ID } from "../../contract";
+import {
+  MAX_CHUNK_BYTES,
+  MIN_CHUNK_BYTES,
+  PLUGIN_ID,
+  WORKSPACE_START_FOLDER,
+} from "../../contract";
 import { isFileManagerError } from "../../src/errors";
 import { DEFAULT_ROOT, initRoot } from "../../src/root";
 import { createSettings, settingsDescriptors, type SettingsModule } from "../../src/settings";
@@ -204,9 +209,38 @@ describe("resolveStartFolder", () => {
     await expect(settings.resolveStartFolder()).resolves.toBe(root);
     await host.harness.dispose();
   });
+
+  it("treats $WORKTREE as the root without warning, and flags it", async () => {
+    const { settings, host } = await build({ startFolder: WORKSPACE_START_FOLDER });
+    await expect(settings.resolveStartFolder()).resolves.toBe(root);
+    expect(settings.followsWorkspace()).toBe(true);
+    expect(host.harness.logEntries.some((entry) => entry.level === "warn")).toBe(false);
+    await host.harness.dispose();
+  });
+
+  it("does not flag an ordinary folder", async () => {
+    const { settings, host } = await build({ startFolder: root });
+    expect(settings.followsWorkspace()).toBe(false);
+    await host.harness.dispose();
+  });
 });
 
 describe("savePreferences", () => {
+  it("stores $WORKTREE verbatim and reports it", async () => {
+    const host = makeHost();
+    const settings = await createSettings(host.bb);
+
+    const result = await settings.savePreferences({ startFolder: ` ${WORKSPACE_START_FOLDER} ` });
+
+    expect(host.harness.sdk.callsTo("plugins.updateSettings")[0]?.[0]).toEqual({
+      pluginId: PLUGIN_ID,
+      values: { startFolder: WORKSPACE_START_FOLDER },
+    });
+    expect(result.startFolder).toBe(root);
+    expect(result.startFolderFollowsWorkspace).toBe(true);
+    await host.harness.dispose();
+  });
+
   it("sends exactly the changed keys to sdk.plugins.updateSettings", async () => {
     const host = makeHost();
     const settings = await createSettings(host.bb);

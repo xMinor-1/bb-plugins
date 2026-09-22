@@ -17,11 +17,24 @@ import type { PluginNewThreadPanelProps, PluginThreadPanelProps } from "@get-bb/
 import { useLocalLocation } from "../hooks/useFmLocation";
 import { FileManagerSurface } from "./FileManagerPanel";
 
-function FileManagerTabBody({ threadId = null }: { threadId?: string | null }) {
+function FileManagerTabBody({
+  threadId = null,
+  projectId = null,
+}: {
+  threadId?: string | null;
+  projectId?: string | null;
+}) {
   // Starts at the root and lets the bootstrap redirect to the remembered or
   // configured folder, exactly as the nav panel does on a cold open (§1.5).
   const location = useLocalLocation("");
-  return <FileManagerSurface location={location} chrome="inline" threadId={threadId} />;
+  return (
+    <FileManagerSurface
+      location={location}
+      chrome="inline"
+      threadId={threadId}
+      projectId={projectId}
+    />
+  );
 }
 
 /** `threadPanelAction`: the panel launcher of an existing thread. */
@@ -30,8 +43,9 @@ export function FileManagerTab({ threadId }: PluginThreadPanelProps) {
 }
 
 /** `experimental_newThreadPanelAction`: the root New thread screen's launcher. */
-export function FileManagerNewThreadTab(_props: PluginNewThreadPanelProps) {
+export function FileManagerNewThreadTab({ projectId }: PluginNewThreadPanelProps) {
   // No thread has been created yet, so there is no workspace to jump into and
-  // the toolbar shows no Thread folder button at all.
-  return <FileManagerTabBody />;
+  // the toolbar shows no Thread folder button at all. The selected project
+  // still lets a `$WORKTREE` start folder open that project's folder.
+  return <FileManagerTabBody projectId={projectId} />;
 }

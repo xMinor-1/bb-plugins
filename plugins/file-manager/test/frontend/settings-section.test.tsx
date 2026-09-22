@@ -30,6 +30,7 @@ import type {
 } from "@get-bb/plugin-sdk/testing/app";
 
 import type { FileEntry, FileManagerContract, Preferences } from "../../contract";
+import { WORKSPACE_START_FOLDER } from "../../contract";
 
 const HOST_ID = "host_test";
 
@@ -870,5 +871,51 @@ describe("SettingsSection — forgetting the remembered folder (§1.9)", () => {
     fireEvent.click(button(slot, "fm-settings-forget"));
 
     expect(toasts.success).toEqual(["Forgotten. The panel will open in Home next time."]);
+  });
+});
+
+describe("SettingsSection — following the current worktree", () => {
+  it("saves $WORKTREE and shows it as the current worktree", async () => {
+    const slot = await mountSection(
+      baseRpc({
+        savePreferences: (input) => ({
+          startFolder: ROOT,
+          startFolderFollowsWorkspace: input.startFolder === WORKSPACE_START_FOLDER,
+          preferences: PREFERENCES,
+          chunkSizeBytes: CHUNK_BYTES,
+        }),
+      }),
+    );
+
+    fireEvent.click(slot.getByTestId("fm-settings-follow-worktree"));
+
+    await waitFor(() => {
+      expect(callsTo(slot, "savePreferences")).toEqual([
+        { method: "savePreferences", input: { startFolder: WORKSPACE_START_FOLDER } },
+      ]);
+    });
+    await waitFor(() => {
+      expect(slot.getByTestId("fm-settings-start-folder").textContent).toBe(
+        WORKSPACE_START_FOLDER,
+      );
+    });
+    expect(slot.getByText("Current worktree")).toBeDefined();
+    expect((slot.getByTestId("fm-settings-follow-worktree") as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    // Reset stays usable: the root is the way back to an ordinary folder.
+    expect((slot.getByTestId("fm-settings-reset") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("does not report the token as a start folder that fell back", async () => {
+    const slot = await mountSection(
+      baseRpc({
+        getState: () => ({ ...stateWith(ROOT), startFolderFollowsWorkspace: true }),
+      }),
+      { startFolder: WORKSPACE_START_FOLDER },
+    );
+
+    expect(slot.getByTestId("fm-settings-start-folder").textContent).toBe(WORKSPACE_START_FOLDER);
+    expect(slot.queryByTestId("fm-settings-fallback")).toBeNull();
   });
 });

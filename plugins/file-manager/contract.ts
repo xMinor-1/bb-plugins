@@ -414,6 +414,20 @@ export const bookmarkSchema = z.strictObject({
 });
 export type Bookmark = z.infer<typeof bookmarkSchema>;
 
+/**
+ * The `startFolder` value that means "the folder of whatever bb is showing".
+ *
+ * Stored verbatim in the setting instead of a path. On a surface that knows its
+ * thread, the panel opens that thread's worktree; with only a project known,
+ * the project's local folder; with neither, or when the lookup cannot be
+ * opened, the ordinary rules apply (memory, then the root).
+ */
+export const WORKSPACE_START_FOLDER = "$WORKTREE";
+
+/** Where `workspaceFolder` found its answer. */
+export const workspaceFolderSourceSchema = z.enum(["worktree", "project"]);
+export type WorkspaceFolderSource = z.infer<typeof workspaceFolderSourceSchema>;
+
 /* ------------------------------------------------------------------ */
 /* RPC contract                                                        */
 /* ------------------------------------------------------------------ */
@@ -426,6 +440,12 @@ export const fileManagerContract = defineRpcContract({
       root: z.string(),
       /** Absolute, validated start folder; falls back to root when invalid. */
       startFolder: z.string(),
+      /**
+       * True when the setting is `WORKSPACE_START_FOLDER`. `startFolder` is
+       * then the root, and the panel asks `workspaceFolder` where to open.
+       * Optional so older callers and test doubles stay valid.
+       */
+      startFolderFollowsWorkspace: z.boolean().optional(),
       preferences: preferencesSchema,
       /** Server-preferred upload chunk size in bytes (from settings). */
       chunkSizeBytes: z.number().int(),
@@ -621,6 +641,25 @@ export const fileManagerContract = defineRpcContract({
     }),
   },
 
+  /**
+   * The folder a `WORKSPACE_START_FOLDER` start folder resolves to right now.
+   *
+   * Tries the thread's worktree first, then the project's local folder (the
+   * thread's own project when no project id is given). Only a folder that
+   * exists and sits inside the hard root counts. Answers null instead of
+   * throwing, because "nothing to follow" means "use the ordinary rules".
+   */
+  workspaceFolder: {
+    input: z.strictObject({
+      threadId: z.string().min(1).nullable(),
+      projectId: z.string().min(1).nullable(),
+    }),
+    output: z.strictObject({
+      path: z.string().nullable(),
+      source: workspaceFolderSourceSchema.nullable(),
+    }),
+  },
+
   /** Depth-limited recursive name search below `path`. */
   searchDir: {
     input: z.strictObject({
@@ -773,6 +812,8 @@ export const fileManagerContract = defineRpcContract({
     }),
     output: z.strictObject({
       startFolder: z.string(),
+      /** Same meaning as in `getState`. */
+      startFolderFollowsWorkspace: z.boolean().optional(),
       preferences: preferencesSchema,
       chunkSizeBytes: z.number().int(),
     }),

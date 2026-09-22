@@ -10,6 +10,7 @@ import {
   sortDirectionSchema,
   sortFieldSchema,
   viewModeSchema,
+  WORKSPACE_START_FOLDER,
   type Preferences,
 } from "../contract";
 import { fmError, mapNodeError } from "./errors";
@@ -30,6 +31,8 @@ export const settingsDescriptors = {
       "Absolute path under the hard root the panel opens on its first open, " +
       "after you forget the remembered folder, and whenever the last folder is " +
       "gone — or every time, with \"Reopen the last folder\" off. " +
+      `Enter ${WORKSPACE_START_FOLDER} to open the current thread's worktree ` +
+      "(or the project folder) instead. " +
       "The Start folder section below sets the same value with a folder browser.",
     default: DEFAULT_ROOT,
   },
@@ -108,6 +111,7 @@ export interface SavePreferencesInput {
 
 export interface SavePreferencesOutput {
   startFolder: string;
+  startFolderFollowsWorkspace: boolean;
   preferences: Preferences;
   chunkSizeBytes: number;
 }
@@ -121,6 +125,8 @@ export interface SettingsModule {
   chunkSizeBytes(): number;
   /** Validated start folder; falls back to the root instead of throwing. */
   resolveStartFolder(): Promise<string>;
+  /** True when the setting is `WORKSPACE_START_FOLDER`. */
+  followsWorkspace(): boolean;
   savePreferences(input: SavePreferencesInput): Promise<SavePreferencesOutput>;
 }
 
@@ -144,11 +150,19 @@ function toPreferences(values: FileManagerSettingsValues): Preferences {
   };
 }
 
+/** True for the `WORKSPACE_START_FOLDER` token, ignoring stray spaces. */
+export function isWorkspaceToken(value: string): boolean {
+  return value.trim() === WORKSPACE_START_FOLDER;
+}
+
 /**
  * Validate a start folder the strict way (used when *writing*): it must resolve
- * inside the root and be a directory. Returns the realpath'ed value.
+ * inside the root and be a directory. Returns the realpath'ed value. The
+ * `WORKSPACE_START_FOLDER` token passes through as-is: it names no folder until
+ * a surface resolves it.
  */
 export async function validateStartFolder(input: string): Promise<string> {
+  if (isWorkspaceToken(input)) return WORKSPACE_START_FOLDER;
   const real = await resolveExisting(input);
   const st = await stat(real).catch((error: unknown) => {
     throw mapNodeError(error, real);
@@ -165,6 +179,9 @@ export async function createSettings(bb: BbPluginApi): Promise<SettingsModule> {
   });
 
   async function resolveStartFolder(): Promise<string> {
+    // The token is not a broken setting: the root is its honest fallback, and
+    // the panel resolves the real folder per surface (`workspaceFolder`).
+    if (isWorkspaceToken(current.startFolder)) return getRoot();
     try {
       return await validateStartFolder(current.startFolder);
     } catch (error) {
@@ -181,6 +198,7 @@ export async function createSettings(bb: BbPluginApi): Promise<SettingsModule> {
     preferences: () => toPreferences(current),
     chunkSizeBytes: () => clampChunkBytes(current.uploadChunkMiB),
     resolveStartFolder,
+    followsWorkspace: () => isWorkspaceToken(current.startFolder),
 
     async savePreferences(input: SavePreferencesInput): Promise<SavePreferencesOutput> {
       const values: Record<string, string | boolean> = {};
@@ -204,6 +222,7 @@ export async function createSettings(bb: BbPluginApi): Promise<SettingsModule> {
 
       return {
         startFolder: await resolveStartFolder(),
+        startFolderFollowsWorkspace: isWorkspaceToken(current.startFolder),
         preferences: toPreferences(current),
         chunkSizeBytes: clampChunkBytes(current.uploadChunkMiB),
       };

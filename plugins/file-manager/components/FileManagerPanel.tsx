@@ -19,7 +19,12 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { useBbNavigate, useComposer, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
+import {
+  useBbContext,
+  useBbNavigate,
+  useComposer,
+  type PluginNavPanelProps,
+} from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
 import {
@@ -377,6 +382,12 @@ export interface FileManagerSurfaceProps {
    * home folder, not at a thread.
    */
   threadId?: string | null;
+  /**
+   * The project this surface belongs to, when the host names one (the New
+   * thread launcher). Only used to resolve a `$WORKTREE` start folder when
+   * there is no thread yet.
+   */
+  projectId?: string | null;
 }
 
 export function FileManagerSurface({
@@ -386,8 +397,17 @@ export function FileManagerSurface({
   revealPath = null,
   initialQuery = "",
   threadId = null,
+  projectId = null,
 }: FileManagerSurfaceProps) {
   const rpc = useFmRpc();
+  // What a `$WORKTREE` start folder follows: the surface's own thread and
+  // project first, then whatever bb is showing. Read once, like
+  // `initialPath`: the bootstrap runs once per mount.
+  const bbContext = useBbContext();
+  const followTargetRef = useRef({
+    threadId: threadId ?? bbContext.threadId ?? null,
+    projectId: projectId ?? bbContext.projectId ?? null,
+  });
   const subPath = location.subPath;
   const locationRef = useRef(location);
   locationRef.current = location;
@@ -536,7 +556,26 @@ export function FileManagerSurface({
         // explicit link, then the remembered folder, then the configured start
         // folder (§1.5). The `subPath === ""` guard that used to sit here is
         // now rule 1 of `pickInitialFolder`.
-        const requested = initialPathRef.current;
+        let requested = initialPathRef.current;
+        // A `$WORKTREE` start folder outranks the remembered folder: following
+        // the current worktree is the whole point of choosing it. A deep link
+        // still wins, and a lookup with nothing to follow falls through to the
+        // ordinary rules below.
+        const follow = followTargetRef.current;
+        if (
+          requested === null &&
+          subPathRef.current === "" &&
+          result.startFolderFollowsWorkspace === true &&
+          (follow.threadId !== null || follow.projectId !== null)
+        ) {
+          try {
+            const found = await rpc.call("workspaceFolder", follow);
+            if (cancelled) return;
+            requested = found.path;
+          } catch {
+            // Nothing to follow is not an error the user can act on.
+          }
+        }
         if (requested !== null) {
           // A requested folder needs the same redirect a remembered one needs:
           // the surface mounted at its location's `subPath`, not at this path.

@@ -6,7 +6,7 @@ import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { MAX_LIST_ENTRIES, fileManagerContract, type FileManagerContract } from "../contract";
 import type { BookmarksModule } from "./bookmarks";
 import { listDir, searchDir, statPath } from "./listing";
-import { locateFile, resolveThreadWorkspace } from "./locate";
+import { locateFile, resolveThreadWorkspace, resolveWorkspaceFolder } from "./locate";
 import {
   copyEntries,
   createFolder,
@@ -82,6 +82,7 @@ export function createCoreHandlers(
         root: getRoot(),
         primaryHostId: await resolvePrimaryHostId(bb),
         startFolder: await deps.settings.resolveStartFolder(),
+        startFolderFollowsWorkspace: deps.settings.followsWorkspace(),
         preferences: deps.settings.preferences(),
         chunkSizeBytes: deps.settings.chunkSizeBytes(),
         maxListEntries: MAX_LIST_ENTRIES,
@@ -98,6 +99,7 @@ export function createCoreHandlers(
     readTextFile: (input) => readTextFile(input),
     resolveFileLocation: (input) => locateFile(bb, input),
     threadWorkspace: (input) => resolveThreadWorkspace(bb, input),
+    workspaceFolder: (input) => resolveWorkspaceFolder(bb, input),
     searchDir: (input) => searchDir(input),
 
     createFolder: (input) => createFolder(bb, input),

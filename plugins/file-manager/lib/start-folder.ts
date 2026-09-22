@@ -5,6 +5,7 @@
 // the RPC call, the wording of the toasts and the little bit of arithmetic that
 // turns a stored path into something a human can read — so none of it lives in
 // a component.
+import { WORKSPACE_START_FOLDER } from "../contract";
 import { getClientRoot, isSamePath, toAbsolute, toRelative } from "./fm-paths";
 import type { FileManagerRpc } from "./fm-rpc";
 
@@ -24,6 +25,9 @@ export async function saveStartFolder(rpc: FileManagerRpc, path: string): Promis
   const result = await rpc.call("savePreferences", { startFolder: path });
   return result.startFolder;
 }
+
+/** Label for a `$WORKTREE` start folder, wherever one is shown. */
+export const WORKSPACE_START_FOLDER_LABEL = "Current worktree";
 
 /** Short label for a start folder: `rootLabel` at the root, else root-relative. */
 export function startFolderLabel(
@@ -93,6 +97,8 @@ export function startFolderNotInUse(
   root: string,
 ): string | null {
   if (typeof rawSetting !== "string" || rawSetting.trim() === "") return null;
+  // The token resolves to the root on purpose; that is not a fallback.
+  if (rawSetting.trim() === WORKSPACE_START_FOLDER) return null;
   if (!isSamePath(resolved, root)) return null;
   const configured = toAbsolute(rawSetting, root);
   if (isSamePath(configured, root)) return null;

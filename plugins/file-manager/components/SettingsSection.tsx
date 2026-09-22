@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSettings, type PluginSettingsSectionProps } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
+import { WORKSPACE_START_FOLDER } from "../contract";
 import { errorToastText } from "../lib/errors";
 import { isSamePath } from "../lib/fm-paths";
 import { useFmRpc, type RpcOutput } from "../lib/fm-rpc";
@@ -31,6 +32,7 @@ import {
   startFolderNotInUse,
   START_FOLDER_SAVED_TEXT,
   START_FOLDER_SAVE_FAILED_TEXT,
+  WORKSPACE_START_FOLDER_LABEL,
 } from "../lib/start-folder";
 import { FolderPickerDialog } from "./dialogs/FolderPickerDialog";
 import { Button } from "./ui/button";
@@ -186,7 +188,16 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
   // disabled for exactly as long.
   const root = state?.root ?? null;
   const startFolder = state?.startFolder ?? null;
-  const atRoot = state !== null && isSamePath(state.startFolder, state.root);
+  /** The setting is `$WORKTREE`: `startFolder` is then just the root. */
+  const follows = state?.startFolderFollowsWorkspace === true;
+  const atRoot = state !== null && !follows && isSamePath(state.startFolder, state.root);
+  /** What the panel opens, as one short phrase for the toasts. */
+  const openLabel =
+    state === null
+      ? ""
+      : follows
+        ? "the current worktree"
+        : startFolderLabel(state.startFolder, state.root);
   /**
    * Having a snapshot is the whole requirement. A *background* re-read that
    * failed says nothing about the snapshot already in hand — the folder
@@ -219,7 +230,13 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
           // The backend realpaths and re-validates; render its answer, and keep
           // the rest of the cached state so nothing else flickers.
           setState((previous) =>
-            previous === null ? previous : { ...previous, startFolder: resolved },
+            previous === null
+              ? previous
+              : {
+                  ...previous,
+                  startFolder: resolved,
+                  startFolderFollowsWorkspace: path === WORKSPACE_START_FOLDER,
+                },
           );
           setStateIsRead(false);
           // A round-trip just succeeded, so "could not read the settings" is
@@ -259,13 +276,15 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
             <>
               <span
                 className="min-w-0 flex-1 truncate font-mono text-sm text-foreground"
-                title={startFolder}
+                title={follows ? WORKSPACE_START_FOLDER : startFolder}
                 data-testid="fm-settings-start-folder"
               >
-                {startFolder}
+                {follows ? WORKSPACE_START_FOLDER : startFolder}
               </span>
               <span className="shrink-0 text-xs text-muted-foreground">
-                {startFolderLabel(state.startFolder, state.root)}
+                {follows
+                  ? WORKSPACE_START_FOLDER_LABEL
+                  : startFolderLabel(state.startFolder, state.root)}
               </span>
             </>
           )}
@@ -292,6 +311,17 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
           </Button>
           <Button
             type="button"
+            variant="outline"
+            size="sm"
+            disabled={!ready || saving || follows}
+            data-testid="fm-settings-follow-worktree"
+            onClick={() => choose(WORKSPACE_START_FOLDER)}
+          >
+            <Icon name="GitBranch" className="size-4" aria-hidden="true" />
+            Use current worktree
+          </Button>
+          <Button
+            type="button"
             variant="ghost"
             size="sm"
             disabled={!ready || saving || atRoot}
@@ -314,12 +344,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
               if (state === null) return;
               forgetLastFolder();
               setHasMemory(false);
-              toast.success(
-                `Forgotten. The panel will open in ${startFolderLabel(
-                  state.startFolder,
-                  state.root,
-                )} next time.`,
-              );
+              toast.success(`Forgotten. The panel will open in ${openLabel} next time.`);
             }}
           >
             Forget the remembered folder
@@ -337,7 +362,9 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
         >
           {state === null
             ? "The panel opens here."
-            : state.preferences.restoreLastFolder
+            : follows
+              ? "The panel opens the worktree of the thread beside it, or the project folder. With neither, it falls back to the last folder or the home folder."
+              : state.preferences.restoreLastFolder
               ? "Reopening the last folder is on, so this is where the panel opens the first time and whenever the last folder is gone."
               : "Reopening the last folder is off, so the panel always opens here."}
           {root === null ? null : ` Everything stays inside ${root}.`}
