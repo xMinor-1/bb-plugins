@@ -14,7 +14,7 @@ The bundled skill tells the agent how to change each format: Markdown directly; 
 
 ## Viewing
 
-Word and PowerPoint files are converted to PDF by LibreOffice on the bb server and cached per file version, so a document converts once. Pages render as images with a selectable text layer and stay sharp as you zoom: use the zoom buttons, Ctrl or Cmd with the scroll wheel, or pinch. All pages share one scale, so a landscape sheet, an A1 drawing, or a wide timeline scrolls left and right instead of shrinking to fit. In a long document only the pages on screen load, and the page counter jumps to any page. **Classic** switches to the browser's own PDF viewer for search and printing, and the download button saves the original file. Workbooks open as a grid with sheet tabs, number formats, fills, borders, merged cells, and frozen panes.
+Word and PowerPoint files are converted to PDF by LibreOffice on the bb server and cached per file version, so a document converts once. Pages render as images with a selectable text layer and stay sharp as you zoom: use the zoom buttons, Ctrl or Cmd with the scroll wheel, or pinch, and read the smallest labels on a large drawing. All pages share one scale, so a landscape sheet or a wide timeline in a portrait document scrolls left and right instead of shrinking to fit. In a long document only the pages on screen load, and the page counter jumps to any page. **Classic** switches to the browser's own PDF viewer for search and printing, and the download button saves the original file. Workbooks open as a grid with sheet tabs, number formats, fills, borders, merged cells, and frozen panes.
 
 ## On a phone
 
