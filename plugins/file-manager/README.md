@@ -698,14 +698,15 @@ The BB Community catalog entry is *not* kept in this directory. It lives as
 `entries/file-manager.json` in
 [get-bb/marketplace](https://github.com/get-bb/marketplace) — filed as
 [PR #90](https://github.com/get-bb/marketplace/pull/90), widened to the 0.7.x
-line in [PR #122](https://github.com/get-bb/marketplace/pull/122) and to 0.8.x
-in [PR #196](https://github.com/get-bb/marketplace/pull/196) — and that
+line in [PR #122](https://github.com/get-bb/marketplace/pull/122), to 0.8.x
+in [PR #196](https://github.com/get-bb/marketplace/pull/196) and to 0.9.x in
+[PR #369](https://github.com/get-bb/marketplace/pull/369) — and that
 copy is the source of truth; a draft next to the code only goes stale, as it
 did between 0.2.0 and 0.3.0. The entry resolves a source range against this
 repository's tags, so any release inside that range reaches the catalog on its
-own. On a `0.x` line `^0.8.0` covers `0.8.x` only, so **0.9.0 is not yet in the
-catalog range** and needs a pull request widening it — as do moving the source,
-or changing the id, display name, description, tags or icon.
+own. On a `0.x` line `^0.9.1` covers `0.9.x` only, so a 0.10 release needs a
+pull request widening it — as do moving the source, or changing the id, display
+name, description, tags or icon.
 
 ## License
 
