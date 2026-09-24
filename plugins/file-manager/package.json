@@ -39,7 +39,8 @@
     "hooks",
     "lib",
     "assets",
-    "README.md"
+    "README.md",
+    "PLUGIN_OVERVIEW.md"
   ],
   "scripts": {
     "build": "env -u BB_CLI bb plugin build .",

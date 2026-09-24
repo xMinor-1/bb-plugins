@@ -45,10 +45,14 @@ every path is re-resolved and clamped on the server before a single byte moves.
   file costs the browser no memory. It moved to the row menu, where it is a
   deliberate choice rather than the side effect of a double-click.
 - **Jump to the thread's own folder** — one button in the panel tab opens the
-  checkout the thread beside you is working in, instead of hunting for it.
+  checkout the thread beside you is working in, instead of hunting for it. With
+  **Open the thread's project folder** on, the tab starts there.
 - **Hand a file to the agent** — `@` in any composer lists files from this
   machine, and *Add to chat* in the row menu does the same from the panel. The
   file is read when the message is sent, so the agent never gets a stale copy.
+- **On a phone or tablet** — tick rows and an **Actions** bar appears; it
+  opens the whole row menu as a sheet from the bottom, and a long press no
+  longer turns a row into a drag.
 - **Organize** — new folder, rename, delete, cut / copy / paste, drag to move.
   Batch operations report a result per path, and name collisions become
   `name (1).ext` instead of silently overwriting.
