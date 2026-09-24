@@ -15,7 +15,7 @@ import { familyIcon } from "@/components/viewer/family";
 import type { RecentDocument } from "../src/contract";
 import { docKindFor, type ReviewDoc } from "../src/types";
 import { Workspace } from "./review-opener";
-import { errorText, useReviewRpc } from "./use-review";
+import { errorText, useDocVersion, useReviewRpc } from "./use-review";
 
 export const PANEL_PATH = "doc-review";
 
@@ -291,6 +291,7 @@ function DocPage({ docId }: { docId: string }) {
   const navigate = useBbNavigate();
   const [doc, setDoc] = useState<ReviewDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useDocVersion(doc, setDoc);
 
   useEffect(() => {
     let alive = true;

@@ -1,6 +1,6 @@
 // Data hooks for the review panel: the opened document, its content version,
 // and its comments, kept current by polling and the server's realtime signal.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   useRealtime,
   useRealtimeConnectionState,
@@ -50,7 +50,13 @@ export function useReviewDoc(path: string, source: PluginFileOpenerSource) {
     };
   }, [rpc, path, kind, threadId, environmentId, projectId, hostId]);
 
-  // The agent edits the file while the panel is open; notice new versions.
+  useDocVersion(doc, setDoc);
+  return { doc, error };
+}
+
+/** The agent edits the file while it is on screen; follow its new versions. */
+export function useDocVersion(doc: ReviewDoc | null, setDoc: Dispatch<SetStateAction<ReviewDoc | null>>) {
+  const rpc = useReviewRpc();
   const docId = doc?.id ?? null;
   const version = doc?.version ?? null;
   useEffect(() => {
@@ -69,9 +75,7 @@ export function useReviewDoc(path: string, source: PluginFileOpenerSource) {
       );
     }, VERSION_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [rpc, docId, version]);
-
-  return { doc, error };
+  }, [rpc, docId, version, setDoc]);
 }
 
 export function useComments(docId: string | null) {

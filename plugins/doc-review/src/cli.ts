@@ -96,7 +96,7 @@ export function reviewCli(options: {
     name: CLI_NAME,
     summary: "Read review comments left on files in the Doc Review panel and report fixes",
     description:
-      "Comments are left on Markdown, PDF, and PPTX files in bb's Doc Review panel and handed to an agent. Close each handled comment with `resolve`, or answer with `reply` when it cannot be applied.",
+      "Comments are left on Markdown, PDF, Word, PowerPoint, and Excel files in bb's Doc Review panel and handed to an agent. Close each handled comment with `resolve`, or answer with `reply` when it cannot be applied.",
     commands: {
       list: cliCommand({
         summary: "List review comments (default: the ones sent to this thread and still waiting)",
