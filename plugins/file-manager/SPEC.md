@@ -1042,6 +1042,8 @@ components/FileTable.tsx                  FRONTEND  header row, sorting, rubber-
 components/FileRow.tsx                    FRONTEND  one row: icon, name, size, mtime, drag source/target
 components/FileGallery.tsx                FRONTEND  the gallery view: thumbnail grid over the same handlers (§8.9)
 components/RowContextMenu.tsx             FRONTEND  right-click menu for a selection
+components/SelectionActionBar.tsx          FRONTEND  compact/touch selected-item actions
+components/selected-entry-actions.ts       FRONTEND  shared selected-action policy and ordering
 components/BackgroundContextMenu.tsx      FRONTEND  right-click menu for empty space
 components/ActivityTray.tsx               FRONTEND  upload progress + extract jobs, bottom-right
 components/EmptyState.tsx                 FRONTEND  empty dir / no search results / escapesRoot dir
@@ -1126,6 +1128,7 @@ the double-click keeps the meaning it has always had. A socket, fifo or device n
 content to render, and the bytes are the only thing that can be handed over.
 | right click on a row | `RowContextMenu`; if the row is not selected, select it first |
 | right click on empty space | `BackgroundContextMenu` |
+| select a row on a compact viewport or coarse primary pointer | show `SelectionActionBar`; **Actions** opens the same selected-item operations in a responsive bottom drawer |
 | click on a breadcrumb | navigate to that ancestor |
 | column header click | toggle sort field / direction (persisted via `savePreferences`) |
 
@@ -1171,7 +1174,16 @@ when the event target is an `input`, `textarea` or `[contenteditable]`.
 
 **Internal (row → folder)**
 
-* Rows are `draggable`. `dragstart`:
+* Rows are `draggable` everywhere except on a coarse primary pointer. Touch
+  devices disable native row/tile dragging so long-press cannot enter browser
+  drag mode; selected-item operations remain available from
+  `SelectionActionBar`. Pointer capability is independent of viewport width, so
+  landscape phones and tablets follow the touch path too, and a compact window
+  driven by a mouse shows the bar but keeps dragging.
+* `RowContextMenu` and `SelectionActionBar` render the same action groups from
+  `selectedEntryActionModel`; visibility, enablement, order and callbacks are
+  not reimplemented per surface.
+* On a draggable row, `dragstart`:
   `dataTransfer.effectAllowed = "move"`,
   `setData("application/x-bb-file-manager", JSON.stringify(selectedPaths))`,
   plus a `text/plain` fallback of newline-joined paths. If the dragged row is
@@ -2022,7 +2034,7 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 | `registration.test.tsx` | `app.navPanels[0]` matches `{ id: "file-manager", title: "File Manager", icon: "FolderOpen", path: "files" }`; `headerContent` and `experimental_sidebarAccessory` are functions |
 | `panel.test.tsx` | renders rows from a stubbed `listDir`; hidden toggle re-issues `listDir` with `showHidden: true`; sorting by size reorders without an RPC; search filters client-side; `emitRealtime("fs", { paths:[cwd] })` triggers exactly one refetch; `setRealtimeConnectionState("connected")` refetches |
 | `selection.test.tsx` | click / ctrl-click / shift-click / `Ctrl+A` / `Escape` produce the expected selections |
-| `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed |
+| `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed; coarse-pointer selection (compact or wide) disables native row/tile dragging and exposes the responsive drawer; a compact fine-pointer window shows the bar and stays draggable; desktop remains draggable; desktop and touch action IDs and disabled states stay in parity |
 | `uploads.test.tsx` | dropping two `File`s calls `uploadCreate` twice and posts chunks in order (stub `XMLHttpRequest`); a 409 response resumes from `expected`; the tray shows percentages |
 | `viewer.test.tsx` | §8.12: markdown renders through bb's `Markdown` and toggles to `experimental_SourceCode`; every other text file goes straight to the source viewer, including one with no extension; an image / PDF / video / audio hangs off the folder's preview URL with its name percent-encoded and never calls `readTextFile`; `unsupported` renders the download offer while `permission_denied` renders a failure; a host that *does* take the preview never opens the dialog at all |
 | `archive-viewer.test.tsx` | §8.13 in the panel: `Space` on an archive shows its tree (never `readTextFile`); folders first by name with the lone top folder open; click and arrow keys open and close folders; the summary line, the lock and the link target; the truncated, damaged, timed-out, empty, failed and unsupported states; Extract… swaps the viewer for `ExtractDialog` and starts `extractArchive`, and is absent when not `extractable`; a double click still extracts; a previewing host still gets the archive |

@@ -112,6 +112,8 @@ import { effectiveKind, isFileEntry } from "./FileRow";
 import { FileGallery } from "./FileGallery";
 import { FileTable } from "./FileTable";
 import { RowContextMenu } from "./RowContextMenu";
+import { SelectionActionBar } from "./SelectionActionBar";
+import type { SelectedEntryActionsProps } from "./selected-entry-actions";
 import { Toolbar } from "./Toolbar";
 import { BookmarkNameDialog } from "./dialogs/BookmarkNameDialog";
 import { ConfirmDeleteDialog } from "./dialogs/ConfirmDeleteDialog";
@@ -123,6 +125,8 @@ import { NewFolderDialog } from "./dialogs/NewFolderDialog";
 import { PropertiesDialog, type PropertiesTarget } from "./dialogs/PropertiesDialog";
 import { RenameDialog } from "./dialogs/RenameDialog";
 import { ContextMenu, ContextMenuTrigger } from "./ui/context-menu";
+import { useIsCompactViewport } from "./ui/hooks/use-compact-viewport";
+import { useIsCoarsePointer } from "./ui/hooks/use-coarse-pointer";
 import {
   publishPanelSnapshot,
   resetPanelSnapshot,
@@ -401,6 +405,14 @@ export function FileManagerSurface({
   threadId = null,
 }: FileManagerSurfaceProps) {
   const rpc = useFmRpc();
+  const isCompactViewport = useIsCompactViewport();
+  const isCoarsePointer = useIsCoarsePointer();
+  // The selection bar helps wherever a right-click is unlikely: a phone, a
+  // tablet, or a window too narrow for bb's desktop layout. Native dragging is
+  // switched off only for a touch pointer, where a long press would turn the
+  // row into a drag ghost; a narrow window driven by a mouse still drags.
+  const selectionBarEnabled = isCompactViewport || isCoarsePointer;
+  const rowDragEnabled = !isCoarsePointer;
   const subPath = location.subPath;
   const locationRef = useRef(location);
   locationRef.current = location;
@@ -2306,6 +2318,50 @@ export function FileManagerSurface({
   const rowMenuEntry = menuEntries.length === 1 ? menuEntries[0] : undefined;
   const rowMenuBookmarked =
     rowMenuEntry !== undefined && bookmarks.isBookmarked(rowMenuEntry.path);
+  const selectedActionEntry = selectedEntries.length === 1 ? selectedEntries[0] : undefined;
+  const selectedActionBookmarked =
+    selectedActionEntry !== undefined && bookmarks.isBookmarked(selectedActionEntry.path);
+  const actionPropsFor = (
+    entries: readonly FileEntry[],
+    bookmarked: boolean,
+  ): SelectedEntryActionsProps => ({
+    entries,
+    writable,
+    canPaste,
+    canExtract:
+      entries.length === 1 &&
+      entries[0]?.archiveFormat != null &&
+      isFormatSupported(entries[0].archiveFormat, archiveSupport),
+    onOpen: openEntry,
+    onDownload: () => downloadSelection(entries),
+    onAddToChat: () => addToChat(entries),
+    onExtract: (entry) => setDialog({ kind: "extract", entry }),
+    onCut: () => clipboard.cut(topLevelPaths(entries.map((entry) => entry.path))),
+    onCopy: () => clipboard.copy(topLevelPaths(entries.map((entry) => entry.path))),
+    onPaste: paste,
+    onMoveTo: () =>
+      setDialog({
+        kind: "picker",
+        mode: "move",
+        paths: entries.map((entry) => entry.path),
+      }),
+    onCopyTo: () =>
+      setDialog({
+        kind: "picker",
+        mode: "copy",
+        paths: entries.map((entry) => entry.path),
+      }),
+    onRename: (entry) => setDialog({ kind: "rename", entry }),
+    onCopyPath: () => copyPathsToClipboard(entries.map((entry) => entry.path)),
+    onDelete: () => requestDelete(entries),
+    onSetStartFolder: (entry) => setStartFolder(entry.path),
+    onProperties: () => openProperties(entries),
+    bookmarked,
+    canToggleBookmark: !bookmarks.loading,
+    onToggleBookmark: (entry) => toggleBookmark(entry.path),
+  });
+  const selectedActionProps = actionPropsFor(selectedEntries, selectedActionBookmarked);
+  const rowMenuActionProps = actionPropsFor(menuEntries, rowMenuBookmarked);
   const bookmarkItems = {
     bookmarks: bookmarks.bookmarks,
     currentBookmarked,
@@ -2415,6 +2471,13 @@ export function FileManagerSurface({
         pathFocusTick={pathFocusTick}
       />
 
+      {selectionBarEnabled && selectedEntries.length > 0 ? (
+        <SelectionActionBar
+          {...selectedActionProps}
+          onClear={selection.clear}
+        />
+      ) : null}
+
       {stateError === null ? null : (
         <ErrorBanner
           error={stateError}
@@ -2475,6 +2538,7 @@ export function FileManagerSurface({
                 selectedPaths={selection.selected}
                 focusedPath={selection.focus}
                 cutPaths={cutPaths}
+                dragEnabled={rowDragEnabled}
                 dropTargetPath={dropTarget}
                 previewBaseUrl={previewBaseUrl}
                 parentPath={parentPath}
@@ -2501,6 +2565,7 @@ export function FileManagerSurface({
                 selectedPaths={selection.selected}
                 focusedPath={selection.focus}
                 cutPaths={cutPaths}
+                dragEnabled={rowDragEnabled}
                 sortField={sortField}
                 sortDirection={sortDirection}
                 onSort={handleHeaderSort}
@@ -2533,45 +2598,7 @@ export function FileManagerSurface({
         </ContextMenuTrigger>
 
         {menuEntries.length > 0 ? (
-          <RowContextMenu
-            entries={menuEntries}
-            writable={writable}
-            canPaste={canPaste}
-            canExtract={
-              menuEntries.length === 1 &&
-              menuEntries[0]?.archiveFormat != null &&
-              isFormatSupported(menuEntries[0].archiveFormat, archiveSupport)
-            }
-            onOpen={openEntry}
-            onDownload={() => downloadSelection(menuEntries)}
-            onAddToChat={() => addToChat(menuEntries)}
-            onExtract={(entry) => setDialog({ kind: "extract", entry })}
-            onCut={() => clipboard.cut(topLevelPaths(menuEntries.map((entry) => entry.path)))}
-            onCopy={() => clipboard.copy(topLevelPaths(menuEntries.map((entry) => entry.path)))}
-            onPaste={paste}
-            onMoveTo={() =>
-              setDialog({
-                kind: "picker",
-                mode: "move",
-                paths: menuEntries.map((entry) => entry.path),
-              })
-            }
-            onCopyTo={() =>
-              setDialog({
-                kind: "picker",
-                mode: "copy",
-                paths: menuEntries.map((entry) => entry.path),
-              })
-            }
-            onRename={(entry) => setDialog({ kind: "rename", entry })}
-            onCopyPath={() => copyPathsToClipboard(menuEntries.map((entry) => entry.path))}
-            onDelete={() => requestDelete(menuEntries)}
-            onSetStartFolder={(entry) => setStartFolder(entry.path)}
-            onProperties={() => openProperties(menuEntries)}
-            bookmarked={rowMenuBookmarked}
-            canToggleBookmark={!bookmarks.loading}
-            onToggleBookmark={(entry) => toggleBookmark(entry.path)}
-          />
+          <RowContextMenu {...rowMenuActionProps} />
         ) : (
           <BackgroundContextMenu
             writable={writable}
