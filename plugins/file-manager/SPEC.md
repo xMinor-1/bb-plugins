@@ -1892,7 +1892,7 @@ made until the strip's button is pressed.
 
 **Resolution is a backend job.** An opener's `path` is relative to its
 `source`: a worktree (`environmentId` → `environments.get().path`), a thread's
-storage root (`threadId` → `threads.storagePaths()`), or absolute for a host
+storage root (`threadId` → `threads.storageLocation()`), or absolute for a host
 path. `resolveFileLocation` (`src/locate.ts`) turns that pair into
 `{ dirPath, absolutePath, name, exists, isDirectory, matchHint }` under the
 usual §6 clamp.

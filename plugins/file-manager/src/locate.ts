@@ -109,12 +109,11 @@ async function toAbsolutePath(bb: BbPluginApi, input: LocateFileInput): Promise<
     if (source.threadId === null) {
       throw fmError("unsupported", "this stored file has no thread");
     }
-    // Only the storage root matters, so ask for no entries at all.
-    const storage = await bb.sdk.threads.storagePaths({
-      threadId: source.threadId,
-      includeFiles: "false",
-      includeDirectories: "false",
-    });
+    // Only the storage root matters, and `storageLocation` names it without
+    // listing a single entry. `storagePaths` with both kinds switched off, the
+    // way this used to ask, is refused since bb 0.43 ("At least one path kind
+    // must be included"), which broke every thread-storage link.
+    const storage = await bb.sdk.threads.storageLocation({ threadId: source.threadId });
     return path.resolve(storage.storageRootPath, input.path);
   }
 

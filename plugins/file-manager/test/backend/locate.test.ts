@@ -39,8 +39,11 @@ function fakeBb(overrides: {
           hostId: "host_1",
         })),
       },
+      // Only `storageLocation`: bb 0.43 refuses a `storagePaths` call that asks
+      // for no entries, so reaching for it here would fail in the real host.
       threads: {
-        storagePaths: vi.fn(async () => ({
+        storageLocation: vi.fn(async () => ({
+          hostId: "host_1",
           storageRootPath: overrides.storageRootPath ?? root,
         })),
       },
@@ -212,7 +215,8 @@ describe("locateFile", () => {
     await mkdir(path.join(storage, "Attachments"), { recursive: true });
     await writeFile(path.join(storage, "Attachments", "shot.png"), "png");
 
-    const located = await locateFile(fakeBb({ storageRootPath: storage }), {
+    const bb = fakeBb({ storageRootPath: storage });
+    const located = await locateFile(bb, {
       path: "Attachments/shot.png",
       source: {
         kind: "thread-storage",
@@ -225,5 +229,6 @@ describe("locateFile", () => {
     expect(located.dirPath).toBe(path.join(storage, "Attachments"));
     expect(located.name).toBe("shot.png");
     expect(located.exists).toBe(true);
+    expect(bb.sdk.threads.storageLocation).toHaveBeenCalledWith({ threadId: "thr_1" });
   });
 });
