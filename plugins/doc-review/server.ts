@@ -1,9 +1,11 @@
 // bb-plugin-doc-review — backend entry.
 //
-// View and comment on Markdown, PDF, Word, PowerPoint, and Excel files in a
-// panel tab, then hand the comments to an agent in one message. Viewing
+// View and comment on Markdown, PDF, Word, PowerPoint, Excel, and HTML files
+// in a panel tab, then hand the comments to an agent in one message. Viewing
 // (LibreOffice conversions, workbooks, links for the classic PDF view) lives
-// in src/viewer.ts; page images and text boxes in src/render.ts. Comments live
+// in src/viewer.ts; page images and text boxes in src/render.ts; HTML pages
+// are served into a sandboxed frame with the bridge from src/html-bridge.ts.
+// Comments live
 // in this plugin's SQLite database; the reviewed file is never modified by
 // the plugin. Agents report back with the `bb doc-review` command, and every
 // change reaches open panels through a realtime signal.
@@ -14,11 +16,13 @@ import { isSupportedPath } from "./lib/formats.js";
 import { rpcContract, type RecentDocument } from "./src/contract.js";
 import { reviewCli } from "./src/cli.js";
 import { DocFiles } from "./src/files.js";
+import { BRIDGE_SCRIPT, HTML_SANDBOX, injectIntoHtml } from "./src/html-bridge.js";
 import { buildHandoffMessage } from "./src/message.js";
 import { Renderer, renderWidth, type PageSize } from "./src/render.js";
 import { MIGRATIONS, ReviewStore, type Db, type DocRow } from "./src/store.js";
 import {
   docKindFor,
+  HTML_EXTENSIONS,
   isPaged,
   MARKDOWN_EXTENSIONS,
   type ReviewComment,
@@ -38,6 +42,9 @@ export type { RpcContract } from "./src/contract.js";
 /** Realtime channel the panel listens on; payload `{ docIds }`. */
 const CHANGED = "review-changed";
 const PAGE_ROUTE = "/page";
+const HTML_ROUTE = "/html";
+/** The largest HTML page served into the review frame. */
+const HTML_MAX_BYTES = 20 * 1024 * 1024;
 const NO_PROJECT =
   "This file is not in a project, so a new chat cannot be started from here.";
 const RECENTS_KEY = "recent-documents";
@@ -178,6 +185,40 @@ export default async function plugin(bb: BbPluginApi) {
     }
   });
 
+  // An HTML page for the review frame: the file with a <base> next to it and
+  // the bridge script. The CSP sandbox keeps the page's scripts away from bb
+  // even if this URL is opened on its own.
+  bb.http.route("GET", HTML_ROUTE, async (context) => {
+    const docId = context.req.query("doc") ?? "";
+    const wanted = context.req.query("v") ?? "";
+    const doc = store.getDoc(docId);
+    if (!doc || doc.kind !== "html") return context.text("Not found", 404);
+    try {
+      const version = await currentVersion(doc);
+      if (version !== wanted) return context.text("This page changed; reload it.", 404);
+      const [source, baseUrl] = await Promise.all([
+        files.readBytes(doc, HTML_MAX_BYTES),
+        files.assetBaseUrl(doc),
+      ]);
+      const page = injectIntoHtml(source, {
+        baseHref: baseUrl ? `${baseUrl.replace(/\/+$/, "")}/` : null,
+        script: BRIDGE_SCRIPT,
+      });
+      return new Response(new Uint8Array(page.body), {
+        headers: {
+          "content-type": page.contentType,
+          "content-security-policy": `sandbox ${HTML_SANDBOX}`,
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer",
+        },
+      });
+    } catch (error) {
+      bb.log.warn(`html page ${doc.absPath}: ${String(error)}`);
+      return context.text("Could not open this page.", 500);
+    }
+  });
+
   /** Crops for area comments on pages, in comment order. */
   async function areaImages(
     doc: DocRow,
@@ -230,7 +271,7 @@ export default async function plugin(bb: BbPluginApi) {
     async "doc.open"({ path: rawPath, source, remember }) {
       const kind = docKindFor(rawPath);
       if (!kind) {
-        throw new Error("Doc Review opens Markdown, PDF, Word, PowerPoint, and Excel files.");
+        throw new Error("Doc Review opens Markdown, PDF, Word, PowerPoint, Excel, and HTML files.");
       }
       const { absPath, hostId } = await files.resolve(rawPath, source);
       const doc = store.upsertDoc(hostId, absPath, kind);
@@ -271,6 +312,14 @@ export default async function plugin(bb: BbPluginApi) {
         files.assetBaseUrl(doc),
       ]);
       return { version, content, assetBaseUrl };
+    },
+
+    async "doc.html"({ docId }) {
+      const doc = requireDoc(docId);
+      if (doc.kind !== "html") throw new Error("Not an HTML file.");
+      const version = await currentVersion(doc);
+      const v = encodeURIComponent(version);
+      return { version, url: `/api/v1/plugins/${bb.pluginId}/http${HTML_ROUTE}?doc=${doc.id}&v=${v}` };
     },
 
     async "doc.pages"({ docId }) {
@@ -357,7 +406,7 @@ export default async function plugin(bb: BbPluginApi) {
       });
       const openable = (name: string) =>
         isSupportedPath(name) ||
-        (MARKDOWN_EXTENSIONS as readonly string[]).some((extension) => name.toLowerCase().endsWith(`.${extension}`));
+        [...MARKDOWN_EXTENSIONS, ...HTML_EXTENSIONS].some((extension) => name.toLowerCase().endsWith(`.${extension}`));
       return {
         hostId: targetHost,
         directory: listing.directory,

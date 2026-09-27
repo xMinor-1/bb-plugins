@@ -9,8 +9,12 @@ import { documentFamily, extensionOf } from "../lib/formats.js";
  * - `text` (Word, ODT, RTF) and `presentation` (PowerPoint, ODP): converted
  *   to PDF by LibreOffice, then shown as pages.
  * - `spreadsheet` (Excel, ODS): a grid of cells.
+ * - `html`: a web page, rendered live in a sandboxed frame.
  */
-export type DocKind = "md" | "pdf" | "text" | "presentation" | "spreadsheet";
+export type DocKind = "md" | "pdf" | "text" | "presentation" | "spreadsheet" | "html";
+
+/** The `sandbox` flags for an HTML page's frame, also sent as a CSP header with the page. */
+export const HTML_SANDBOX = "allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
 /** Kinds shown as rendered pages. */
 export type PagedKind = "pdf" | "text" | "presentation";
@@ -33,6 +37,9 @@ export interface Rect {
  * - `md-text`: selected text in a Markdown file, with its source line range.
  * - `page-text`: selected text on a PDF page or PPTX slide (1-based page).
  * - `page-area`: a drawn rectangle on a page, with the text found inside it.
+ * - `cell`: a cell or range in a workbook.
+ * - `html-text`: selected text on an HTML page.
+ * - `html-element`: an element picked on an HTML page.
  */
 export type Anchor =
   | { kind: "doc" }
@@ -55,6 +62,25 @@ export type Anchor =
       ref: string;
       /** The displayed values in the range, for context. */
       text: string;
+    }
+  | {
+      kind: "html-text";
+      quote: string;
+      prefix: string;
+      suffix: string;
+      /** CSS path of the element that holds the selection, as the page renders it. */
+      selector: string;
+    }
+  | {
+      kind: "html-element";
+      /** CSS path of the element, as the page renders it. */
+      selector: string;
+      /** Tag name in lower case. */
+      tag: string;
+      /** The element's visible text, trimmed. */
+      text: string;
+      /** The start of its outer HTML, for finding it in the source. */
+      html: string;
     };
 
 /**
@@ -125,10 +151,12 @@ export interface PageText {
 }
 
 export const MARKDOWN_EXTENSIONS = ["md", "markdown"] as const;
+export const HTML_EXTENSIONS = ["html", "htm"] as const;
 
 export function docKindFor(path: string): DocKind | null {
   const extension = extensionOf(path);
   if ((MARKDOWN_EXTENSIONS as readonly string[]).includes(extension)) return "md";
+  if ((HTML_EXTENSIONS as readonly string[]).includes(extension)) return "html";
   return documentFamily(path);
 }
 
@@ -152,6 +180,10 @@ export function anchorLabel(anchor: Anchor, kind: DocKind): string {
       return `${pageNoun(kind)} ${anchor.page}, area`;
     case "cell":
       return `${anchor.sheet}!${anchor.ref}`;
+    case "html-text":
+      return "Text";
+    case "html-element":
+      return `Element <${anchor.tag}>`;
   }
 }
 
@@ -161,8 +193,11 @@ export function anchorQuote(anchor: Anchor): string | null {
     case "md-text":
     case "page-text":
       return anchor.quote;
+    case "html-text":
+      return anchor.quote;
     case "page-area":
     case "cell":
+    case "html-element":
       return anchor.text || null;
     case "doc":
       return null;

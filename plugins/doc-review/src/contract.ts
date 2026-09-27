@@ -14,6 +14,8 @@ const rectSchema = z
   .strict();
 
 const MAX_QUOTE = 4000;
+const MAX_SELECTOR = 1000;
+const MAX_HTML = 2000;
 
 export const anchorSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("doc") }).strict(),
@@ -52,6 +54,24 @@ export const anchorSchema = z.discriminatedUnion("kind", [
       text: z.string().max(MAX_QUOTE),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("html-text"),
+      quote: z.string().min(1).max(MAX_QUOTE),
+      prefix: z.string().max(200),
+      suffix: z.string().max(200),
+      selector: z.string().max(MAX_SELECTOR),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("html-element"),
+      selector: z.string().min(1).max(MAX_SELECTOR),
+      tag: z.string().min(1).max(40),
+      text: z.string().max(MAX_QUOTE),
+      html: z.string().max(MAX_HTML),
+    })
+    .strict(),
 ]);
 
 const statusSchema = z.enum(["draft", "sent", "replied", "resolved"]);
@@ -71,7 +91,7 @@ export const commentSchema = z.object({
   resolvedAt: z.number().nullable(),
 });
 
-const kindSchema = z.enum(["md", "pdf", "text", "presentation", "spreadsheet"]);
+const kindSchema = z.enum(["md", "pdf", "text", "presentation", "spreadsheet", "html"]);
 
 const docSchema = z.object({
   id: z.string(),
@@ -191,6 +211,11 @@ export const rpcContract = defineRpcContract({
   "doc.version": {
     input: z.object({ docId: z.string() }).strict(),
     output: z.object({ version: z.string().nullable() }),
+  },
+  "doc.html": {
+    input: z.object({ docId: z.string() }).strict(),
+    /** A same-origin URL that serves the page with the bridge, for a sandboxed frame. */
+    output: z.object({ version: z.string(), url: z.string() }),
   },
   "doc.markdown": {
     input: z.object({ docId: z.string() }).strict(),

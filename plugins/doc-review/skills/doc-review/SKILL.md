@@ -1,6 +1,6 @@
 ---
 name: doc-review
-description: Apply review comments that the user left on a Markdown, PDF, Word, PowerPoint, or Excel file in bb's Doc Review panel, and report each one back with `bb doc-review`. Use when a message starts with "Review comments on" or lists comment ids like c_ab12cd, or when the user asks to handle, fix, or answer their review comments.
+description: Apply review comments that the user left on a Markdown, PDF, Word, PowerPoint, Excel, or HTML file in bb's Doc Review panel, and report each one back with `bb doc-review`. Use when a message starts with "Review comments on" or lists comment ids like c_ab12cd, or when the user asks to handle, fix, or answer their review comments.
 ---
 
 # Doc Review comments
@@ -30,6 +30,13 @@ report each one as you finish it.
    - PDF: find the source it was generated from (Markdown, HTML, PPTX, a
      script) and regenerate the PDF after editing the source. With no source,
      do not rebuild the PDF by hand; reply with what you cannot change.
+   - HTML: the user commented on the page as the browser rendered it. A
+     comment points at quoted text or at an element (its tag, a CSS path of
+     the rendered page, and the start of its HTML). Find the place in the file
+     by the quote or the HTML; the CSS path helps but can differ from the
+     source's structure. Edit the file itself, or the template or script
+     that generates it and regenerate the page. Keep its styles and scripts
+     working.
 3. Close each handled comment with a one-line note in the user's language:
    `bb doc-review resolve <id> --note "what changed"`. Several ids can share
    one note when one edit covers them.

@@ -1,7 +1,7 @@
 # Doc Review
 
-Read and comment on documents inside bb: Markdown, PDF, Word, PowerPoint, and
-Excel open in a panel tab beside the chat. Comment the way you would in Figma,
+Read and comment on documents inside bb: Markdown, PDF, Word, PowerPoint,
+Excel, and HTML open in a panel tab beside the chat. Comment the way you would in Figma,
 then hand every comment to an agent in one message — in the current chat or a
 new one. The agent closes each comment with a note, so the tab shows what was
 fixed and what still needs you.
@@ -18,6 +18,7 @@ PowerPoint, and Excel rendering and its classic PDF view live here now.
 | Word: `docx`, `doc`, `odt`, `rtf` and templates | Converted to PDF by LibreOffice, then page by page |
 | PowerPoint: `pptx`, `ppt`, `odp` and templates | Converted to PDF by LibreOffice, then slide by slide |
 | Excel: `xlsx`, `xlsm`, `xls`, `xlsb`, `ods` and templates | A grid with sheet tabs, formatting, merged cells, frozen panes, zoom |
+| `.html`, `.htm` | The live page in a sandboxed frame: its styles, pictures, and scripts next to the file load as usual |
 
 Any matching file opened in bb — a link in a message, the file picker,
 `bb thread open` — renders in a panel tab. On pages, **Classic** switches to
@@ -45,6 +46,9 @@ converts once and reopens at once.
 - **Cells:** in a workbook, click a cell or drag over a range, then comment on
   it; commented cells show a mark in the corner.
 - **Whole document:** one button at the top of the comment list.
+- **HTML:** select text and comment as anywhere else, or switch to
+  **Element** and click a block, button, or picture to comment on it; the
+  agent gets the quote or the element's CSS path and the start of its HTML.
 - **On a touch screen:** select text with a long press; in **Area** mode hold,
   then drag to draw a box (a hold without a drag marks the spot); in a
   workbook tap a cell, or hold and drag over a range. A drag without the hold
@@ -131,6 +135,14 @@ bb doc-review reply <id> --note "question or reason"
 - Markdown is split into top-level blocks (`marked` lexer) and rendered with
   bb's `Markdown` component, so a selection maps back to source lines.
   Highlights use the CSS Custom Highlight API.
+- HTML pages are served by the plugin's `/html` route with a `<base>` pointing
+  at bb's preview of the file's folder (so relative styles, pictures, and
+  scripts load) and the bridge from `src/html-bridge.ts` appended. The page
+  runs in a frame sandboxed without `allow-same-origin`, and the response
+  carries the same sandbox as a CSP header, so its scripts cannot reach bb
+  even when the URL is opened on its own. The bridge reports selections and
+  picked elements to the panel with `postMessage` and paints the comments the
+  panel sends back.
 - `src/store.ts` keeps documents and comments in the plugin's SQLite database;
   every change publishes a realtime signal that open tabs follow. The tab also
   polls the file's version, so the agent's edits show up without reopening it.
@@ -149,6 +161,11 @@ bb doc-review reply <id> --note "question or reason"
 - In the classic view, comments are not shown; switch back with **Comment**.
   Phones have no usable built-in PDF viewer, so the button is hidden there.
 - A text selection that spans two pages keeps the part on the first page.
+- HTML pages run with an opaque origin: `localStorage` is unavailable and a
+  page's own `fetch` of files next to it is refused. A link that leaves the
+  page shows a bar to return; comments work on the reviewed file only.
+- bb's preview of the folder lasts an hour; an HTML page left open longer may
+  fail to load pictures it had not loaded yet until it is reopened.
 
 ## Development
 

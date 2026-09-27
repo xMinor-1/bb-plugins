@@ -1,6 +1,6 @@
 // bb-plugin-doc-review — frontend entry.
 //
-// One file opener for Markdown, PDF, Word, PowerPoint, and Excel: files open
+// One file opener for Markdown, PDF, Word, PowerPoint, Excel, and HTML: files open
 // in a panel tab beside the chat, where they can be read and commented on
 // (see ui/review-opener.tsx). The sidebar page lists files with comments,
 // recent files, and a folder browser.
@@ -12,7 +12,7 @@ import {
   SPREADSHEET_EXTENSIONS,
   TEXT_EXTENSIONS,
 } from "./lib/formats";
-import { MARKDOWN_EXTENSIONS } from "./src/types";
+import { HTML_EXTENSIONS, MARKDOWN_EXTENSIONS } from "./src/types";
 import { ReviewOpener } from "./ui/review-opener";
 import { PANEL_PATH, ReviewsPage } from "./ui/reviews-page";
 
@@ -26,6 +26,7 @@ export default definePluginApp((app) => {
       ...TEXT_EXTENSIONS,
       ...PRESENTATION_EXTENSIONS,
       ...SPREADSHEET_EXTENSIONS,
+      ...HTML_EXTENSIONS,
     ],
     component: ReviewOpener,
   });

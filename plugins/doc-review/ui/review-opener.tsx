@@ -37,6 +37,7 @@ import {
 } from "../src/types";
 import { CommentEditor } from "./comment-editor";
 import { CommentList, type CommentActions } from "./comment-list";
+import { HtmlDoc } from "./html-doc";
 import { MarkdownDoc, type Point } from "./markdown-doc";
 import { PagesDoc, type PageMode } from "./pages-doc";
 import { SheetDoc } from "./sheet-doc";
@@ -73,7 +74,8 @@ type Content =
   | { kind: "md"; version: string; content: string; assetBaseUrl: string | null }
   | { kind: "pages"; version: string; pages: PageInfo[] }
   | { kind: "needs-libreoffice"; missing: NeedsLibreOfficeResult }
-  | { kind: "sheet"; version: string; workbook: WorkbookSummary; sheet: SheetData };
+  | { kind: "sheet"; version: string; workbook: WorkbookSummary; sheet: SheetData }
+  | { kind: "html"; version: string; url: string };
 
 /** Loads the document body for the current version; keeps the last one while reloading. */
 function useDocContent(doc: ReviewDoc) {
@@ -88,6 +90,9 @@ function useDocContent(doc: ReviewDoc) {
     const load = async (): Promise<Content> => {
       if (doc.kind === "md") {
         return { kind: "md", ...(await rpc.call("doc.markdown", { docId: doc.id })) };
+      }
+      if (doc.kind === "html") {
+        return { kind: "html", ...(await rpc.call("doc.html", { docId: doc.id })) };
       }
       if (doc.kind === "spreadsheet") {
         const opened = await rpc.call("sheet.open", { docId: doc.id, locale: navigator.language || "en-US" });
@@ -430,6 +435,8 @@ export function Workspace({
       ? "Converting to PDF…"
       : doc.kind === "spreadsheet"
         ? "Reading the workbook…"
+        : doc.kind === "html"
+          ? "Opening the page…"
         : doc.kind === "pdf"
           ? "Rendering pages…"
           : "Loading…";
@@ -482,6 +489,21 @@ export function Workspace({
       onRequestComment={requestComment}
       onSelectComment={selectFromDoc}
     />
+  ) : content.kind === "html" ? (
+    <HtmlDoc
+      url={content.url}
+      name={doc.name}
+      mode={mode}
+      comments={list}
+      activeId={activeId}
+      scrollRequest={scrollRequest}
+      pendingAnchor={pending?.anchor ?? null}
+      composer={composer}
+      composerPoint={pending?.point ?? null}
+      onRequestComment={requestComment}
+      onSelectComment={selectFromDoc}
+      onDetached={onDetached}
+    />
   ) : content.kind === "md" ? (
     <MarkdownDoc
       instanceId={instanceId}
@@ -522,11 +544,14 @@ export function Workspace({
   );
 
   const hasPages = paged && content?.kind === "pages" && !showClassic;
-  const ownScroll = content?.kind === "sheet" || showClassic;
+  const isHtml = content?.kind === "html";
+  // Pages switch between text and areas; HTML between text and elements.
+  const hasModes = hasPages || isHtml;
+  const ownScroll = content?.kind === "sheet" || isHtml || showClassic;
   return (
     <div ref={root} className="relative flex h-full min-h-0 flex-col bg-background">
       <div className={cn("flex shrink-0 items-center border-b border-border py-2", compact ? "gap-1 px-2" : "gap-2 px-3")}>
-        {hasPages ? (
+        {hasModes ? (
           <div className="flex rounded-md border border-border p-0.5" role="group" aria-label="Selection mode">
             {(["text", "area"] as const).map((value) => (
               <button
@@ -534,14 +559,28 @@ export function Workspace({
                 type="button"
                 aria-pressed={mode === value}
                 onClick={() => setMode(value)}
-                title={value === "text" ? "Select text to comment" : "Draw a box to comment on an area"}
+                title={
+                  value === "text"
+                    ? "Select text to comment"
+                    : isHtml
+                      ? "Click an element to comment on it"
+                      : "Draw a box to comment on an area"
+                }
                 className={cn(
                   "inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2 text-xs",
                   mode === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                <Icon name={value === "text" ? "TextWrap" : "Square"} className="size-3.5" />
-                {compact ? <span className="sr-only">{value === "text" ? "Text" : "Area"}</span> : value === "text" ? "Text" : "Area"}
+                <Icon name={value === "text" ? "TextWrap" : isHtml ? "Target" : "Square"} className="size-3.5" />
+                {compact ? (
+                  <span className="sr-only">{value === "text" ? "Text" : isHtml ? "Element" : "Area"}</span>
+                ) : value === "text" ? (
+                  "Text"
+                ) : isHtml ? (
+                  "Element"
+                ) : (
+                  "Area"
+                )}
               </button>
             ))}
           </div>
@@ -568,7 +607,7 @@ export function Workspace({
             {compact ? null : showClassic ? "Comment" : "Classic"}
           </Button>
         ) : null}
-        {doc.kind === "md" && onShowOriginal ? (
+        {(doc.kind === "md" || doc.kind === "html") && onShowOriginal ? (
           <Button
             type="button"
             variant="ghost"

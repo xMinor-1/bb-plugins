@@ -12,11 +12,15 @@ import {
 export const CLI_NAME = "doc-review";
 
 const QUOTE_MAX = 600;
+const HTML_SNIPPET_MAX = 300;
 
 function quoteFor(comment: ReviewComment): string | null {
   const { anchor } = comment;
-  if (anchor.kind === "md-text" || anchor.kind === "page-text") {
+  if (anchor.kind === "md-text" || anchor.kind === "page-text" || anchor.kind === "html-text") {
     return `«${truncate(anchor.quote, QUOTE_MAX)}»`;
+  }
+  if (anchor.kind === "html-element" && anchor.text.trim()) {
+    return `text: «${truncate(anchor.text, QUOTE_MAX)}»`;
   }
   if (anchor.kind === "page-area" && anchor.text.trim()) {
     return `text in the area: «${truncate(anchor.text, QUOTE_MAX)}»`;
@@ -39,7 +43,19 @@ function kindHint(kind: DocKind): string {
       return "Cells are A1 references on the named sheet. Edit the workbook itself (for .xlsx, openpyxl) and keep its formatting and formulas.";
     case "pdf":
       return "Page numbers are 1-based. If this PDF is generated from a source file (Markdown, HTML, PPTX, …), edit the source and regenerate the PDF; otherwise say what you cannot change.";
+    case "html":
+      return "This is an HTML page as the browser rendered it. Edit the file itself, or the template or script that generates it and regenerate it; find each place by the quoted text or the element's HTML. Selectors describe the rendered page and can differ from the source's structure.";
   }
+}
+
+/** Where on an HTML page a comment points, for finding it in the source. */
+function htmlDetails(comment: ReviewComment): { selector: string | null; snippet: string | null } {
+  const { anchor } = comment;
+  if (anchor.kind === "html-text") return { selector: anchor.selector || null, snippet: null };
+  if (anchor.kind === "html-element") {
+    return { selector: anchor.selector, snippet: truncate(anchor.html, HTML_SNIPPET_MAX) || null };
+  }
+  return { selector: null, snippet: null };
 }
 
 export function buildHandoffMessage(input: {
@@ -67,7 +83,10 @@ export function buildHandoffMessage(input: {
     else if (imagePath) parts.push(`image: \`${imagePath}\``);
     const quote = quoteFor(comment);
     if (quote) parts.push(quote);
+    const html = htmlDetails(comment);
+    if (html.selector) parts.push(`\`${html.selector}\``);
     lines.push(parts.join(" · "));
+    if (html.snippet) lines.push(`HTML: \`${html.snippet.replace(/`/g, "'")}\``);
     lines.push(comment.body.trim());
     lines.push("");
   }

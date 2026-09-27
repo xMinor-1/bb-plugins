@@ -47,6 +47,7 @@ function Counts({ counts }: { counts: DocSummary["counts"] }) {
 
 function iconFor(path: string): string {
   const kind = docKindFor(path);
+  if (kind === "html") return "Code";
   return kind === "md" || kind === null ? "FileText" : familyIcon(kind);
 }
 
@@ -163,7 +164,7 @@ function DocList() {
     <div className="@container h-full min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto box-border w-full max-w-3xl space-y-5 px-4 pb-6 pt-3 md:px-5 md:pt-4">
         <p className="text-sm text-muted-foreground">
-          Read Markdown, PDF, Word, PowerPoint, and Excel files and comment on them. Files opened
+          Read Markdown, PDF, Word, PowerPoint, Excel, and HTML files and comment on them. Files opened
           from a chat land in a tab beside it; send the comments to the agent from there.
         </p>
         <form onSubmit={submit} className="flex items-center gap-2">

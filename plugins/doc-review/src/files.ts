@@ -119,6 +119,18 @@ export class DocFiles {
     return file ? `h${file.sha256.slice(0, 16)}` : null;
   }
 
+  /** The file's bytes, from this machine or the host it lives on. */
+  async readBytes(doc: DocRow, maxBytes: number): Promise<Buffer> {
+    if (doc.hostId === null) {
+      const info = await stat(doc.absPath);
+      if (info.size > maxBytes) throw new Error("This file is too large to review.");
+      return readFile(doc.absPath);
+    }
+    const file = await this.bb.sdk.files.read({ hostId: doc.hostId, path: doc.absPath });
+    if (file.sizeBytes > maxBytes) throw new Error("This file is too large to review.");
+    return Buffer.from(file.content, file.contentEncoding === "base64" ? "base64" : "utf8");
+  }
+
   async readText(doc: DocRow): Promise<string> {
     if (doc.hostId === null) {
       const info = await stat(doc.absPath);
@@ -138,13 +150,17 @@ export class DocFiles {
    */
   async assetBaseUrl(doc: DocRow): Promise<string | null> {
     try {
+      // Name this machine explicitly: bb refuses a preview without a host.
+      const hostId = doc.hostId ?? (await this.localHostId());
       const preview = await this.bb.sdk.files.createPreview({
-        ...(doc.hostId ? { hostId: doc.hostId } : {}),
+        ...(hostId ? { hostId } : {}),
         rootPath: path.posix.dirname(doc.absPath),
-        ttlMs: 6 * 60 * 60 * 1000,
+        // bb caps a preview lease at one hour.
+        ttlMs: 60 * 60 * 1000,
       });
       return preview.baseUrl;
-    } catch {
+    } catch (error) {
+      this.bb.log.warn(`no preview for ${path.posix.dirname(doc.absPath)}: ${String(error)}`);
       return null;
     }
   }

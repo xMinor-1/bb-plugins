@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-doc-review",
-  "version": "0.2.2",
-  "description": "Read and comment on Markdown, PDF, Word, PowerPoint, and Excel files in a panel tab, then hand every comment to an agent in one message — in the current chat or a new one.",
+  "version": "0.2.3",
+  "description": "Read and comment on Markdown, PDF, Word, PowerPoint, Excel, and HTML files in a panel tab, then hand every comment to an agent in one message — in the current chat or a new one.",
   "license": "MIT",
   "author": "Foma",
   "repository": {
@@ -30,7 +30,7 @@
   },
   "bb": {
     "name": "Doc Review",
-    "description": "Read and comment on Markdown, PDF, Word, PowerPoint, and Excel files in a panel tab, then hand every comment to an agent in one message — in the current chat or a new one.",
+    "description": "Read and comment on Markdown, PDF, Word, PowerPoint, Excel, and HTML files in a panel tab, then hand every comment to an agent in one message — in the current chat or a new one.",
     "branding": {
       "icon": "./icon.svg"
     },

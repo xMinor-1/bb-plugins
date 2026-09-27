@@ -167,7 +167,11 @@ function CommentCard({
       ) : null}
       {(stale || detached) && comment.status !== "resolved" ? (
         <div className="mt-1.5 text-[11px] text-muted-foreground">
-          {detached ? "The quoted text is no longer in the file." : "The file changed after this comment."}
+          {detached
+            ? comment.anchor.kind === "html-element"
+              ? "The element is no longer on the page."
+              : "The quoted text is no longer in the file."
+            : "The file changed after this comment."}
         </div>
       ) : null}
     </div>
