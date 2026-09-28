@@ -49,6 +49,24 @@ const WIDE_MIN_PX = 760;
 const COMPACT_MAX_PX = 560;
 /** How much of the view the comment sheet covers on a narrow panel. */
 const SHEET_SHARE = 0.55;
+/** Whether the comment list beside the document is tucked away, kept across files. */
+const LIST_HIDDEN_KEY = "doc-review:list-hidden";
+
+function readListHidden(): boolean {
+  try {
+    return window.localStorage.getItem(LIST_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeListHidden(hidden: boolean): void {
+  try {
+    window.localStorage.setItem(LIST_HIDDEN_KEY, hidden ? "1" : "0");
+  } catch {
+    // Storage can be off (private mode); the choice then lasts for this tab.
+  }
+}
 
 function Centered({ children }: { children: ReactNode }) {
   return (
@@ -280,6 +298,7 @@ export function Workspace({
   const [mode, setMode] = useState<PageMode>("text");
   const [detached, setDetached] = useState<ReadonlySet<string>>(new Set());
   const [listOpen, setListOpen] = useState(false);
+  const [listHidden, setListHidden] = useState(readListHidden);
 
   const list = comments ?? [];
   const coveredBottom = !wide && listOpen ? SHEET_SHARE : 0;
@@ -295,10 +314,25 @@ export function Workspace({
   const selectFromDoc = useCallback(
     (id: string) => {
       setActiveId(id);
+      // A pin was clicked: show its comment, wherever the list lives.
       if (!wide) setListOpen(true);
+      else setListHidden(false);
     },
     [wide],
   );
+
+  // Wide: the list beside the document slides away and back, and the choice
+  // is remembered. Narrow: the list is a sheet from the bottom.
+  const listShown = wide ? !listHidden : listOpen;
+  const toggleList = () => {
+    if (!wide) {
+      setListOpen((open) => !open);
+      return;
+    }
+    const next = !listHidden;
+    setListHidden(next);
+    writeListHidden(next);
+  };
 
   const selectFromList = useCallback((id: string) => {
     setActiveId(id);
@@ -626,15 +660,17 @@ export function Workspace({
             </a>
           </Button>
         ) : null}
-        {wide ? null : (
+        <span className="inline-flex" title={listShown ? "Hide comments" : "Show comments"}>
           <Button
             type="button"
-            variant={listOpen ? "secondary" : "ghost"}
+            variant={listShown ? "secondary" : "ghost"}
             size="sm"
             className="relative h-8 px-2"
-            aria-pressed={listOpen}
-            aria-label={needsYou > 0 ? `Comments, ${needsYou} answered` : "Comments"}
-            onClick={() => setListOpen((value) => !value)}
+            aria-pressed={listShown}
+            aria-label={
+              (listShown ? "Hide comments" : "Show comments") + (needsYou > 0 ? `, ${needsYou} answered` : "")
+            }
+            onClick={toggleList}
           >
             <Icon name="MessageSquare" className="size-4" />
             <span className="tabular-nums">{list.length}</span>
@@ -642,7 +678,7 @@ export function Workspace({
               <span className="absolute right-1 top-1 size-2 rounded-full bg-primary" aria-hidden />
             ) : null}
           </Button>
-        )}
+        </span>
         <SendMenu
           count={drafts.length}
           canSendHere={Boolean(threadId)}
@@ -667,8 +703,16 @@ export function Workspace({
           <div ref={setOverlay} className="pointer-events-none absolute inset-0 z-30" />
         </div>
         {wide ? (
-          <aside className="w-80 shrink-0 overflow-y-auto border-l border-border bg-background">
-            {listPanel}
+          <aside
+            aria-hidden={listHidden}
+            inert={listHidden}
+            className={cn(
+              "shrink-0 overflow-hidden border-border bg-background transition-[width] duration-200 ease-out",
+              listHidden ? "w-0" : "w-80 border-l",
+            )}
+          >
+            {/* Fixed width inside, so the list slides instead of reflowing. */}
+            <div className="h-full w-80 overflow-y-auto">{listPanel}</div>
           </aside>
         ) : null}
       </div>

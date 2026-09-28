@@ -229,8 +229,13 @@ export function CommentList({
       )}
       {comments.length === 0 ? (
         <p className="px-1 text-xs leading-relaxed text-muted-foreground">
-          Select text to comment on it.
-          {kind === "md" ? "" : " Switch to Area to draw a box around a picture or chart."}
+          {kind === "spreadsheet"
+            ? "Click a cell or drag over a range to comment on it."
+            : kind === "html"
+              ? "Select text to comment on it. Switch to Element to click a block, button, or picture."
+              : kind === "md"
+                ? "Select text to comment on it."
+                : "Select text to comment on it. Switch to Area to draw a box around a picture or chart."}
           {" "}Comments stay here as drafts until you send them to a chat.
         </p>
       ) : null}

@@ -54,6 +54,10 @@ converts once and reopens at once.
   workbook tap a cell, or hold and drag over a range. A drag without the hold
   scrolls as usual.
 
+The comments button in the toolbar hides the list beside the document for a
+full-width view; the choice is remembered across files, and a click on a
+comment's number on the page brings the list back.
+
 Comments stay as drafts until you press **Send to chat** (this chat) or pick
 **To a new chat** (same project, model, and workspace, fresh context). The
 agent runs `bb doc-review resolve` or `bb doc-review reply`; the tab moves each
