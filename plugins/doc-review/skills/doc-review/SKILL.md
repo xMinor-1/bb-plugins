@@ -36,7 +36,9 @@ report each one as you finish it.
      by the quote or the HTML; the CSS path helps but can differ from the
      source's structure. Edit the file itself, or the template or script
      that generates it and regenerate the page. Keep its styles and scripts
-     working.
+     working. A comment marked `in frame` is on a page shown inside an
+     `<iframe>`: its quote, CSS path, and HTML belong to that inner page, so
+     edit what fills the frame (its `srcdoc` or the source it is built from).
 3. Close each handled comment with a one-line note in the user's language:
    `bb doc-review resolve <id> --note "what changed"`. Several ids can share
    one note when one edit covers them.

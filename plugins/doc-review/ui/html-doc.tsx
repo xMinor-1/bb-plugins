@@ -32,6 +32,9 @@ function text(value: unknown, max: number): string | null {
 function readAnchor(value: unknown): HtmlAnchor | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
+  // Set when the place is inside a frame the page shows.
+  const frame = text(raw.frame, 1000);
+  const where = frame ? { frame } : {};
   if (raw.kind === "html-text") {
     const quote = text(raw.quote, 4000);
     if (!quote?.trim()) return null;
@@ -41,13 +44,21 @@ function readAnchor(value: unknown): HtmlAnchor | null {
       prefix: text(raw.prefix, 200) ?? "",
       suffix: text(raw.suffix, 200) ?? "",
       selector: text(raw.selector, 1000) ?? "",
+      ...where,
     };
   }
   if (raw.kind === "html-element") {
     const selector = text(raw.selector, 1000);
     const tag = text(raw.tag, 40);
     if (!selector || !tag) return null;
-    return { kind: "html-element", selector, tag, text: text(raw.text, 4000) ?? "", html: text(raw.html, 2000) ?? "" };
+    return {
+      kind: "html-element",
+      selector,
+      tag,
+      text: text(raw.text, 4000) ?? "",
+      html: text(raw.html, 2000) ?? "",
+      ...where,
+    };
   }
   return null;
 }
@@ -62,6 +73,26 @@ function readRect(value: unknown): FrameRect | null {
 
 const COMPOSER_WIDTH = 352;
 const COMPOSER_HEIGHT = 170;
+/** How long a loaded page has to answer before the panel decides a link took the frame elsewhere. */
+const ANSWER_MS = 2500;
+
+// What the bridge needs to know; sent when it announces itself and on change.
+function modeMessage(mode: PageMode) {
+  return { type: "mode", mode: mode === "area" ? "element" : "text" };
+}
+
+function commentsMessage(comments: ReviewComment[], activeId: string | null) {
+  return {
+    type: "comments",
+    items: comments
+      .filter((comment) => isHtmlAnchor(comment.anchor) && (comment.status !== "resolved" || comment.id === activeId))
+      .map((comment) => ({ id: comment.id, seq: comment.seq, active: comment.id === activeId, anchor: comment.anchor })),
+  };
+}
+
+function pendingMessage(anchor: Anchor | null) {
+  return { type: "pending", anchor: isHtmlAnchor(anchor) ? anchor : null };
+}
 
 export function HtmlDoc({
   url,
@@ -93,12 +124,19 @@ export function HtmlDoc({
 }) {
   const root = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
-  const [ready, setReady] = useState(false);
-  const [away, setAway] = useState(false);
   const [reloads, setReloads] = useState(0);
+  // Readiness belongs to one frame: a new URL or a reload starts over.
+  const frameKey = `${url}#${reloads}`;
+  const [readyKey, setReadyKey] = useState<string | null>(null);
+  const [awayKey, setAwayKey] = useState<string | null>(null);
+  const ready = readyKey === frameKey;
+  const away = awayKey === frameKey;
   const [button, setButton] = useState<{ anchor: HtmlAnchor; point: Point } | null>(null);
   const [menu, setMenu] = useState<{ top: number; left: number; anchor: HtmlAnchor } | null>(null);
-  const loads = useRef({ loads: 0, readies: 0 });
+  /** The bridge the panel last sent its state to. */
+  const bridge = useRef({ key: "", session: "" });
+  /** Loads of the frame, and the last one a bridge answered. */
+  const loads = useRef({ count: 0, answered: 0 });
   const hideButton = useRef(0);
 
   const post = useCallback((message: Record<string, unknown>) => {
@@ -133,8 +171,8 @@ export function HtmlDoc({
   );
 
   // Messages from the bridge.
-  const latest = useRef({ commentOn, onSelectComment, onDetached, pointFor, button });
-  latest.current = { commentOn, onSelectComment, onDetached, pointFor, button };
+  const latest = useRef({ commentOn, onSelectComment, onDetached, pointFor, button, mode, comments, activeId, pendingAnchor });
+  latest.current = { commentOn, onSelectComment, onDetached, pointFor, button, mode, comments, activeId, pendingAnchor };
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;
@@ -142,11 +180,25 @@ export function HtmlDoc({
       if (!data || data.docReview !== 1) return;
       const { commentOn, onSelectComment, onDetached, pointFor, button } = latest.current;
       switch (data.type) {
-        case "ready":
-          loads.current.readies += 1;
-          setReady(true);
-          setAway(false);
+        case "ready": {
+          // A bridge announces itself when its page starts and answers each
+          // hello; a new session in the same frame is the page loading again.
+          const key = frame.current.dataset.key ?? "";
+          const session = typeof data.session === "string" ? data.session : "";
+          loads.current.answered = loads.current.count;
+          setAwayKey(null);
+          if (bridge.current.key !== key) {
+            bridge.current = { key, session };
+            setReadyKey(key);
+          } else if (bridge.current.session !== session) {
+            bridge.current = { key, session };
+            const { mode, comments, activeId, pendingAnchor } = latest.current;
+            post(modeMessage(mode));
+            post(commentsMessage(comments, activeId));
+            post(pendingMessage(pendingAnchor));
+          }
           break;
+        }
         case "selection": {
           const anchor = readAnchor(data.anchor);
           const rect = readRect(data.rect);
@@ -193,47 +245,42 @@ export function HtmlDoc({
       }
     };
     window.addEventListener("message", onMessage);
+    // The page may have announced itself before this listener existed.
+    post({ type: "hello" });
     return () => window.removeEventListener("message", onMessage);
-  }, []);
+  }, [post]);
 
   useEffect(() => () => window.clearTimeout(hideButton.current), []);
 
   // A new URL (the file changed) or a reload starts the page over.
   useEffect(() => {
-    setReady(false);
-    setAway(false);
     setButton(null);
-    loads.current = { loads: 0, readies: 0 };
-  }, [url, reloads]);
+    setMenu(null);
+  }, [frameKey]);
 
   const onLoad = () => {
-    loads.current.loads += 1;
-    // Our page announces itself before it finishes loading; a load without
-    // that means a link took the frame to another page.
-    const expected = loads.current.loads;
+    // Our page has a bridge that answers; silence means a link took the
+    // frame to another page.
+    const key = frameKey;
+    const load = (loads.current.count += 1);
+    post({ type: "hello" });
     window.setTimeout(() => {
-      if (loads.current.loads === expected && loads.current.readies < expected) setAway(true);
-    }, 1200);
+      if (loads.current.answered < load && loads.current.count === load) setAwayKey(key);
+    }, ANSWER_MS);
   };
 
   // Keep the bridge in step with the panel.
   useEffect(() => {
-    if (ready) post({ type: "mode", mode: mode === "area" ? "element" : "text" });
+    if (ready) post(modeMessage(mode));
     if (mode === "area") setButton(null);
   }, [ready, mode, post]);
 
   useEffect(() => {
-    if (!ready) return;
-    post({
-      type: "comments",
-      items: comments
-        .filter((comment) => isHtmlAnchor(comment.anchor) && (comment.status !== "resolved" || comment.id === activeId))
-        .map((comment) => ({ id: comment.id, seq: comment.seq, active: comment.id === activeId, anchor: comment.anchor })),
-    });
+    if (ready) post(commentsMessage(comments, activeId));
   }, [ready, comments, activeId, post]);
 
   useEffect(() => {
-    if (ready) post({ type: "pending", anchor: isHtmlAnchor(pendingAnchor) ? pendingAnchor : null });
+    if (ready) post(pendingMessage(pendingAnchor));
   }, [ready, pendingAnchor, post]);
 
   useEffect(() => {
@@ -248,8 +295,9 @@ export function HtmlDoc({
   return (
     <div ref={root} className="relative h-full w-full overflow-hidden bg-white">
       <iframe
-        key={`${url}#${reloads}`}
+        key={frameKey}
         ref={frame}
+        data-key={frameKey}
         src={url}
         title={name}
         sandbox={HTML_SANDBOX}

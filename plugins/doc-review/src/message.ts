@@ -49,13 +49,23 @@ function kindHint(kind: DocKind): string {
 }
 
 /** Where on an HTML page a comment points, for finding it in the source. */
-function htmlDetails(comment: ReviewComment): { selector: string | null; snippet: string | null } {
+function htmlDetails(comment: ReviewComment): {
+  frame: string | null;
+  selector: string | null;
+  snippet: string | null;
+} {
   const { anchor } = comment;
-  if (anchor.kind === "html-text") return { selector: anchor.selector || null, snippet: null };
-  if (anchor.kind === "html-element") {
-    return { selector: anchor.selector, snippet: truncate(anchor.html, HTML_SNIPPET_MAX) || null };
+  if (anchor.kind === "html-text") {
+    return { frame: anchor.frame ?? null, selector: anchor.selector || null, snippet: null };
   }
-  return { selector: null, snippet: null };
+  if (anchor.kind === "html-element") {
+    return {
+      frame: anchor.frame ?? null,
+      selector: anchor.selector,
+      snippet: truncate(anchor.html, HTML_SNIPPET_MAX) || null,
+    };
+  }
+  return { frame: null, selector: null, snippet: null };
 }
 
 export function buildHandoffMessage(input: {
@@ -84,6 +94,7 @@ export function buildHandoffMessage(input: {
     const quote = quoteFor(comment);
     if (quote) parts.push(quote);
     const html = htmlDetails(comment);
+    if (html.frame) parts.push(`in frame \`${html.frame}\``);
     if (html.selector) parts.push(`\`${html.selector}\``);
     lines.push(parts.join(" · "));
     if (html.snippet) lines.push(`HTML: \`${html.snippet.replace(/`/g, "'")}\``);
@@ -91,6 +102,11 @@ export function buildHandoffMessage(input: {
     lines.push("");
   }
   lines.push(kindHint(input.kind));
+  if (input.comments.some((comment) => htmlDetails(comment).frame)) {
+    lines.push(
+      "A comment \"in frame\" is on a page this one shows in an `<iframe>`: its selector and HTML describe the page inside that frame, so edit what fills the frame (its `srcdoc`, the file in its `src`, or the source they are built from).",
+    );
+  }
   lines.push(
     `When a comment is done, close it with a one-line note: \`bb ${CLI_NAME} resolve <id> --note "what changed"\`.`,
   );

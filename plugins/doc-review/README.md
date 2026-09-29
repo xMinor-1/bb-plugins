@@ -49,6 +49,8 @@ converts once and reopens at once.
 - **HTML:** select text and comment as anywhere else, or switch to
   **Element** and click a block, button, or picture to comment on it; the
   agent gets the quote or the element's CSS path and the start of its HTML.
+  Pages shown inside `<iframe srcdoc>` frames (a desktop and a phone preview
+  side by side, say) take comments too, and the agent learns which frame.
 - **On a touch screen:** select text with a long press; in **Area** mode hold,
   then drag to draw a box (a hold without a drag marks the spot); in a
   workbook tap a cell, or hold and drag over a range. A drag without the hold
@@ -141,12 +143,16 @@ bb doc-review reply <id> --note "question or reason"
   Highlights use the CSS Custom Highlight API.
 - HTML pages are served by the plugin's `/html` route with a `<base>` pointing
   at bb's preview of the file's folder (so relative styles, pictures, and
-  scripts load) and the bridge from `src/html-bridge.ts` appended. The page
-  runs in a frame sandboxed without `allow-same-origin`, and the response
-  carries the same sandbox as a CSP header, so its scripts cannot reach bb
-  even when the URL is opened on its own. The bridge reports selections and
-  picked elements to the panel with `postMessage` and paints the comments the
-  panel sends back.
+  scripts load) and the bridge from `src/html-bridge.ts` first in the head, so
+  it answers while a large page is still arriving. The page runs in a frame
+  sandboxed without `allow-same-origin`, and the response carries the same
+  sandbox as a CSP header, so its scripts cannot reach bb even when the URL is
+  opened on its own. The bridge reports selections and picked elements to the
+  panel with `postMessage` and paints the comments the panel sends back.
+  Pages in `<iframe srcdoc>` frames get the bridge too (in the served markup,
+  or when a script sets `srcdoc`); each bridge relays for its frames, adding
+  the frame's CSS path to anchors and mapping rectangles through the frame's
+  position and scale.
 - `src/store.ts` keeps documents and comments in the plugin's SQLite database;
   every change publishes a realtime signal that open tabs follow. The tab also
   polls the file's version, so the agent's edits show up without reopening it.
@@ -168,6 +174,8 @@ bb doc-review reply <id> --note "question or reason"
 - HTML pages run with an opaque origin: `localStorage` is unavailable and a
   page's own `fetch` of files next to it is refused. A link that leaves the
   page shows a bar to return; comments work on the reviewed file only.
+- Inside frames, comments work where the frame's page comes from `srcdoc`; a
+  frame that loads another file or a site shows as is, without comments.
 - bb's preview of the folder lasts an hour; an HTML page left open longer may
   fail to load pictures it had not loaded yet until it is reopened.
 

@@ -70,6 +70,12 @@ export type Anchor =
       suffix: string;
       /** CSS path of the element that holds the selection, as the page renders it. */
       selector: string;
+      /**
+       * Set when the text is inside a frame the page shows (an `<iframe
+       * srcdoc>` preview, say): the frame element's CSS path, outermost frame
+       * first, joined by " >>> ". The selector then describes the page inside.
+       */
+      frame?: string;
     }
   | {
       kind: "html-element";
@@ -81,6 +87,8 @@ export type Anchor =
       text: string;
       /** The start of its outer HTML, for finding it in the source. */
       html: string;
+      /** Set when the element is inside a frame, as for `html-text`. */
+      frame?: string;
     };
 
 /**

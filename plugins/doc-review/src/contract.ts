@@ -61,6 +61,7 @@ export const anchorSchema = z.discriminatedUnion("kind", [
       prefix: z.string().max(200),
       suffix: z.string().max(200),
       selector: z.string().max(MAX_SELECTOR),
+      frame: z.string().min(1).max(MAX_SELECTOR).optional(),
     })
     .strict(),
   z
@@ -70,6 +71,7 @@ export const anchorSchema = z.discriminatedUnion("kind", [
       tag: z.string().min(1).max(40),
       text: z.string().max(MAX_QUOTE),
       html: z.string().max(MAX_HTML),
+      frame: z.string().min(1).max(MAX_SELECTOR).optional(),
     })
     .strict(),
 ]);
