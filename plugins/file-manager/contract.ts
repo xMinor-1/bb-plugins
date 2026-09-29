@@ -31,6 +31,8 @@ export const HTTP_BASE = `/api/v1/plugins/${PLUGIN_ID}/http`;
 export const TOKEN_URL = `/api/v1/plugins/${PLUGIN_ID}/token`;
 export const UPLOAD_CHUNK_URL = `${HTTP_BASE}/upload/chunk`;
 export const DOWNLOAD_URL = `${HTTP_BASE}/download`;
+/** Several entries as one zip: `?dir=<folder>&name=<relative>&name=…` (§5.3). */
+export const DOWNLOAD_ZIP_URL = `${HTTP_BASE}/download-zip`;
 
 /**
  * Extensions the file-location openers claim (§10.2).

@@ -43,7 +43,11 @@ every path is re-resolved and clamped on the server before a single byte moves.
   its type icon, and the choice is remembered.
 - **Download** — streamed straight from disk with `Range` support, so a 10 GB
   file costs the browser no memory. It moved to the row menu, where it is a
-  deliberate choice rather than the side effect of a double-click.
+  deliberate choice rather than the side effect of a double-click. Several
+  selected files, or any folder, download as one zip (**Download as zip**):
+  browsers and phones block a burst of separate downloads after the first.
+  The zip is stored, not compressed, and streamed with its exact size known
+  up front, so the browser shows real progress; files over 4 GB use ZIP64.
 - **Jump to the thread's own folder** — one button in the panel tab opens the
   checkout the thread beside you is working in, instead of hunting for it. With
   **Open the thread's project folder** on, the tab starts there.
@@ -625,7 +629,10 @@ Within that boundary:
   /api/v1/plugins/file-manager/http/download?path=…` is restricted to the local
   browser session, because `<a download>` navigation sends no `Origin` header.
   Responses are `application/octet-stream` with `no-store, no-transform` and
-  `X-Content-Type-Options: nosniff`.
+  `X-Content-Type-Options: nosniff`. `GET …/http/download-zip?dir=…&name=…`
+  works the same way; every name is checked against the root before the first
+  byte, and links inside a folder are packed only when they point to a file
+  inside the root.
 - **Upload staging is contained.** In-flight parts live in
   `<root>/.bb-file-manager/uploads/`, and that directory is filtered out of
   every listing, including with hidden files shown.

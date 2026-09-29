@@ -5,8 +5,8 @@
 // streams straight to disk. Reading it in JS (`await res.blob()`) would buffer
 // a multi-GB file in the renderer, which is exactly what this plugin exists to
 // avoid — so this module only ever builds a URL and clicks a link.
-import { DOWNLOAD_URL, type FileEntry } from "../contract";
-import { basename } from "./fm-paths";
+import { DOWNLOAD_URL, DOWNLOAD_ZIP_URL, type FileEntry } from "../contract";
+import { basename, dirname } from "./fm-paths";
 
 export type DownloadDisposition = "attachment" | "inline";
 
@@ -59,20 +59,49 @@ export function downloadEntry(entry: FileEntry, options: DownloadOptions = {}): 
 }
 
 /**
- * Several files at once. Browsers throttle back-to-back navigations, so the
- * clicks are staggered; the returned promise resolves once all are issued.
+ * Past this a request line risks the server's header limit, and the answer
+ * would be a failed download with no word on why.
  */
-export async function downloadPaths(
-  paths: readonly string[],
-  options: DownloadOptions & { delayMs?: number } = {},
-): Promise<string[]> {
-  const { delayMs = 250, ...rest } = options;
-  const urls: string[] = [];
-  for (const [index, path] of paths.entries()) {
-    if (index > 0 && delayMs > 0) {
-      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-    }
-    urls.push(downloadPath(path, rest));
+export const MAX_ZIP_URL_LENGTH = 8000;
+
+/** The deepest folder that holds every path. */
+export function commonParent(paths: readonly string[]): string {
+  let common = dirname(paths[0] ?? "/");
+  for (const path of paths.slice(1)) {
+    while (common !== "/" && !path.startsWith(`${common}/`)) common = dirname(common);
   }
-  return urls;
+  return common;
+}
+
+/** Server twin: `src/http-routes.ts` reads `dir` and every `name`. */
+export function buildZipDownloadUrl(paths: readonly string[]): string {
+  const dir = commonParent(paths);
+  const query = new URLSearchParams({ dir });
+  const prefix = dir === "/" ? "/" : `${dir}/`;
+  for (const path of paths) query.append("name", path.slice(prefix.length));
+  return `${DOWNLOAD_ZIP_URL}?${query.toString()}`;
+}
+
+/**
+ * Several files, or any folder, as one zip. A burst of separate downloads is
+ * what browsers block after the first and phones never start at all, so
+ * anything that is not a single file goes out as one response (§5.3).
+ * `paths` must already be top-level (`topLevelPaths`). Returns `null` when
+ * the selection is too long to fit in a URL.
+ */
+export function downloadZip(paths: readonly string[], options: Pick<DownloadOptions, "document"> = {}): string | null {
+  const url = buildZipDownloadUrl(paths);
+  if (url.length > MAX_ZIP_URL_LENGTH) return null;
+  const doc = options.document ?? (typeof document === "undefined" ? undefined : document);
+  if (doc === undefined) return url;
+  const anchor = doc.createElement("a");
+  anchor.href = url;
+  // The server names the archive; this is only the fallback.
+  anchor.download = "";
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  doc.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  return url;
 }

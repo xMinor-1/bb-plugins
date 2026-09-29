@@ -1,4 +1,4 @@
-// src/http-routes.ts — the two byte-transfer routes (§5).
+// src/http-routes.ts — the three byte-transfer routes (§5).
 //
 // Route matching in the host is exact `method + path` string equality, so both
 // paths are derived from the contract constants the panel builds its URLs
@@ -22,14 +22,16 @@ import { Readable } from "node:stream";
 import type { Context } from "hono";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
-import { DOWNLOAD_URL, HTTP_BASE, UPLOAD_CHUNK_URL } from "../contract";
+import { DOWNLOAD_URL, DOWNLOAD_ZIP_URL, HTTP_BASE, UPLOAD_CHUNK_URL } from "../contract";
 import { isFileManagerError, mapNodeError } from "./errors";
-import { resolveExisting } from "./root";
+import { getRoot, resolveExisting } from "./root";
 import type { UploadsModule } from "./uploads";
+import { collectZipItems, zipLength, zipStream, type ZipItem } from "./zip-stream";
 
-/** `/upload/chunk` and `/download` — the tails of the contract's URLs. */
+/** `/upload/chunk`, `/download`, `/download-zip` — the tails of the contract's URLs. */
 export const UPLOAD_CHUNK_ROUTE = UPLOAD_CHUNK_URL.slice(HTTP_BASE.length);
 export const DOWNLOAD_ROUTE = DOWNLOAD_URL.slice(HTTP_BASE.length);
+export const DOWNLOAD_ZIP_ROUTE = DOWNLOAD_ZIP_URL.slice(HTTP_BASE.length);
 
 export interface HttpRoutesOptions {
   uploads: Pick<UploadsModule, "writeChunk">;
@@ -117,7 +119,18 @@ function statusForResolveError(error: unknown): number {
   if (mapped.code === "not_found" || mapped.code === "not_a_directory") return 404;
   if (mapped.code === "permission_denied") return 403;
   if (mapped.code === "invalid_path" || mapped.code === "invalid_name") return 400;
+  if (mapped.code === "unsupported") return 413;
   return 500;
+}
+
+/**
+ * The archive's file name: a lone folder names it after itself, anything else
+ * after the folder the selection sits in.
+ */
+export function zipFileName(dir: string, names: readonly string[]): string {
+  const single = names.length === 1 ? names[0] : undefined;
+  const base = single === undefined ? path.basename(dir) : path.posix.basename(single);
+  return `${base === "" ? path.basename(getRoot()) : base}.zip`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -224,7 +237,54 @@ export function registerHttpRoutes(bb: BbPluginApi, options: HttpRoutesOptions):
     });
   });
 
+  /* ---- Route 3: GET /http/download-zip (auth: local, the default) ---- */
+  // A GET for the same reason as route 2: an `<a download>` click streams it
+  // straight to disk. Everything is walked and stat'ed before the first byte,
+  // so a bad name answers with a status instead of a half-written archive.
+  bb.http.route("GET", DOWNLOAD_ZIP_ROUTE, async (context: Context) => {
+    const dir = context.req.query("dir");
+    const names = context.req.queries("name") ?? [];
+    if (typeof dir !== "string" || dir.trim() === "" || names.length === 0) {
+      return jsonResponse(400, { ok: false, error: "invalid_params" });
+    }
+
+    let items: ZipItem[];
+    try {
+      items = await collectZipItems(dir, names);
+    } catch (error) {
+      const status = statusForResolveError(error);
+      const mapped = isFileManagerError(error) ? error : mapNodeError(error);
+      return jsonResponse(status, { ok: false, error: mapped.code });
+    }
+    if (items.length === 0) return jsonResponse(404, { ok: false, error: "not_a_file" });
+
+    const stream = Readable.from(zipStream(items));
+    const abort = (): void => {
+      stream.destroy();
+    };
+    context.req.raw.signal.addEventListener("abort", abort, { once: true });
+    stream.once("close", () => {
+      context.req.raw.signal.removeEventListener("abort", abort);
+    });
+    stream.once("error", (error) => {
+      bb.log.warn(`zip download failed: ${String(error)}`);
+    });
+
+    return new Response(Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>, {
+      status: 200,
+      headers: {
+        // Outside compress()'s set, like route 2, so Content-Length survives.
+        "Content-Type": "application/zip",
+        "Content-Length": String(zipLength(items)),
+        "Cache-Control": "no-store, no-transform",
+        "Content-Disposition": contentDisposition(zipFileName(dir, names), "attachment"),
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  });
+
   bb.log.info(
-    `http routes ready — POST ${HTTP_BASE}${UPLOAD_CHUNK_ROUTE} (token), GET ${HTTP_BASE}${DOWNLOAD_ROUTE} (local)`,
+    `http routes ready — POST ${HTTP_BASE}${UPLOAD_CHUNK_ROUTE} (token), GET ${HTTP_BASE}${DOWNLOAD_ROUTE}` +
+      ` and ${HTTP_BASE}${DOWNLOAD_ZIP_ROUTE} (local)`,
   );
 }

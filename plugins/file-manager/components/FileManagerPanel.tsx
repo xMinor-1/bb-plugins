@@ -52,7 +52,7 @@ import {
   BOOKMARK_RENAME_FAILED_TEXT,
   findBookmark,
 } from "../lib/bookmarks";
-import { downloadEntry, downloadPaths } from "../lib/download";
+import { downloadEntry, downloadZip } from "../lib/download";
 import {
   batchFailureText,
   describeErrorCode,
@@ -1401,19 +1401,26 @@ export function FileManagerSurface({
     })();
   }, []);
 
+  /**
+   * One file downloads as itself; anything more — several files, a folder —
+   * as one zip, because a burst of separate downloads is what browsers block
+   * after the first (§5.3).
+   */
   const downloadSelection = useCallback((entries: readonly FileEntry[]) => {
-    const files = entries.filter(
-      (entry) => !entry.escapesRoot && effectiveKind(entry) === "file",
-    );
-    if (files.length === 0) {
-      toast.error("Folders cannot be downloaded in this version.");
+    const usable = entries.filter((entry) => {
+      const kind = effectiveKind(entry);
+      return !entry.escapesRoot && (kind === "file" || kind === "directory");
+    });
+    const paths = topLevelPaths(usable.map((entry) => entry.path));
+    const single = usable.length === 1 ? usable[0] : undefined;
+    if (single !== undefined && effectiveKind(single) === "file") {
+      downloadEntry(single);
       return;
     }
-    if (files.length === 1 && files[0] !== undefined) {
-      downloadEntry(files[0]);
-      return;
+    if (paths.length === 0) return;
+    if (downloadZip(paths) === null) {
+      toast.error("Too many items to download at once. Select their folder instead.");
     }
-    void downloadPaths(files.map((entry) => entry.path));
   }, []);
 
   /**

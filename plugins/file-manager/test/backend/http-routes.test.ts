@@ -11,10 +11,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import yauzl from "yauzl";
 
-import { DOWNLOAD_URL, HTTP_BASE, UPLOAD_CHUNK_URL } from "../../contract";
+import { DOWNLOAD_URL, DOWNLOAD_ZIP_URL, HTTP_BASE, UPLOAD_CHUNK_URL } from "../../contract";
 import {
   DOWNLOAD_ROUTE,
+  DOWNLOAD_ZIP_ROUTE,
   UPLOAD_CHUNK_ROUTE,
   contentDisposition,
   etagFor,
@@ -50,7 +52,7 @@ afterEach(async () => {
 });
 
 describe("registration", () => {
-  it("registers exactly the two §5 routes, with the upload route on token auth", () => {
+  it("registers exactly the three §5 routes, with the upload route on token auth", () => {
     const routes = host.harness.inspection.registrations.httpRoutes.map((route) => ({
       method: route.method,
       path: route.path,
@@ -59,12 +61,14 @@ describe("registration", () => {
 
     expect(routes).toContainEqual({ method: "POST", path: "/upload/chunk", auth: "token" });
     expect(routes).toContainEqual({ method: "GET", path: "/download", auth: "local" });
-    expect(routes).toHaveLength(2);
+    expect(routes).toContainEqual({ method: "GET", path: "/download-zip", auth: "local" });
+    expect(routes).toHaveLength(3);
   });
 
-  it("derives both paths from the URLs the panel builds", () => {
+  it("derives every path from the URLs the panel builds", () => {
     expect(`${HTTP_BASE}${UPLOAD_CHUNK_ROUTE}`).toBe(UPLOAD_CHUNK_URL);
     expect(`${HTTP_BASE}${DOWNLOAD_ROUTE}`).toBe(DOWNLOAD_URL);
+    expect(`${HTTP_BASE}${DOWNLOAD_ZIP_ROUTE}`).toBe(DOWNLOAD_ZIP_URL);
   });
 });
 
@@ -323,6 +327,110 @@ describe("GET /download", () => {
     const received = new Uint8Array(await response.arrayBuffer());
     expect(received.length).toBe(big.length);
     expect(Buffer.from(received).equals(big)).toBe(true);
+  });
+});
+
+/** Every entry of a zip, read back by yauzl — which checks each CRC. */
+async function unzipAll(bytes: Buffer): Promise<Map<string, Buffer>> {
+  const zip = await new Promise<yauzl.ZipFile>((resolve, reject) => {
+    yauzl.fromBuffer(bytes, { lazyEntries: true }, (error, file) => {
+      if (error) reject(error);
+      else resolve(file);
+    });
+  });
+  const entries = new Map<string, Buffer>();
+  await new Promise<void>((resolve, reject) => {
+    zip.on("error", reject);
+    zip.on("end", resolve);
+    zip.on("entry", (entry: yauzl.Entry) => {
+      if (entry.fileName.endsWith("/")) {
+        entries.set(entry.fileName, Buffer.alloc(0));
+        zip.readEntry();
+        return;
+      }
+      zip.openReadStream(entry, (error, stream) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+        stream.on("error", reject);
+        stream.on("end", () => {
+          entries.set(entry.fileName, Buffer.concat(chunks));
+          zip.readEntry();
+        });
+      });
+    });
+    zip.readEntry();
+  });
+  return entries;
+}
+
+function zipUrl(dir: string, names: readonly string[]): string {
+  const query = new URLSearchParams({ dir });
+  for (const name of names) query.append("name", name);
+  return `${DOWNLOAD_ZIP_ROUTE}?${query.toString()}`;
+}
+
+describe("GET /download-zip", () => {
+  it("streams files and whole folders as one zip whose length was promised up front", async () => {
+    const binary = randomBytes(300_000);
+    await writeFile(path.join(root, "a.txt"), "alpha");
+    await mkdir(path.join(root, "sub", "deep"), { recursive: true });
+    await writeFile(path.join(root, "sub", "b.txt"), "Привет");
+    await writeFile(path.join(root, "sub", "deep", "c.bin"), binary);
+    await mkdir(path.join(root, "sub", "empty"));
+
+    const response = await fetchDownload(zipUrl(root, ["a.txt", "sub"]));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/zip");
+    expect(response.headers.get("content-disposition")).toContain(`${path.basename(root)}.zip`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    expect(Number(response.headers.get("content-length"))).toBe(bytes.length);
+
+    const entries = await unzipAll(bytes);
+    expect([...entries.keys()]).toEqual([
+      "a.txt",
+      "sub/",
+      "sub/b.txt",
+      "sub/deep/",
+      "sub/deep/c.bin",
+      "sub/empty/",
+    ]);
+    expect(entries.get("a.txt")?.toString()).toBe("alpha");
+    expect(entries.get("sub/b.txt")?.toString()).toBe("Привет");
+    expect(entries.get("sub/deep/c.bin")?.equals(binary)).toBe(true);
+  });
+
+  it("names the archive after a lone folder", async () => {
+    await mkdir(path.join(root, "photos"));
+    await writeFile(path.join(root, "photos", "one.jpg"), "x");
+    const response = await fetchDownload(zipUrl(root, ["photos"]));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toContain('filename="photos.zip"');
+    await response.arrayBuffer();
+  });
+
+  it("refuses names that climb out of the folder", async () => {
+    await mkdir(path.join(root, "inner"));
+    const response = await fetchDownload(zipUrl(path.join(root, "inner"), ["../secret"]));
+    expect(response.status).toBe(400);
+  });
+
+  it("refuses a folder outside the root", async () => {
+    const response = await fetchDownload(zipUrl("/etc", ["hostname"]));
+    expect(response.status).toBe(403);
+  });
+
+  it("answers 404 for a name that is not there", async () => {
+    const response = await fetchDownload(zipUrl(root, ["missing.txt"]));
+    expect(response.status).toBe(404);
+  });
+
+  it("answers 400 without a folder or a name", async () => {
+    expect((await fetchDownload(`${DOWNLOAD_ZIP_ROUTE}?dir=${encodeURIComponent(root)}`)).status).toBe(400);
+    expect((await fetchDownload(`${DOWNLOAD_ZIP_ROUTE}?name=a.txt`)).status).toBe(400);
   });
 });
 

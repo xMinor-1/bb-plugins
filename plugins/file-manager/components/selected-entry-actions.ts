@@ -84,12 +84,17 @@ export function selectedEntryActionModel(
   const single = entries.length === 1 ? entries[0] : undefined;
   const directory = single !== undefined && effectiveKind(single) === "directory";
   const escapes = entries.some((entry) => entry.escapesRoot);
-  // Both "Download" and "Add to chat" act on exactly the real files in the
-  // selection: a folder has no bytes to send, and a link out of the root is
-  // refused by the server anyway (§6).
+  // "Add to chat" acts on exactly the real files in the selection: a folder
+  // has no bytes to mention. "Download" takes folders too — anything beyond
+  // one file leaves as a zip. A link out of the root is refused by the server
+  // either way (§6).
   const files = entries.filter(
     (entry) => !entry.escapesRoot && effectiveKind(entry) === "file",
   );
+  const downloadable = entries.filter((entry) => {
+    const kind = effectiveKind(entry);
+    return !entry.escapesRoot && (kind === "file" || kind === "directory");
+  });
   const archive = single !== undefined && single.archiveFormat !== null ? single : undefined;
   // Folders only, and one at a time: a bookmark or a start folder is a place
   // to go, and a file (or a selection of five) is not one.
@@ -118,10 +123,10 @@ export function selectedEntryActionModel(
   transfer.push(
     {
       id: "download",
-      label: "Download",
+      label: downloadable.length === 1 && files.length === 1 ? "Download" : "Download as zip",
       icon: "Download",
-      disabled: files.length === 0,
-      trailing: entries.length > 1 ? String(entries.length) : undefined,
+      disabled: downloadable.length === 0,
+      trailing: downloadable.length > 1 ? String(downloadable.length) : undefined,
       run: props.onDownload,
     },
     {

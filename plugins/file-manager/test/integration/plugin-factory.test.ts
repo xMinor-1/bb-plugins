@@ -26,6 +26,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   DOWNLOAD_ROUTE,
+  DOWNLOAD_ZIP_ROUTE,
   UPLOAD_CHUNK_ROUTE,
 } from "../../src/http-routes";
 import {
@@ -98,15 +99,16 @@ describe("registrations", () => {
     expect(registered).toHaveLength(28);
   });
 
-  it("mounts both §5 routes with the auth modes §5 requires", () => {
+  it("mounts the three §5 routes with the auth modes §5 requires", () => {
     const routes = host.harness.inspection.registrations.httpRoutes.map((route) => ({
       method: route.method,
       path: route.path,
       auth: route.auth,
     }));
-    expect(routes).toHaveLength(2);
+    expect(routes).toHaveLength(3);
     expect(routes).toContainEqual({ method: "POST", path: UPLOAD_CHUNK_ROUTE, auth: "token" });
     expect(routes).toContainEqual({ method: "GET", path: DOWNLOAD_ROUTE, auth: "local" });
+    expect(routes).toContainEqual({ method: "GET", path: DOWNLOAD_ZIP_ROUTE, auth: "local" });
   });
 
   it("declares the nine §7.1 settings", () => {

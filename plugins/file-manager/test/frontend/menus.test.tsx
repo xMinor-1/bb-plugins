@@ -435,6 +435,46 @@ describe("row context menu (§8.2)", () => {
     );
   });
 
+  it("Download sends several selected files as one zip, not a burst of downloads", async () => {
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+
+    const slot = await mountPanel();
+    fireEvent.click(rowFor(slot, NOTES.path));
+    fireEvent.click(rowFor(slot, OTHER.path), { ctrlKey: true });
+    clickItem(await openRowMenu(slot, NOTES.path), "Download as zip");
+
+    await waitFor(() => {
+      expect(clicked).toHaveLength(1);
+    });
+    const url = new URL(clicked[0] ?? "");
+    expect(url.pathname).toBe("/api/v1/plugins/file-manager/http/download-zip");
+    expect(url.searchParams.get("dir")).toBe(ROOT);
+    expect(url.searchParams.getAll("name").sort()).toEqual(["notes.txt", "other.txt"]);
+  });
+
+  it("Download takes a folder too, as a zip", async () => {
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+
+    const slot = await mountPanel();
+    clickItem(await openRowMenu(slot, FOLDER.path), "Download as zip");
+
+    await waitFor(() => {
+      expect(clicked).toHaveLength(1);
+    });
+    const url = new URL(clicked[0] ?? "");
+    expect(url.searchParams.getAll("name")).toEqual(["docs"]);
+  });
+
   it("Rename opens the dialog and calls renameEntry with the new name", async () => {
     const slot = await mountPanel(baseRpc({ renameEntry: () => ({ entry: makeEntry({ name: "renamed.txt" }) }) }));
     clickItem(await openRowMenu(slot, NOTES.path), "Rename");
