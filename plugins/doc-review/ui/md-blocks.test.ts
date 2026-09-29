@@ -64,6 +64,12 @@ describe("rewriteImages", () => {
     expect(rewriteImages("![a](<img/shot 1.png>)", "https://x/p")).toBe("![a](<https://x/p/img/shot%201.png>)");
   });
 
+  it("prefixes an origin-relative preview URL with the page origin", () => {
+    expect(rewriteImages("![a](shot.png)", "/api/v1/file-previews/abc", "https://bb.example")).toBe(
+      "![a](https://bb.example/api/v1/file-previews/abc/shot.png)",
+    );
+  });
+
   it("leaves absolute, remote, and parent paths alone", () => {
     const text = "![a](https://e.com/a.png) ![b](/abs.png) ![c](../up.png)";
     expect(rewriteImages(text, "https://x/p")).toBe(text);

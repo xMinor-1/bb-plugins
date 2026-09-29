@@ -27,10 +27,19 @@ function referenceDefinitions(source: string): string {
 
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 
-/** Points relative image paths at a URL that serves the document's folder. */
-export function rewriteImages(markdown: string, baseUrl: string | null): string {
+/**
+ * Points relative image paths at a URL that serves the document's folder.
+ * bb's Markdown renderer reads a src that starts with "/" as a path on disk,
+ * so an origin-relative preview URL gets the page origin in front.
+ */
+export function rewriteImages(
+  markdown: string,
+  baseUrl: string | null,
+  origin: string | undefined = globalThis.location?.origin,
+): string {
   if (!baseUrl) return markdown;
-  const base = baseUrl.replace(/\/+$/, "");
+  const absolute = baseUrl.startsWith("/") && !baseUrl.startsWith("//") && origin ? new URL(baseUrl, origin).href : baseUrl;
+  const base = absolute.replace(/\/+$/, "");
   const resolve = (target: string): string => {
     if (SCHEME.test(target) || target.startsWith("/") || target.startsWith("#")) return target;
     const clean = target.replace(/^\.\//, "");
