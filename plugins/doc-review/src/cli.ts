@@ -7,7 +7,7 @@ import {
   type BbPluginApi,
   type PluginCliRegistration,
 } from "@get-bb/plugin-sdk";
-import { CLI_NAME } from "./message.js";
+import { CLI_NAME, strokeLines } from "./message.js";
 import type { CommentWithDoc, ReviewStore } from "./store.js";
 import { anchorLabel, anchorQuote, truncate, type CommentStatus } from "./types.js";
 
@@ -174,6 +174,7 @@ export function reviewCli(options: {
             `file: ${comment.doc.absPath}`,
             `location: ${anchorLabel(comment.anchor, comment.doc.kind)}`,
             ...(quote ? [`quote: «${quote}»`] : []),
+            ...strokeLines(comment),
             `comment: ${comment.body}`,
             ...(comment.agentNote ? [`note: ${comment.agentNote}`] : []),
           ].join("\n");

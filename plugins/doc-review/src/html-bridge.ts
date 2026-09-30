@@ -14,6 +14,8 @@
 //
 // The bridge is plain ES2019 kept as a string, so it runs in any page as is.
 
+import { DRAW_STEP, DRAWING_JS } from "./drawing.js";
+
 export { HTML_SANDBOX } from "./types.js";
 
 const MARK = "data-doc-review-bridge";
@@ -51,6 +53,15 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
   var paintRequest = 0;
   var selectionTimer = 0;
   var selectionShown = false;
+  // Draw mode (the top page only; frames inside it wait as "idle"): the
+  // strokes drawn so far, in CSS pixels of the page as it scrolls.
+  var tool = "pen";
+  var sketch = [];
+  var stroke = null;
+  var drawHold = null;
+  var sketchShown = false;
+  var DRAW_STEP = ${DRAW_STEP};
+  ${DRAWING_JS}
 
   function sendTo(target, message) {
     message.docReview = 1;
@@ -153,9 +164,10 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
 
   // --- Selectors ------------------------------------------------------------
   function cssPath(element) {
+    var doc = element.ownerDocument || document;
     var parts = [];
     while (element && element.nodeType === 1 && element !== document.documentElement) {
-      if (element.id && /^[A-Za-z][\w-]*$/.test(element.id) && document.querySelectorAll("#" + element.id).length === 1) {
+      if (element.id && /^[A-Za-z][\w-]*$/.test(element.id) && doc.querySelectorAll("#" + element.id).length === 1) {
         parts.unshift("#" + element.id);
         break;
       }
@@ -203,6 +215,7 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
     if (!anchor || frameSplit(anchor)) return null;
     if (anchor.kind === "html-text") { var range = findQuote(anchor); return range ? { range: range } : null; }
     if (anchor.kind === "html-element") { var element = findElement(anchor); return element ? { element: element } : null; }
+    if (anchor.kind === "html-drawing" && Array.isArray(anchor.strokes)) return { drawing: anchor.strokes };
     return null;
   }
   function resolveAll() {
@@ -213,7 +226,7 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
       var item = items[i];
       if (frameSplit(item.anchor)) continue;
       var target = resolveAnchor(item.anchor);
-      if (target) resolved.push({ id: item.id, seq: item.seq, active: !!item.active, range: target.range || null, element: target.element || null });
+      if (target) resolved.push({ id: item.id, seq: item.seq, active: !!item.active, range: target.range || null, element: target.element || null, drawing: target.drawing || null });
       else ownMissing.push(item.id);
     }
     pendingTarget = resolveAnchor(pendingAnchor);
@@ -285,7 +298,8 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
   /** The part of the panel's state that belongs to one frame, with the frame's scale. */
   function frameMessage(element, type) {
     var message = { type: type };
-    if (type === "mode") message.mode = mode;
+    // Only the top page draws; its overlay covers the frames.
+    if (type === "mode") message.mode = mode === "draw" ? "idle" : mode;
     if (type === "comments") {
       message.items = [];
       for (var i = 0; i < items.length; i += 1) {
@@ -332,6 +346,8 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
       post({ type: "select", id: data.id });
     } else if (data.type === "escape") {
       post({ type: "escape" });
+    } else if (data.type === "hits-result" || data.type === "serialized") {
+      answered(data);
     }
   }
   function withBridge(html) {
@@ -382,11 +398,26 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
     var hover = document.createElement("div");
     hover.style.cssText = "position:fixed;display:none;box-sizing:border-box;border:2px solid rgb(" + ACCENT + ");background:rgba(" + ACCENT + ",0.08);border-radius:3px;pointer-events:none;";
     var layer = document.createElement("div");
+    var ink = document.createElement("div");
+    ink.style.cssText = "position:absolute;left:0;top:0;width:0;height:0;overflow:visible;pointer-events:none;";
+    root.appendChild(ink);
     root.appendChild(layer);
     root.appendChild(hover);
     document.documentElement.appendChild(root);
-    ui = { root: root, hover: hover, layer: layer, style: style };
+    ui = { root: root, hover: hover, layer: layer, ink: ink, style: style };
+    listenForDrawing(root);
+    applyDrawMode();
     return ui;
+  }
+  /** In draw mode the overlay takes the pointer; a finger still scrolls until it rests. */
+  function applyDrawMode() {
+    if (!ui) return;
+    var on = mode === "draw";
+    ui.root.style.pointerEvents = on ? "auto" : "none";
+    ui.root.style.cursor = on ? "crosshair" : "";
+    ui.root.style.touchAction = on ? "pan-x pan-y pinch-zoom" : "";
+    ui.root.style.webkitUserSelect = on ? "none" : "";
+    ui.root.style.userSelect = on ? "none" : "";
   }
   function setHighlights(layers) {
     var registry = window.CSS && window.CSS.highlights;
@@ -408,13 +439,19 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
     var parts = ensureUi();
     if (!parts) return;
     parts.layer.textContent = "";
+    parts.ink.textContent = "";
+    parts.ink.style.transform = "translate(" + -window.scrollX + "px," + -window.scrollY + "px)";
     var layers = { comment: [], active: [], pending: [] };
     var width = window.innerWidth;
     var height = window.innerHeight;
     for (var i = 0; i < resolved.length; i += 1) {
       var item = resolved[i];
       var rect = null;
-      if (item.range) {
+      if (item.drawing) {
+        parts.ink.appendChild(drawingSvg(document, item.drawing, item.active ? 1 : 0.45));
+        var b = drawingBounds(item.drawing);
+        if (b) rect = { left: b.x0 - window.scrollX, top: b.y0 - window.scrollY, right: b.x1 - window.scrollX, bottom: b.y1 - window.scrollY };
+      } else if (item.range) {
         (item.active ? layers.active : layers.comment).push(item.range);
         var rects = item.range.getClientRects();
         rect = rects.length ? rects[0] : item.range.getBoundingClientRect();
@@ -444,6 +481,9 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
         parts.layer.appendChild(box(r.left, r.top, r.width, r.height, "border:" + px(2) + " dashed rgb(" + ACCENT + ");background:rgba(" + ACCENT + ",0.1);border-radius:" + px(3) + ";"));
       }
     }
+    var strokes = stroke ? sketch.concat([stroke]) : sketch;
+    if (strokes.length) parts.ink.appendChild(drawingSvg(document, strokes, 1));
+    reportSketch();
     setHighlights(layers);
   }
   function schedulePaint() {
@@ -473,6 +513,11 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
     for (var j = 0; j < resolved.length; j += 1) {
       if (resolved[j].id !== id) continue;
       var found = resolved[j];
+      if (found.drawing) {
+        var bounds = drawingBounds(found.drawing);
+        if (bounds) window.scrollTo({ left: Math.max(0, bounds.x0 - 40), top: Math.max(0, (bounds.y0 + bounds.y1) / 2 - window.innerHeight / 2), behavior: nested ? "auto" : "smooth" });
+        return;
+      }
       var target = found.element || (found.range && (found.range.startContainer.nodeType === 1 ? found.range.startContainer : found.range.startContainer.parentElement));
       if (!target || !target.scrollIntoView) return;
       target.scrollIntoView({ block: "center", behavior: nested ? "auto" : "smooth" });
@@ -489,6 +534,405 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
     var y = window.scrollY;
     window.scrollBy(dx, dy);
     post({ type: "reveal-at", rect: { x: rect.x - (window.scrollX - x), y: rect.y - (window.scrollY - y), w: rect.w, h: rect.h } });
+  }
+
+  // --- Drawing ---------------------------------------------------------------------
+  // A mouse or pen draws at once; a finger scrolls as usual and draws after
+  // resting for a moment. Strokes are kept in page coordinates, so they stay
+  // on what they were drawn over while the page scrolls.
+  var HOLD_MS = 300;
+  function pagePoint(event) { return [Math.round((event.clientX + window.scrollX) * 2) / 2, Math.round((event.clientY + window.scrollY) * 2) / 2]; }
+  function startStroke(event) {
+    var at = pagePoint(event);
+    stroke = { tool: tool, points: [at[0], at[1]] };
+    schedulePaint();
+  }
+  function extendStroke(event) {
+    var at = pagePoint(event);
+    var p = stroke.points;
+    if (stroke.tool === "arrow") {
+      stroke.points = [p[0], p[1], at[0], at[1]];
+    } else {
+      var n = p.length;
+      if (Math.abs(at[0] - p[n - 2]) + Math.abs(at[1] - p[n - 1]) < DRAW_STEP || n >= 3998) return;
+      p.push(at[0], at[1]);
+    }
+    schedulePaint();
+  }
+  function endStroke() {
+    var done = stroke;
+    stroke = null;
+    if (!done) return;
+    var p = done.points;
+    // An arrow needs a direction; a click in arrow mode draws nothing.
+    var shortArrow = done.tool === "arrow" && (p.length < 4 || Math.abs(p[2] - p[0]) + Math.abs(p[3] - p[1]) < 8);
+    if (!shortArrow && sketch.length < 60) {
+      if (p.length === 2) p.push(p[0], p[1]);
+      sketch.push(done);
+    }
+    schedulePaint();
+  }
+  function cancelHold() {
+    if (drawHold) clearTimeout(drawHold.timer);
+    drawHold = null;
+  }
+  function listenForDrawing(root) {
+    root.addEventListener("pointerdown", function (event) {
+      if (mode !== "draw" || (event.target !== root && event.target.closest && event.target.closest("button"))) return;
+      // A second finger is a pinch or a scroll, not a line.
+      if (drawHold || stroke) { cancelHold(); stroke = null; schedulePaint(); return; }
+      if (event.button !== 0) return;
+      if (event.pointerType === "touch") {
+        var pointerId = event.pointerId;
+        var start = { clientX: event.clientX, clientY: event.clientY };
+        drawHold = {
+          x: event.clientX,
+          y: event.clientY,
+          timer: setTimeout(function () {
+            drawHold = null;
+            stroke = null;
+            startStroke(start);
+            stroke.pointerId = pointerId;
+            if (navigator.vibrate) navigator.vibrate(10);
+          }, HOLD_MS)
+        };
+        return;
+      }
+      event.preventDefault();
+      try { root.setPointerCapture(event.pointerId); } catch (error) { /* gone */ }
+      startStroke(event);
+      stroke.pointerId = event.pointerId;
+    });
+    root.addEventListener("pointermove", function (event) {
+      if (drawHold) {
+        // Moving before the rest ends is a scroll.
+        if (Math.abs(event.clientX - drawHold.x) + Math.abs(event.clientY - drawHold.y) > 8) cancelHold();
+        return;
+      }
+      if (stroke && stroke.pointerId === event.pointerId) extendStroke(event);
+    });
+    var finish = function (event) {
+      if (drawHold) { cancelHold(); return; }
+      if (stroke && stroke.pointerId === event.pointerId) {
+        delete stroke.pointerId;
+        endStroke();
+      }
+    };
+    root.addEventListener("pointerup", finish);
+    root.addEventListener("pointercancel", function (event) {
+      cancelHold();
+      if (stroke && stroke.pointerId === event.pointerId) { stroke = null; schedulePaint(); }
+    });
+    // While a finger draws, the page must not scroll under it.
+    root.addEventListener("touchmove", function (event) { if (stroke) event.preventDefault(); }, { passive: false });
+    root.addEventListener("contextmenu", function (event) { if (mode === "draw") event.preventDefault(); });
+  }
+  /** Tells the panel how many strokes wait and where they are, for its Comment button. */
+  function reportSketch() {
+    if (!sketch.length) {
+      if (sketchShown) post({ type: "sketch", count: 0 });
+      sketchShown = false;
+      return;
+    }
+    var b = drawingBounds(sketch);
+    sketchShown = true;
+    post({ type: "sketch", count: sketch.length, rect: { x: b.x0 - window.scrollX, y: b.y0 - window.scrollY, w: b.x1 - b.x0, h: b.y1 - b.y0 } });
+  }
+  function clearSketch() {
+    cancelHold();
+    sketch = [];
+    stroke = null;
+    schedulePaint();
+  }
+
+  // Questions to the bridges in this page's frames (what lies under a point,
+  // what the frame's page looks like now). A frame that does not answer in
+  // time is described as the frame itself.
+  var askSeq = 0;
+  var asking = {};
+  function ask(win, message, timeoutMs) {
+    return new Promise(function (resolve) {
+      askSeq += 1;
+      var id = askSeq;
+      asking[id] = resolve;
+      message.ask = id;
+      sendTo(win, message);
+      setTimeout(function () { if (asking[id]) { delete asking[id]; resolve(null); } }, timeoutMs);
+    });
+  }
+  function answered(data) {
+    var done = typeof data.ask === "number" ? asking[data.ask] : null;
+    if (done) { delete asking[data.ask]; done(data); }
+  }
+  function bridgedFrame(element) { return isFrame(element) && element.contentWindow && childFor(element.contentWindow, false) ? element : null; }
+
+  // What each stroke touches, for the agent: what a line lies on, the
+  // largest element inside a loop, the elements at an arrow's ends.
+  var INTERACTIVE = "a,button,input,select,textarea,label,summary,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=switch]";
+  function framePoint(frame, x, y) {
+    var box = frame.getBoundingClientRect();
+    var sx = frame.offsetWidth ? box.width / frame.offsetWidth : 1;
+    var sy = frame.offsetHeight ? box.height / frame.offsetHeight : 1;
+    var style = window.getComputedStyle(frame);
+    var left = box.left + (frame.clientLeft + (parseFloat(style.paddingLeft) || 0)) * sx;
+    var top = box.top + (frame.clientTop + (parseFloat(style.paddingTop) || 0)) * sy;
+    return { x: (x - left) / (sx || 1), y: (y - top) / (sy || 1), scale: sx || 1 };
+  }
+  function elementAt(x, y) {
+    var list = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
+    for (var i = 0; i < list.length; i += 1) {
+      if (isUi(list[i])) continue;
+      return list[i] === document.documentElement || list[i] === document.body ? null : list[i];
+    }
+    return null;
+  }
+  /** Lifts a hit from the text inside a button, or a shape inside an icon, to the thing itself. */
+  function meaningful(element) {
+    return (element.closest && (element.closest(INTERACTIVE) || element.closest("svg"))) || element;
+  }
+  /** Up from the center of a loop to the largest element that still fits inside it. */
+  function climb(element, limit) {
+    while (element.parentElement && element.parentElement !== document.body && element.parentElement !== document.documentElement) {
+      var box = element.parentElement.getBoundingClientRect();
+      if (box.width > limit.w || box.height > limit.h) break;
+      element = element.parentElement;
+    }
+    return element;
+  }
+  // Elements get numbers for the length of a question, so what a frame
+  // answers can still be compared: which hit holds which.
+  var numbers = window.WeakMap ? new WeakMap() : null;
+  var lastNumber = 0;
+  function numberOf(element) {
+    if (!numbers) return 0;
+    var n = numbers.get(element);
+    if (!n) { lastNumber += 1; n = lastNumber; numbers.set(element, n); }
+    return n;
+  }
+  function describe(element) {
+    var holders = [];
+    for (var up = element.parentElement; up; up = up.parentElement) holders.push(numberOf(up));
+    return {
+      selector: (cssPath(element) || element.tagName.toLowerCase()).slice(0, 1000),
+      tag: element.tagName.toLowerCase().slice(0, 40),
+      text: visibleText(element).slice(0, 200),
+      frame: "",
+      n: numberOf(element),
+      holders: holders
+    };
+  }
+  /**
+   * The element under each point of this page's viewport, as descriptions;
+   * a point in a frame with a bridge is answered by that frame. A query with
+   * "loop" climbs to the largest element that fits in that size.
+   */
+  function resolveQueries(queries) {
+    var results = [];
+    var groups = [];
+    for (var i = 0; i < queries.length; i += 1) {
+      var q = queries[i];
+      results.push(null);
+      var hit = elementAt(q.x, q.y);
+      if (!hit) continue;
+      var frame = bridgedFrame(hit);
+      if (frame) {
+        var at = framePoint(frame, q.x, q.y);
+        var group = null;
+        for (var g = 0; g < groups.length && !group; g += 1) if (groups[g].frame === frame) group = groups[g];
+        if (!group) { group = { frame: frame, indexes: [], queries: [] }; groups.push(group); }
+        group.indexes.push(i);
+        group.queries.push({ x: at.x, y: at.y, loop: q.loop ? { w: q.loop.w / at.scale, h: q.loop.h / at.scale } : null });
+        continue;
+      }
+      results[i] = describe(meaningful(q.loop ? climb(hit, q.loop) : hit));
+    }
+    return Promise.all(groups.map(function (group) {
+      var path = cssPath(group.frame);
+      return ask(group.frame.contentWindow, { type: "hits", queries: group.queries }, 800).then(function (reply) {
+        var answers = reply && Array.isArray(reply.results) ? reply.results : [];
+        for (var k = 0; k < group.indexes.length; k += 1) {
+          var answer = answers[k];
+          if (answer && typeof answer.selector === "string") {
+            answer.frame = path + (answer.frame ? FRAME_JOIN + answer.frame : "");
+            results[group.indexes[k]] = answer;
+          } else {
+            results[group.indexes[k]] = describe(group.frame);
+          }
+        }
+      });
+    })).then(function () { return results; });
+  }
+  function samplesOf(points, count) {
+    var n = points.length / 2;
+    var out = [];
+    var step = Math.max(1, Math.floor(n / count));
+    for (var i = 0; i < n; i += step) out.push({ x: points[2 * i] - window.scrollX, y: points[2 * i + 1] - window.scrollY, loop: null });
+    return out;
+  }
+  function markOf(index, role, found) {
+    var mark = { stroke: index, role: role, selector: found.selector, tag: found.tag, text: String(found.text || "").slice(0, 200) };
+    if (found.frame) mark.frame = String(found.frame).slice(0, 1000);
+    return mark;
+  }
+  function keyOf(found) { return found.frame + FRAME_JOIN + found.n + FRAME_JOIN + found.selector; }
+  function holds(outer, inner) {
+    return outer.frame === inner.frame && Array.isArray(inner.holders) && inner.holders.indexOf(outer.n) >= 0;
+  }
+  function marksFor(strokes) {
+    var queries = [];
+    var plans = [];
+    for (var s = 0; s < strokes.length; s += 1) {
+      var p = strokes[s].points;
+      var n = p.length;
+      var first = queries.length;
+      if (strokes[s].tool === "arrow") {
+        queries.push({ x: p[0] - window.scrollX, y: p[1] - window.scrollY, loop: null });
+        queries.push({ x: p[n - 2] - window.scrollX, y: p[n - 1] - window.scrollY, loop: null });
+        plans.push({ kind: "arrow", first: first });
+        continue;
+      }
+      var b = drawingBounds([strokes[s]]);
+      var w = b.x1 - b.x0;
+      var h = b.y1 - b.y0;
+      var gap = Math.abs(p[n - 2] - p[0]) + Math.abs(p[n - 1] - p[1]);
+      if (n >= 16 && w >= 16 && h >= 16 && gap <= Math.max(24, 0.35 * Math.max(w, h))) {
+        queries.push({ x: (b.x0 + b.x1) / 2 - window.scrollX, y: (b.y0 + b.y1) / 2 - window.scrollY, loop: { w: w * 1.2, h: h * 1.2 } });
+        plans.push({ kind: "loop", first: first });
+        continue;
+      }
+      var samples = samplesOf(p, 24);
+      for (var i = 0; i < samples.length; i += 1) queries.push(samples[i]);
+      plans.push({ kind: "line", first: first, count: samples.length });
+    }
+    return resolveQueries(queries).then(function (found) {
+      var marks = [];
+      for (var s = 0; s < plans.length; s += 1) {
+        var plan = plans[s];
+        if (plan.kind === "arrow") {
+          if (found[plan.first]) marks.push(markOf(s, "from", found[plan.first]));
+          if (found[plan.first + 1]) marks.push(markOf(s, "to", found[plan.first + 1]));
+        } else if (plan.kind === "loop") {
+          if (found[plan.first]) marks.push(markOf(s, "around", found[plan.first]));
+        } else {
+          // A line: what most of it lies on, skipping containers of what is picked.
+          var counts = [];
+          for (var i = plan.first; i < plan.first + plan.count; i += 1) {
+            if (!found[i]) continue;
+            var key = keyOf(found[i]);
+            var known = null;
+            for (var j = 0; j < counts.length && !known; j += 1) if (counts[j].key === key) known = counts[j];
+            if (known) known.count += 1;
+            else counts.push({ key: key, found: found[i], count: 1 });
+          }
+          counts.sort(function (a, c) { return c.count - a.count; });
+          var picked = [];
+          for (var k = 0; k < counts.length && picked.length < 3; k += 1) {
+            if (counts[k].count < Math.max(1, plan.count * 0.2)) break;
+            var holder = false;
+            for (var m = 0; m < picked.length; m += 1) if (holds(counts[k].found, picked[m])) holder = true;
+            if (!holder) picked.push(counts[k].found);
+          }
+          for (var q = 0; q < picked.length; q += 1) marks.push(markOf(s, "over", picked[q]));
+        }
+      }
+      return marks;
+    });
+  }
+
+  // The page as it looks now, for the server's picture: the live DOM with
+  // form values, scroll positions, and canvases written in, and the frames'
+  // own pages as their bridges report them; scripts and the bridge's marks
+  // left out.
+  function styleText(sheet) {
+    try {
+      var rules = sheet.cssRules;
+      var text = "";
+      for (var i = 0; i < rules.length; i += 1) text += rules[i].cssText + "\n";
+      return text;
+    } catch (error) {
+      return null;
+    }
+  }
+  function serializePage() {
+    var doc = document;
+    var root = doc.documentElement;
+    var clone = root.cloneNode(true);
+    var originals = root.getElementsByTagName("*");
+    var copies = clone.getElementsByTagName("*");
+    var count = Math.min(originals.length, copies.length);
+    var pairs = [];
+    for (var i = 0; i < count; i += 1) pairs.push([originals[i], copies[i]]);
+    var drop = [];
+    var frames = [];
+    for (var j = 0; j < pairs.length; j += 1) {
+      var o = pairs[j][0];
+      var c = pairs[j][1];
+      var tag = o.tagName;
+      if (o.hasAttribute("data-doc-review-ui") || tag === "SCRIPT" || tag === "NOSCRIPT") { drop.push(c); continue; }
+      for (var a = c.attributes.length - 1; a >= 0; a -= 1) {
+        if (/^on/i.test(c.attributes[a].name)) c.removeAttribute(c.attributes[a].name);
+      }
+      if (o.scrollTop || o.scrollLeft) c.setAttribute("data-doc-review-scroll", o.scrollLeft + "," + o.scrollTop);
+      if (tag === "INPUT") {
+        var type = String(o.type).toLowerCase();
+        if (type === "checkbox" || type === "radio") { if (o.checked) c.setAttribute("checked", ""); else c.removeAttribute("checked"); }
+        else if (type !== "password" && type !== "file") c.setAttribute("value", o.value);
+      } else if (tag === "TEXTAREA") {
+        c.textContent = o.value;
+      } else if (tag === "OPTION") {
+        if (o.selected) c.setAttribute("selected", ""); else c.removeAttribute("selected");
+      } else if (tag === "STYLE" && o.sheet && !collapse(o.textContent)) {
+        // Styles a script added rule by rule leave the tag empty.
+        var rules = styleText(o.sheet);
+        if (rules) c.textContent = rules;
+      } else if (tag === "CANVAS") {
+        try {
+          var picture = doc.createElement("img");
+          picture.src = o.toDataURL();
+          picture.setAttribute("style", (o.getAttribute("style") || "") + ";width:" + o.offsetWidth + "px;height:" + o.offsetHeight + "px");
+          if (o.getAttribute("class")) picture.setAttribute("class", o.getAttribute("class"));
+          if (c.parentNode) c.parentNode.replaceChild(picture, c);
+        } catch (error) { /* a canvas with pictures from elsewhere cannot be read */ }
+      } else if (bridgedFrame(o)) {
+        frames.push({ win: o.contentWindow, copy: c });
+      }
+    }
+    for (var d = 0; d < drop.length; d += 1) if (drop[d].parentNode) drop[d].parentNode.removeChild(drop[d]);
+    clone.removeAttribute("data-doc-review-mode");
+    // Styles a script built as objects (adoptedStyleSheets) have no tag at all.
+    var adopted = doc.adoptedStyleSheets || [];
+    for (var s = 0; s < adopted.length; s += 1) {
+      var text = styleText(adopted[s]);
+      if (!text) continue;
+      var style = doc.createElement("style");
+      style.textContent = text;
+      (clone.querySelector("head") || clone).appendChild(style);
+    }
+    var doctype = doc.doctype ? "<!DOCTYPE " + doc.doctype.name + ">" : "";
+    return Promise.all(frames.map(function (frame) {
+      return ask(frame.win, { type: "serialize" }, 1500).then(function (reply) {
+        if (!reply || typeof reply.html !== "string") return;
+        frame.copy.setAttribute("srcdoc", reply.html);
+        frame.copy.removeAttribute("src");
+      });
+    })).then(function () { return doctype + clone.outerHTML; });
+  }
+  function finishSketch() {
+    if (!sketch.length) return;
+    var strokes = sketch.map(function (st) { return { tool: st.tool, points: st.points.slice() }; });
+    var b = drawingBounds(strokes);
+    var rect = { x: b.x0 - window.scrollX, y: b.y0 - window.scrollY, w: b.x1 - b.x0, h: b.y1 - b.y0 };
+    var viewport = { w: window.innerWidth, h: window.innerHeight };
+    var scroll = { x: window.scrollX, y: window.scrollY };
+    var fail = function () { return null; };
+    Promise.all([marksFor(strokes).catch(function () { return []; }), serializePage().catch(fail)]).then(function (done) {
+      post({
+        type: "drawing",
+        anchor: { kind: "html-drawing", strokes: strokes, viewport: viewport, marks: done[0] },
+        snapshot: done[1] ? { html: done[1], scroll: scroll } : null,
+        rect: rect
+      });
+    });
   }
 
   // --- Selections and picking ---------------------------------------------------
@@ -611,7 +1055,11 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
     post({ type: "contextmenu", anchor: found.anchor, x: event.clientX, y: event.clientY });
   }, true);
   document.addEventListener("keydown", function (event) {
-    if ((event.metaKey || event.ctrlKey) && event.altKey && event.code === "KeyM") {
+    if (mode === "draw" && (event.metaKey || event.ctrlKey) && !event.shiftKey && event.code === "KeyZ") {
+      event.preventDefault();
+      sketch.pop();
+      schedulePaint();
+    } else if ((event.metaKey || event.ctrlKey) && event.altKey && event.code === "KeyM") {
       var found = selectionAnchor();
       if (found) {
         event.preventDefault();
@@ -641,11 +1089,29 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
     if (data.type === "hello") {
       announce();
     } else if (data.type === "mode") {
-      mode = data.mode === "element" ? "element" : "text";
+      var next = data.mode === "element" || data.mode === "draw" || data.mode === "idle" ? data.mode : "text";
+      if (next !== "draw" && mode === "draw") clearSketch();
+      mode = next;
+      if (data.tool === "pen" || data.tool === "arrow") tool = data.tool;
       document.documentElement.setAttribute("data-doc-review-mode", mode);
+      applyDrawMode();
       if (mode !== "element") showHover(null);
-      else { var selection = window.getSelection(); if (selection) selection.removeAllRanges(); }
+      if (mode !== "text") { var selection = window.getSelection(); if (selection) selection.removeAllRanges(); }
       toFrames("mode");
+    } else if (data.type === "sketch-undo") {
+      sketch.pop();
+      schedulePaint();
+    } else if (data.type === "sketch-clear") {
+      clearSketch();
+    } else if (data.type === "sketch-done") {
+      finishSketch();
+    } else if (data.type === "hits" && Array.isArray(data.queries)) {
+      var ask = data.ask;
+      var queries = data.queries.slice(0, 400).filter(function (q) { return q && typeof q.x === "number" && typeof q.y === "number"; });
+      resolveQueries(queries).then(function (results) { post({ type: "hits-result", ask: ask, results: results }); });
+    } else if (data.type === "serialize") {
+      var serializeAsk = data.ask;
+      serializePage().then(function (html) { post({ type: "serialized", ask: serializeAsk, html: html }); }, function () { post({ type: "serialized", ask: serializeAsk, html: null }); });
     } else if (data.type === "comments") {
       items = Array.isArray(data.items) ? data.items.filter(function (item) { return item && typeof item === "object"; }) : [];
       resolveAll();
@@ -876,7 +1342,7 @@ export function injectIntoHtml(
       const combined = existing
         ? new URL(existing, new URL(options.baseHref, "http://preview.invalid")).pathname
         : options.baseHref;
-      const tag = `<base href="${escapeAttribute(combined)}">`;
+      const tag = `<base data-doc-review-base href="${escapeAttribute(combined)}">`;
       if (base) text = text.slice(0, base.index) + tag + text.slice(base.index + base[0].length);
       else baseTag = tag;
     }

@@ -4,8 +4,10 @@
 import path from "node:path";
 import {
   anchorLabel,
+  isDrawing,
   truncate,
   type DocKind,
+  type DrawMark,
   type ReviewComment,
 } from "./types.js";
 
@@ -24,6 +26,9 @@ function quoteFor(comment: ReviewComment): string | null {
   }
   if (anchor.kind === "page-area" && anchor.text.trim()) {
     return `text in the area: «${truncate(anchor.text, QUOTE_MAX)}»`;
+  }
+  if (anchor.kind === "page-drawing" && anchor.text.trim()) {
+    return `text under the drawing: «${truncate(anchor.text, QUOTE_MAX)}»`;
   }
   if (anchor.kind === "cell" && anchor.text.trim()) {
     return `value: «${truncate(anchor.text, QUOTE_MAX)}»`;
@@ -68,6 +73,32 @@ function htmlDetails(comment: ReviewComment): {
   return { frame: null, selector: null, snippet: null };
 }
 
+function markText(mark: DrawMark): string {
+  const text = mark.text.trim() ? ` «${truncate(mark.text, 80)}»` : "";
+  const frame = mark.frame ? ` in frame \`${mark.frame}\`` : "";
+  return `<${mark.tag}>${text} \`${mark.selector}\`${frame}`;
+}
+
+/** One line per stroke of an HTML drawing: what it is and what it touches. */
+export function strokeLines(comment: ReviewComment): string[] {
+  const { anchor } = comment;
+  if (anchor.kind !== "html-drawing") return [];
+  return anchor.strokes.map((stroke, index) => {
+    const marks = anchor.marks.filter((mark) => mark.stroke === index);
+    const of = (role: DrawMark["role"]) => marks.filter((mark) => mark.role === role).map(markText).join(", ");
+    const name = `Stroke ${index + 1}`;
+    if (stroke.tool === "arrow") {
+      const from = of("from");
+      const to = of("to");
+      return `${name}: an arrow${from ? ` from ${from}` : ""}${to ? ` to ${to}` : ""}`;
+    }
+    const around = of("around");
+    if (around) return `${name}: a loop around ${around}`;
+    const over = of("over");
+    return over ? `${name}: a line over ${over}` : `${name}: a line on an empty spot`;
+  });
+}
+
 export function buildHandoffMessage(input: {
   kind: DocKind;
   absPath: string;
@@ -98,13 +129,22 @@ export function buildHandoffMessage(input: {
     if (html.selector) parts.push(`\`${html.selector}\``);
     lines.push(parts.join(" · "));
     if (html.snippet) lines.push(`HTML: \`${html.snippet.replace(/`/g, "'")}\``);
+    lines.push(...strokeLines(comment));
     lines.push(comment.body.trim());
     lines.push("");
   }
   lines.push(kindHint(input.kind));
-  if (input.comments.some((comment) => htmlDetails(comment).frame)) {
+  const inFrame = (comment: ReviewComment) =>
+    Boolean(htmlDetails(comment).frame) ||
+    (comment.anchor.kind === "html-drawing" && comment.anchor.marks.some((mark) => mark.frame));
+  if (input.comments.some(inFrame)) {
     lines.push(
       "A comment \"in frame\" is on a page this one shows in an `<iframe>`: its selector and HTML describe the page inside that frame, so edit what fills the frame (its `srcdoc`, the file in its `src`, or the source they are built from).",
+    );
+  }
+  if (input.comments.some((comment) => isDrawing(comment.anchor))) {
+    lines.push(
+      "A drawing is red strokes the user drew over the document; its image shows them over the page as the user saw it. A line across something usually means remove it, a loop marks what the comment is about, and an arrow means move what is at its tail to where its head points. The comment text decides.",
     );
   }
   lines.push(

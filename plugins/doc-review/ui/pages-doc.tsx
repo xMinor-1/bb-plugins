@@ -1,7 +1,9 @@
 // Page view for PDF, Word, and PowerPoint: server-rendered page images with an
 // invisible, selectable word layer on top. Text selections become `page-text`
-// comments; in Area mode a dragged box becomes a `page-area` comment (on a
-// touch screen: hold, then drag).
+// comments; in Area mode a dragged box becomes a `page-area` comment, and in
+// Draw mode the strokes drawn on one page become a `page-drawing` comment
+// with a picture of that part of the page (on a touch screen: hold, then
+// drag).
 //
 // Every page shares one scale (see page-layout.ts), so a landscape or
 // large-format page comes out wider than the panel and scrolls sideways. Zoom
@@ -23,16 +25,21 @@ import {
 import { createPortal } from "react-dom";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import type { Capture } from "../src/contract";
+import { DRAW_COLOR, DRAW_STEP, DRAW_WIDTH, strokeBounds, strokePath } from "../src/drawing";
 import {
   pageImageWidth,
   pageNoun,
   type Anchor,
   type DocKind,
+  type DrawTool,
   type PageInfo,
   type PageWord,
   type Rect,
   type ReviewComment,
+  type Stroke,
 } from "../src/types";
+import { DrawingBar } from "./drawing-bar";
 import type { Point } from "./markdown-doc";
 import {
   anchorAt,
@@ -49,7 +56,26 @@ import { isCommentShortcut, SelectionMenu } from "./selection-menu";
 import { errorText, useReviewRpc } from "./use-review";
 import { ZoomBar } from "./zoom-bar";
 
-export type PageMode = "text" | "area";
+export type PageMode = "text" | "area" | "draw";
+
+/** Comments that point at a place on one page. */
+type PageAnchor = Extract<Anchor, { kind: "page-text" | "page-area" | "page-drawing" }>;
+
+function isPageAnchor(anchor: Anchor | null | undefined): anchor is PageAnchor {
+  return anchor?.kind === "page-text" || anchor?.kind === "page-area" || anchor?.kind === "page-drawing";
+}
+
+function boundsRect(strokes: readonly Stroke[]): Rect {
+  const b = strokeBounds(strokes) ?? { x0: 0, y0: 0, x1: 0, y1: 0 };
+  return { x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0 };
+}
+
+/** Where a page comment starts: its first highlighted line, its box, or its drawing's corner. */
+function firstRect(anchor: PageAnchor): Rect {
+  if (anchor.kind === "page-text") return anchor.rects[0]!;
+  if (anchor.kind === "page-area") return anchor.rect;
+  return boundsRect(anchor.strokes);
+}
 
 interface LiveSelection {
   page: number;
@@ -347,6 +373,174 @@ function AreaLayer({
   );
 }
 
+/** Strokes over a page, in page points so they scale with it. */
+function StrokesSvg({
+  strokes,
+  page,
+  width,
+  opacity,
+}: {
+  strokes: readonly Stroke[];
+  page: PageInfo;
+  /** The page's width on screen, for arrowheads of the same size at any zoom. */
+  width: number;
+  opacity: number;
+}) {
+  const head = (14 * page.width) / Math.max(1, width);
+  return (
+    <svg
+      viewBox={`0 0 ${page.width} ${page.height}`}
+      preserveAspectRatio="none"
+      className="pointer-events-none absolute inset-0 size-full overflow-visible"
+      aria-hidden
+    >
+      <g
+        fill="none"
+        stroke={DRAW_COLOR}
+        strokeWidth={DRAW_WIDTH}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity={opacity}
+      >
+        {strokes.map((stroke, index) => (
+          <path key={index} d={strokePath(stroke, page.width, page.height, head)} vectorEffect="non-scaling-stroke" />
+        ))}
+      </g>
+    </svg>
+  );
+}
+
+/**
+ * Draw mode's surface on one page. A mouse or pen draws at once; a finger
+ * scrolls as usual and draws after resting for a moment, like Area mode.
+ */
+function DrawLayer({
+  page,
+  tool,
+  width,
+  pageElement,
+  onStroke,
+}: {
+  page: PageInfo;
+  tool: DrawTool;
+  width: number;
+  pageElement: RefObject<HTMLDivElement | null>;
+  onStroke: (page: number, stroke: Stroke) => void;
+}) {
+  const layer = useRef<HTMLDivElement>(null);
+  const [stroke, setStroke] = useState<Stroke | null>(null);
+  const drawing = useRef<{ pointerId: number; stroke: Stroke } | null>(null);
+  const hold = useRef<{ timer: number; x: number; y: number } | null>(null);
+
+  const pointAt = (clientX: number, clientY: number) => {
+    const box = pageElement.current!.getBoundingClientRect();
+    return { x: clamp01((clientX - box.left) / box.width), y: clamp01((clientY - box.top) / box.height), box };
+  };
+
+  useEffect(() => {
+    const target = layer.current;
+    if (!target) return;
+    const onTouchMove = (event: TouchEvent) => {
+      if (drawing.current) event.preventDefault();
+    };
+    target.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => target.removeEventListener("touchmove", onTouchMove);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (hold.current) window.clearTimeout(hold.current.timer);
+    },
+    [],
+  );
+
+  const cancel = () => {
+    if (hold.current) window.clearTimeout(hold.current.timer);
+    hold.current = null;
+    drawing.current = null;
+    setStroke(null);
+  };
+
+  const begin = (pointerId: number, clientX: number, clientY: number) => {
+    const at = pointAt(clientX, clientY);
+    const next: Stroke = { tool, points: [at.x, at.y] };
+    drawing.current = { pointerId, stroke: next };
+    setStroke(next);
+  };
+
+  return (
+    <>
+      {stroke ? <StrokesSvg strokes={[stroke]} page={page} width={width} opacity={1} /> : null}
+      <div
+        ref={layer}
+        data-no-sidebar-swipe=""
+        data-no-secondary-panel-swipe=""
+        className="absolute inset-0 z-20 cursor-crosshair [-webkit-touch-callout:none]"
+        onContextMenu={(event) => event.preventDefault()}
+        onPointerDown={(event) => {
+          if (hold.current || drawing.current) {
+            cancel();
+            return;
+          }
+          if (event.button !== 0 || !pageElement.current) return;
+          if (event.pointerType === "touch") {
+            const { pointerId, clientX, clientY } = event;
+            const timer = window.setTimeout(() => {
+              hold.current = null;
+              begin(pointerId, clientX, clientY);
+              navigator.vibrate?.(10);
+            }, HOLD_MS);
+            hold.current = { timer, x: clientX, y: clientY };
+            return;
+          }
+          event.currentTarget.setPointerCapture(event.pointerId);
+          begin(event.pointerId, event.clientX, event.clientY);
+        }}
+        onPointerMove={(event) => {
+          const pending = hold.current;
+          if (pending) {
+            if (Math.hypot(event.clientX - pending.x, event.clientY - pending.y) > 8) cancel();
+            return;
+          }
+          const active = drawing.current;
+          if (active?.pointerId !== event.pointerId) return;
+          const at = pointAt(event.clientX, event.clientY);
+          const p = active.stroke.points;
+          let points: number[];
+          if (active.stroke.tool === "arrow") points = [p[0]!, p[1]!, at.x, at.y];
+          else {
+            const n = p.length;
+            const moved = Math.abs(at.x - p[n - 2]!) * at.box.width + Math.abs(at.y - p[n - 1]!) * at.box.height;
+            if (moved < DRAW_STEP || n >= 3998) return;
+            points = [...p, at.x, at.y];
+          }
+          active.stroke = { ...active.stroke, points };
+          setStroke(active.stroke);
+        }}
+        onPointerUp={(event) => {
+          if (hold.current) {
+            cancel();
+            return;
+          }
+          const active = drawing.current;
+          if (active?.pointerId !== event.pointerId) return;
+          drawing.current = null;
+          setStroke(null);
+          const box = pageElement.current?.getBoundingClientRect();
+          const p = active.stroke.points;
+          if (active.stroke.tool === "arrow") {
+            // An arrow needs a direction; a click in arrow mode draws nothing.
+            const length = box && p.length >= 4 ? Math.abs(p[2]! - p[0]!) * box.width + Math.abs(p[3]! - p[1]!) * box.height : 0;
+            if (length < 8) return;
+          }
+          onStroke(page.n, p.length === 2 ? { ...active.stroke, points: [...p, ...p] } : active.stroke);
+        }}
+        onPointerCancel={cancel}
+      />
+    </>
+  );
+}
+
 interface PageViewProps {
   page: PageInfo;
   kind: DocKind;
@@ -356,6 +550,10 @@ interface PageViewProps {
   imageUrl: string;
   lines: PageWord[][] | undefined;
   mode: PageMode;
+  tool: DrawTool;
+  /** Strokes drawn on this page and not commented on yet. */
+  sketch: readonly Stroke[] | null;
+  onStroke: (page: number, stroke: Stroke) => void;
   /** Comments anchored on this page. */
   comments: readonly ReviewComment[];
   /** The active comment when it is on this page. */
@@ -375,6 +573,9 @@ const PageView = memo(function PageView({
   imageUrl,
   lines,
   mode,
+  tool,
+  sketch,
+  onStroke,
   comments,
   activeId,
   live,
@@ -407,6 +608,7 @@ const PageView = memo(function PageView({
       const anchor = comment.anchor;
       if (anchor.kind === "page-text") return anchor.rects.some((part) => contains(part, x, y));
       if (anchor.kind === "page-area") return contains(anchor.rect, x, y);
+      if (anchor.kind === "page-drawing") return contains(boundsRect(anchor.strokes), x, y);
       return false;
     });
     if (hit) onSelectComment(hit.id);
@@ -433,6 +635,17 @@ const PageView = memo(function PageView({
           <div className="pointer-events-none absolute inset-0 z-10">
             {shown.map((comment) => {
               const anchor = comment.anchor;
+              if (anchor.kind === "page-drawing") {
+                return (
+                  <StrokesSvg
+                    key={comment.id}
+                    strokes={anchor.strokes}
+                    page={page}
+                    width={box.width}
+                    opacity={comment.id === activeId ? 1 : 0.45}
+                  />
+                );
+              }
               if (anchor.kind !== "page-text" && anchor.kind !== "page-area") return null;
               const active = comment.id === activeId;
               const rects = anchor.kind === "page-text" ? anchor.rects : [anchor.rect];
@@ -470,6 +683,7 @@ const PageView = memo(function PageView({
                   />
                 ))
               : null}
+            {sketch?.length ? <StrokesSvg strokes={sketch} page={page} width={box.width} opacity={1} /> : null}
           </div>
 
           {lines ? <TextLayer lines={lines} aspect={page.height / page.width} /> : null}
@@ -477,8 +691,8 @@ const PageView = memo(function PageView({
           <div className="pointer-events-none absolute inset-0 z-30">
             {shown.map((comment) => {
               const anchor = comment.anchor;
-              if (anchor.kind !== "page-text" && anchor.kind !== "page-area") return null;
-              const first = anchor.kind === "page-text" ? anchor.rects[0]! : anchor.rect;
+              if (!isPageAnchor(anchor)) return null;
+              const first = firstRect(anchor);
               return (
                 <Pin
                   key={comment.id}
@@ -493,6 +707,9 @@ const PageView = memo(function PageView({
           </div>
 
           {mode === "area" ? <AreaLayer page={page.n} pageElement={element} onArea={onArea} /> : null}
+          {mode === "draw" ? (
+            <DrawLayer page={page} tool={tool} width={box.width} pageElement={element} onStroke={onStroke} />
+          ) : null}
         </>
       ) : null}
 
@@ -502,6 +719,58 @@ const PageView = memo(function PageView({
     </div>
   );
 });
+
+/** The share of the page a drawing's picture shows at least, so the agent sees its surroundings. */
+const PICTURE_MIN = 0.4;
+const PICTURE_MARGIN = 0.06;
+const PICTURE_MAX_PX = 1600;
+
+/** A picture of the drawn part of a page with the strokes on it, from the page image on screen. */
+function drawingPicture(pageElement: HTMLElement, strokes: readonly Stroke[]): Capture | undefined {
+  const image = pageElement.querySelector("img");
+  if (!image || !image.complete || image.naturalWidth === 0) return undefined;
+  const b = strokeBounds(strokes);
+  if (!b) return undefined;
+  const span = (lo: number, hi: number) => {
+    let start = lo - PICTURE_MARGIN;
+    let end = hi + PICTURE_MARGIN;
+    if (end - start < PICTURE_MIN) {
+      const middle = (lo + hi) / 2;
+      start = middle - PICTURE_MIN / 2;
+      end = middle + PICTURE_MIN / 2;
+    }
+    if (start < 0) [start, end] = [0, end - start];
+    if (end > 1) [start, end] = [Math.max(0, start - (end - 1)), 1];
+    return { start, size: Math.min(1, end) - start };
+  };
+  const x = span(b.x0, b.x1);
+  const y = span(b.y0, b.y1);
+  const sw = x.size * image.naturalWidth;
+  const sh = y.size * image.naturalHeight;
+  const scale = Math.min(1, PICTURE_MAX_PX / Math.max(sw, sh));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(sw * scale));
+  canvas.height = Math.max(1, Math.round(sh * scale));
+  const context = canvas.getContext("2d");
+  if (!context) return undefined;
+  context.drawImage(image, x.start * image.naturalWidth, y.start * image.naturalHeight, sw, sh, 0, 0, canvas.width, canvas.height);
+  const line = Math.max(3, canvas.width / 350);
+  context.strokeStyle = DRAW_COLOR;
+  context.lineWidth = line;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  for (const stroke of strokes) {
+    const points = stroke.points.map((value, index) =>
+      index % 2 === 0 ? ((value - x.start) / x.size) * canvas.width : ((value - y.start) / y.size) * canvas.height,
+    );
+    context.stroke(new Path2D(strokePath({ ...stroke, points }, 1, 1, line * 5)));
+  }
+  try {
+    return { kind: "png", data: canvas.toDataURL("image/png") };
+  } catch {
+    return undefined;
+  }
+}
 
 interface Gesture {
   source: "wheel" | "safari" | "touch";
@@ -525,6 +794,8 @@ export function PagesDoc({
   version,
   pages,
   mode,
+  tool,
+  drawingsSaved,
   comments,
   activeId,
   scrollRequest,
@@ -543,6 +814,9 @@ export function PagesDoc({
   version: string;
   pages: PageInfo[];
   mode: PageMode;
+  tool: DrawTool;
+  /** Counts saved drawings: each one clears the strokes waiting on the page. */
+  drawingsSaved: number;
   comments: ReviewComment[];
   activeId: string | null;
   scrollRequest: number;
@@ -555,7 +829,7 @@ export function PagesDoc({
   composer: ReactNode;
   composerPoint: Point | null;
   onStale: () => void;
-  onRequestComment: (anchor: Anchor, point: Point) => void;
+  onRequestComment: (anchor: Anchor, point: Point, capture?: Capture) => void;
   onSelectComment: (id: string) => void;
 }) {
   const rpc = useReviewRpc();
@@ -566,6 +840,8 @@ export function PagesDoc({
   const requested = useRef(new Set<number>());
   const [live, setLive] = useState<LiveSelection | null>(null);
   const [button, setButton] = useState<{ point: Point; anchor: Anchor } | null>(null);
+  /** Strokes drawn on one page and not commented on yet. */
+  const [sketch, setSketch] = useState<{ page: number; strokes: Stroke[] } | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(zoom);
@@ -977,12 +1253,59 @@ export function PagesDoc({
     };
   }, [readSelection]);
 
-  // Switching modes drops a half-made selection.
+  // Switching modes drops a half-made selection or drawing.
   useEffect(() => {
     setLive(null);
     setButton(null);
+    if (mode !== "draw") setSketch(null);
     window.getSelection()?.removeAllRanges();
   }, [mode]);
+
+  // A saved drawing leaves the page; a cancelled one stays to be finished.
+  useEffect(() => {
+    if (drawingsSaved) setSketch(null);
+  }, [drawingsSaved]);
+
+  const onStroke = useCallback((n: number, stroke: Stroke) => {
+    // A drawing lives on one page: a stroke on another page starts a new one.
+    setSketch((current) =>
+      current && current.page === n && current.strokes.length < 60
+        ? { page: n, strokes: [...current.strokes, stroke] }
+        : current && current.page === n
+          ? current
+          : { page: n, strokes: [stroke] },
+    );
+  }, []);
+
+  const undoStroke = useCallback(() => {
+    setSketch((current) => (current && current.strokes.length > 1 ? { ...current, strokes: current.strokes.slice(0, -1) } : null));
+  }, []);
+
+  const pageElementFor = (n: number) => root.current?.querySelector<HTMLElement>(`[data-page="${n}"]`) ?? null;
+
+  const commentOnSketch = () => {
+    const pageElement = sketch ? pageElementFor(sketch.page) : null;
+    if (!sketch || !pageElement) return;
+    const rect = boundsRect(sketch.strokes);
+    const words = (textsRef.current.get(sketch.page) ?? []).flat().filter((word) => inside(rect, word));
+    onRequestComment(
+      { kind: "page-drawing", page: sketch.page, strokes: sketch.strokes, text: words.map((word) => word[4]).join(" ").slice(0, 4000) },
+      toRoot(pageElement, rect.x + rect.w, rect.y + rect.h),
+      drawingPicture(pageElement, sketch.strokes),
+    );
+  };
+
+  useEffect(() => {
+    if (mode !== "draw" || composer) return;
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.code === "KeyZ") {
+        event.preventDefault();
+        undoStroke();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [mode, composer, undoStroke]);
 
   const onArea = useCallback(
     (n: number, rect: Rect, pageElement: HTMLElement) => {
@@ -1000,12 +1323,12 @@ export function PagesDoc({
   useEffect(() => {
     if (!scrollRequest || !activeId) return;
     const anchor = comments.find((candidate) => candidate.id === activeId)?.anchor;
-    if (!anchor || (anchor.kind !== "page-text" && anchor.kind !== "page-area")) return;
+    if (!isPageAnchor(anchor)) return;
     const element = scroller.current;
     const current = layoutRef.current;
     const box = current.boxes[anchor.page - 1];
     if (!element || !box) return;
-    const rect = anchor.kind === "page-text" ? anchor.rects[0]! : anchor.rect;
+    const rect = firstRect(anchor);
     const visible = element.clientHeight * (1 - coveredBottom);
     const y = box.top + rect.y * box.height;
     const top = element.scrollTop;
@@ -1043,19 +1366,16 @@ export function PagesDoc({
     const map = new Map<number, ReviewComment[]>();
     for (const comment of comments) {
       const anchor = comment.anchor;
-      if (anchor.kind !== "page-text" && anchor.kind !== "page-area") continue;
+      if (!isPageAnchor(anchor)) continue;
       map.set(anchor.page, [...(map.get(anchor.page) ?? []), comment]);
     }
     return map;
   }, [comments]);
   const activePage = useMemo(() => {
     const anchor = comments.find((comment) => comment.id === activeId)?.anchor;
-    return anchor && (anchor.kind === "page-text" || anchor.kind === "page-area") ? anchor.page : null;
+    return isPageAnchor(anchor) ? anchor.page : null;
   }, [comments, activeId]);
-  const pendingPage =
-    pendingAnchor && (pendingAnchor.kind === "page-text" || pendingAnchor.kind === "page-area")
-      ? pendingAnchor.page
-      : null;
+  const pendingPage = isPageAnchor(pendingAnchor) ? pendingAnchor.page : null;
 
   const ratio = window.devicePixelRatio || 1;
   // Under the comment sheet, room below the last page lets it scroll into view.
@@ -1068,7 +1388,7 @@ export function PagesDoc({
       ref={root}
       // While words are selected here, a sideways drag is not bb's sidebar swipe.
       data-sidebar-swipe-selectable=""
-      className={cn("doc-review-pages relative flex flex-col items-start", mode === "area" && "select-none")}
+      className={cn("doc-review-pages relative flex flex-col items-start", mode !== "text" && "select-none")}
       style={{
         width: layout.width,
         padding: layout.pad,
@@ -1099,6 +1419,9 @@ export function PagesDoc({
                 imageUrl={`${page.url}&w=${pageImageWidth(box.width, ratio)}`}
                 lines={texts.get(page.n)}
                 mode={mode}
+                tool={tool}
+                sketch={sketch?.page === page.n ? sketch.strokes : null}
+                onStroke={onStroke}
                 comments={byPage.get(page.n) ?? NO_COMMENTS}
                 activeId={activePage === page.n ? activeId : null}
                 live={live && live.page === page.n ? live : null}
@@ -1125,6 +1448,21 @@ export function PagesDoc({
           Comment
         </button>
       ) : null}
+      {sketch && !composer && mode === "draw"
+        ? (() => {
+            const pageElement = pageElementFor(sketch.page);
+            if (!pageElement || !root.current) return null;
+            const rect = boundsRect(sketch.strokes);
+            return (
+              <DrawingBar
+                point={clampToView(toRoot(pageElement, rect.x + rect.w, rect.y + rect.h), 240)}
+                onComment={commentOnSketch}
+                onUndo={undoStroke}
+                onClear={() => setSketch(null)}
+              />
+            );
+          })()
+        : null}
       {composer && composerPoint ? (
         <div
           className="absolute z-50"
@@ -1140,10 +1478,10 @@ export function PagesDoc({
       {overlay
         ? createPortal(
             <>
-              {mode === "area" && coarse ? (
+              {mode !== "text" && coarse ? (
                 <div className="absolute inset-x-0 top-2 flex justify-center">
                   <span className="rounded-full border border-border bg-background/95 px-3 py-1 text-xs text-muted-foreground shadow-sm">
-                    Hold, then drag to mark an area
+                    {mode === "area" ? "Hold, then drag to mark an area" : "Hold, then drag to draw"}
                   </span>
                 </div>
               ) : null}

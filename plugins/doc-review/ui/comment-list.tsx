@@ -132,7 +132,15 @@ function CommentCard({
           <IconButton icon="Trash2" label="Delete comment" onClick={() => actions.onDelete(comment)} />
         </div>
       </div>
-      {quote ? (
+      {comment.imageUrl ? (
+        // The picture the agent gets with a drawing.
+        <img
+          src={comment.imageUrl}
+          alt="The drawing on the page"
+          loading="lazy"
+          className="mt-1.5 max-h-40 w-full rounded border border-border bg-muted object-contain"
+        />
+      ) : quote ? (
         <div className="mt-1.5 line-clamp-2 border-l-2 border-border pl-2 text-xs text-muted-foreground">
           {truncate(quote, 240)}
         </div>
@@ -232,10 +240,10 @@ export function CommentList({
           {kind === "spreadsheet"
             ? "Click a cell or drag over a range to comment on it."
             : kind === "html"
-              ? "Select text to comment on it. Switch to Element to click a block, button, or picture."
+              ? "Select text to comment on it. Switch to Element to click a block, button, or picture, or to Draw to mark up the page."
               : kind === "md"
                 ? "Select text to comment on it."
-                : "Select text to comment on it. Switch to Area to draw a box around a picture or chart."}
+                : "Select text to comment on it. Switch to Area to draw a box around a picture or chart, or to Draw to mark up the page."}
           {" "}Comments stay here as drafts until you send them to a chat.
         </p>
       ) : null}

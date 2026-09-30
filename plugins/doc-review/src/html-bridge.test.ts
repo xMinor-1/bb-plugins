@@ -27,18 +27,18 @@ describe("injectIntoHtml", () => {
   it("puts the base and the bridge first in the head, before the page's own content", () => {
     const { text } = inject('<!doctype html><html><head><link rel="stylesheet" href="a.css"></head><body><p>Hi</p></body></html>');
     expect(text).toBe(
-      `<!doctype html><html><head><base href="${BASE}">${BRIDGE}<link rel="stylesheet" href="a.css"></head><body><p>Hi</p></body></html>`,
+      `<!doctype html><html><head><base data-doc-review-base href="${BASE}">${BRIDGE}<link rel="stylesheet" href="a.css"></head><body><p>Hi</p></body></html>`,
     );
   });
 
   it("handles a fragment with no head or body", () => {
     const { text } = inject("<!DOCTYPE html>\n<h1>Report</h1>");
-    expect(text).toBe(`<!DOCTYPE html><base href="${BASE}">${BRIDGE}\n<h1>Report</h1>`);
+    expect(text).toBe(`<!DOCTYPE html><base data-doc-review-base href="${BASE}">${BRIDGE}\n<h1>Report</h1>`);
   });
 
   it("keeps the doctype first after comments, so the page stays in standards mode", () => {
     const { text } = inject("<!-- built by a script -->\n<!DOCTYPE html><h1>Report</h1>");
-    expect(text).toBe(`<!-- built by a script -->\n<!DOCTYPE html><base href="${BASE}">${BRIDGE}<h1>Report</h1>`);
+    expect(text).toBe(`<!-- built by a script -->\n<!DOCTYPE html><base data-doc-review-base href="${BASE}">${BRIDGE}<h1>Report</h1>`);
   });
 
   it("gives pages in srcdoc frames the bridge, escaped for the attribute", () => {
@@ -53,7 +53,7 @@ describe("injectIntoHtml", () => {
       `<!DOCTYPE html><html><head><script data-doc-review-bridge>if (a && b) go("it's")</script><title>A</title></head><body><p class="x">Hi</p></body></html>`,
     );
     // The outer page gets the bridge in its own head, not in the frame's.
-    expect(text.startsWith(`<!DOCTYPE html><head><base href="${BASE}"><script data-doc-review-bridge>`)).toBe(true);
+    expect(text.startsWith(`<!DOCTYPE html><head><base data-doc-review-base href="${BASE}"><script data-doc-review-bridge>`)).toBe(true);
   });
 
   it("reads srcdoc in single quotes with raw markup", () => {
@@ -64,7 +64,7 @@ describe("injectIntoHtml", () => {
 
   it("finds the outer head even when a frame's markup has one and the page does not", () => {
     const { text } = inject('<!DOCTYPE html><iframe srcdoc="<html><head></head><body>x</body></html>"></iframe>');
-    expect(text.startsWith(`<!DOCTYPE html><base href="${BASE}">${BRIDGE}<iframe`)).toBe(true);
+    expect(text.startsWith(`<!DOCTYPE html><base data-doc-review-base href="${BASE}">${BRIDGE}<iframe`)).toBe(true);
     const srcdoc = /srcdoc="([^"]*)"/.exec(text)![1]!;
     expect(unescape(srcdoc)).toBe(`<html><head>${BRIDGE}</head><body>x</body></html>`);
   });
@@ -78,12 +78,12 @@ describe("injectIntoHtml", () => {
       "</body>",
     ].join("");
     const { text } = inject(source);
-    expect(text).toBe(source.replace("<head>", `<head><base href="${BASE}">${BRIDGE}`));
+    expect(text).toBe(source.replace("<head>", `<head><base data-doc-review-base href="${BASE}">${BRIDGE}`));
   });
 
   it("keeps a relative base of the page under the preview folder", () => {
     const { text } = inject('<head><base href="assets/"></head><body></body>');
-    expect(text).toContain(`<base href="${BASE}assets/">`);
+    expect(text).toContain(`<base data-doc-review-base href="${BASE}assets/">`);
     expect(text.match(/<base /g)).toHaveLength(1);
   });
 
@@ -115,7 +115,7 @@ describe("injectIntoHtml", () => {
     const withBom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("<head></head><body>x</body>")]);
     const page = injectIntoHtml(withBom, { baseHref: BASE, script: "1" });
     expect([...page.body.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
-    expect(page.body.subarray(3).toString("utf8")).toBe(`<head><base href="${BASE}"><script data-doc-review-bridge>1</script></head><body>x</body>`);
+    expect(page.body.subarray(3).toString("utf8")).toBe(`<head><base data-doc-review-base href="${BASE}"><script data-doc-review-bridge>1</script></head><body>x</body>`);
   });
 });
 

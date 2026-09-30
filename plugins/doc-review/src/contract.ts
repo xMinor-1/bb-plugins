@@ -16,6 +16,29 @@ const rectSchema = z
 const MAX_QUOTE = 4000;
 const MAX_SELECTOR = 1000;
 const MAX_HTML = 2000;
+const MAX_STROKES = 60;
+/** Coordinates per stroke: 2000 points. */
+const MAX_STROKE_NUMBERS = 4000;
+
+const strokeSchema = (coordinate: z.ZodNumber) =>
+  z
+    .object({
+      tool: z.enum(["pen", "arrow"]),
+      points: z.array(coordinate).min(2).max(MAX_STROKE_NUMBERS),
+    })
+    .strict()
+    .refine((stroke) => stroke.points.length % 2 === 0, "A stroke needs x and y for every point.");
+
+const drawMarkSchema = z
+  .object({
+    stroke: z.number().int().min(0),
+    role: z.enum(["over", "around", "from", "to"]),
+    selector: z.string().min(1).max(MAX_SELECTOR),
+    tag: z.string().min(1).max(40),
+    text: z.string().max(400),
+    frame: z.string().min(1).max(MAX_SELECTOR).optional(),
+  })
+  .strict();
 
 export const anchorSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("doc") }).strict(),
@@ -74,6 +97,39 @@ export const anchorSchema = z.discriminatedUnion("kind", [
       frame: z.string().min(1).max(MAX_SELECTOR).optional(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("page-drawing"),
+      page: z.number().int().min(1),
+      strokes: z.array(strokeSchema(z.number().min(0).max(1))).min(1).max(MAX_STROKES),
+      text: z.string().max(MAX_QUOTE),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("html-drawing"),
+      strokes: z.array(strokeSchema(z.number().min(-1e6).max(1e7))).min(1).max(MAX_STROKES),
+      viewport: z.object({ w: z.number().min(1).max(20000), h: z.number().min(1).max(20000) }).strict(),
+      marks: z.array(drawMarkSchema).max(MAX_STROKES * 3),
+    })
+    .strict(),
+]);
+
+/**
+ * What a drawing looked like, for the image the agent gets: a finished PNG
+ * (pages compose it from the page image), or the HTML page as it stood when
+ * it was drawn on, which the server photographs with the strokes on top.
+ */
+export const captureSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("png"), data: z.string().min(1).max(16 * 1024 * 1024) }).strict(),
+  z
+    .object({
+      kind: z.literal("html"),
+      html: z.string().min(1).max(24 * 1024 * 1024),
+      /** Where the page was scrolled, in CSS pixels. */
+      scroll: z.object({ x: z.number(), y: z.number() }).strict(),
+    })
+    .strict(),
 ]);
 
 const statusSchema = z.enum(["draft", "sent", "replied", "resolved"]);
@@ -91,6 +147,7 @@ export const commentSchema = z.object({
   sentThreadId: z.string().nullable(),
   agentNote: z.string().nullable(),
   resolvedAt: z.number().nullable(),
+  imageUrl: z.string().optional(),
 });
 
 const kindSchema = z.enum(["md", "pdf", "text", "presentation", "spreadsheet", "html"]);
@@ -335,6 +392,8 @@ export const rpcContract = defineRpcContract({
         anchor: anchorSchema,
         body: z.string().trim().min(1).max(BODY_MAX),
         docVersion: z.string().nullable(),
+        /** For drawings: what to make the agent's image from. */
+        capture: captureSchema.optional(),
       })
       .strict(),
     output: commentSchema,
@@ -379,6 +438,7 @@ export const rpcContract = defineRpcContract({
 });
 
 export type RpcContract = typeof rpcContract;
+export type Capture = z.infer<typeof captureSchema>;
 export type ViewerLink = z.infer<typeof linkSchema>;
 export type NeedsLibreOffice = z.infer<typeof needsLibreOfficeSchema>;
 export type WorkbookSummary = z.infer<typeof workbookSummarySchema>;

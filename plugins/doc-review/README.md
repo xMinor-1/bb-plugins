@@ -51,10 +51,21 @@ converts once and reopens at once.
   agent gets the quote or the element's CSS path and the start of its HTML.
   Pages shown inside `<iframe srcdoc>` frames (a desktop and a phone preview
   side by side, say) take comments too, and the agent learns which frame.
+- **Drawing:** on HTML pages and on pages and slides, switch to **Draw** and
+  mark up the document the way you would on paper: the pen crosses out,
+  underlines, or circles, the arrow shows where something should move. Draw
+  as many strokes as you need, then press **Comment** under them (the same
+  bar takes back the last stroke, ⌘Z does too, or clears the drawing). The
+  agent gets a picture of the drawing over the page as you saw it: on HTML
+  that is the page in its current state (what you typed, opened, or
+  scrolled), photographed by headless Chrome on the server; on pages, the
+  page image under the strokes. On HTML the agent also learns what each
+  stroke touches: the element a line lies on, the element inside a loop, and
+  the elements at an arrow's tail and head, inside preview frames too.
 - **On a touch screen:** select text with a long press; in **Area** mode hold,
-  then drag to draw a box (a hold without a drag marks the spot); in a
-  workbook tap a cell, or hold and drag over a range. A drag without the hold
-  scrolls as usual.
+  then drag to draw a box (a hold without a drag marks the spot); in **Draw**
+  mode hold, then drag to draw; in a workbook tap a cell, or hold and drag
+  over a range. A drag without the hold scrolls as usual.
 
 The comments button in the toolbar hides the list beside the document for a
 full-width view; the choice is remembered across files, and a click on a
@@ -89,6 +100,7 @@ On the machine the bb server runs on:
 | poppler-utils (`pdfinfo`, `pdftoppm`, `pdftotext`) | Pages, the text layer, area images |
 | LibreOffice Writer / Impress | Word and PowerPoint files |
 | LibreOffice Calc (optional) | Full formatting for legacy spreadsheets (`xls`, `xlsb`, `ods`); without it they open with values and fills |
+| Chrome or Chromium (optional) | Pictures of drawings on HTML pages; without it the agent gets the elements the strokes touch |
 
 | Platform | LibreOffice |
 | --- | --- |
@@ -106,6 +118,7 @@ Pages render with the fonts installed on the server, including `~/.fonts`.
 | --- | --- | --- |
 | Remember recently opened documents | on | Keeps the last 12 files opened from the Doc Review page in its Recent list |
 | LibreOffice executable | empty | Full path to `soffice` when it is not on `PATH` or in the usual install folders |
+| Chrome executable | empty | Full path to Chrome, Chromium, or Edge when it is not on `PATH` or in the usual install folders |
 
 ## For agents
 
@@ -153,6 +166,16 @@ bb doc-review reply <id> --note "question or reason"
   or when a script sets `srcdoc`); each bridge relays for its frames, adding
   the frame's CSS path to anchors and mapping rectangles through the frame's
   position and scale.
+- Drawings (`src/drawing.ts` for the geometry): on pages the panel keeps the
+  strokes as fractions of the page and makes the picture from the page image
+  in a canvas. On HTML the bridge keeps them in page coordinates on its own
+  overlay; for a comment it asks what lies under each stroke (frames answer
+  for their part) and serializes the live page: form values, scroll
+  positions, canvases, and the frames' current pages written in, scripts
+  left out. `src/snapshot.ts` opens that in headless Chrome over its DevTools
+  pipe with scripts disabled, lets files load only from the page's own
+  folder, lays the strokes on top, and takes the screenshot. Pictures live
+  next to the plugin's database and go to the agent as attachments.
 - `src/store.ts` keeps documents and comments in the plugin's SQLite database;
   every change publishes a realtime signal that open tabs follow. The tab also
   polls the file's version, so the agent's edits show up without reopening it.

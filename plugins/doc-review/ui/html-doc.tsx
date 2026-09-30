@@ -2,13 +2,17 @@
 // scripts cannot reach bb), and the bridge the server injects into it
 // (src/html-bridge.ts) reports selections and picked elements and paints the
 // comments sent to it. In Text mode a selection gets a Comment button; in
-// Element mode a click on any block, button, or picture comments on it.
+// Element mode a click on any block, button, or picture comments on it; in
+// Draw mode the strokes drawn over the page become one comment, sent with the
+// page as it looks, so the server can photograph it for the agent.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
-import { HTML_SANDBOX, type Anchor, type ReviewComment } from "../src/types";
+import type { Capture } from "../src/contract";
+import { HTML_SANDBOX, type Anchor, type DrawMark, type DrawTool, type ReviewComment, type Stroke } from "../src/types";
 import type { Point } from "./markdown-doc";
 import type { PageMode } from "./pages-doc";
+import { DrawingBar } from "./drawing-bar";
 import { SelectionMenu } from "./selection-menu";
 
 interface FrameRect {
@@ -18,10 +22,41 @@ interface FrameRect {
   h: number;
 }
 
-type HtmlAnchor = Extract<Anchor, { kind: "html-text" | "html-element" }>;
+type HtmlAnchor = Extract<Anchor, { kind: "html-text" | "html-element" | "html-drawing" }>;
 
 function isHtmlAnchor(anchor: Anchor | null | undefined): anchor is HtmlAnchor {
-  return anchor?.kind === "html-text" || anchor?.kind === "html-element";
+  return anchor?.kind === "html-text" || anchor?.kind === "html-element" || anchor?.kind === "html-drawing";
+}
+
+const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+function readStrokes(value: unknown): Stroke[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 60) return null;
+  const strokes: Stroke[] = [];
+  for (const raw of value as unknown[]) {
+    const item = raw as Record<string, unknown> | null;
+    const points = item?.points;
+    if (!item || (item.tool !== "pen" && item.tool !== "arrow") || !Array.isArray(points)) return null;
+    if (points.length < 2 || points.length > 4000 || points.length % 2 !== 0 || !points.every(finite)) return null;
+    strokes.push({ tool: item.tool, points: points as number[] });
+  }
+  return strokes;
+}
+
+function readMarks(value: unknown): DrawMark[] {
+  if (!Array.isArray(value)) return [];
+  const marks: DrawMark[] = [];
+  for (const raw of (value as unknown[]).slice(0, 180)) {
+    const item = raw as Record<string, unknown> | null;
+    const role = item?.role;
+    const selector = text(item?.selector, 1000);
+    const tag = text(item?.tag, 40);
+    if (!item || !finite(item.stroke) || !selector || !tag) continue;
+    if (role !== "over" && role !== "around" && role !== "from" && role !== "to") continue;
+    const frame = text(item.frame, 1000);
+    marks.push({ stroke: Math.max(0, Math.floor(item.stroke)), role, selector, tag, text: text(item.text, 400) ?? "", ...(frame ? { frame } : {}) });
+  }
+  return marks;
 }
 
 function text(value: unknown, max: number): string | null {
@@ -46,6 +81,14 @@ function readAnchor(value: unknown): HtmlAnchor | null {
       selector: text(raw.selector, 1000) ?? "",
       ...where,
     };
+  }
+  if (raw.kind === "html-drawing") {
+    const strokes = readStrokes(raw.strokes);
+    const viewport = raw.viewport as Record<string, unknown> | null;
+    if (!strokes || !viewport || !finite(viewport.w) || !finite(viewport.h)) return null;
+    const w = Math.min(20000, Math.max(1, viewport.w));
+    const h = Math.min(20000, Math.max(1, viewport.h));
+    return { kind: "html-drawing", strokes, viewport: { w, h }, marks: readMarks(raw.marks) };
   }
   if (raw.kind === "html-element") {
     const selector = text(raw.selector, 1000);
@@ -75,10 +118,20 @@ const COMPOSER_WIDTH = 352;
 const COMPOSER_HEIGHT = 170;
 /** How long a loaded page has to answer before the panel decides a link took the frame elsewhere. */
 const ANSWER_MS = 2500;
+/** The page as it looked is sent for the agent's picture up to this size. */
+const SNAPSHOT_MAX = 24 * 1024 * 1024;
 
 // What the bridge needs to know; sent when it announces itself and on change.
-function modeMessage(mode: PageMode) {
-  return { type: "mode", mode: mode === "area" ? "element" : "text" };
+function modeMessage(mode: PageMode, tool: DrawTool) {
+  return { type: "mode", mode: mode === "area" ? "element" : mode, tool };
+}
+
+function readSnapshot(value: unknown): Capture | undefined {
+  const raw = value as Record<string, unknown> | null;
+  const scroll = raw?.scroll as Record<string, unknown> | null | undefined;
+  if (!raw || typeof raw.html !== "string" || !raw.html || raw.html.length > SNAPSHOT_MAX) return undefined;
+  if (!scroll || !finite(scroll.x) || !finite(scroll.y)) return undefined;
+  return { kind: "html", html: raw.html, scroll: { x: scroll.x, y: scroll.y } };
 }
 
 function commentsMessage(comments: ReviewComment[], activeId: string | null) {
@@ -98,6 +151,8 @@ export function HtmlDoc({
   url,
   name,
   mode,
+  tool,
+  drawingsSaved,
   comments,
   activeId,
   scrollRequest,
@@ -111,13 +166,16 @@ export function HtmlDoc({
   url: string;
   name: string;
   mode: PageMode;
+  tool: DrawTool;
+  /** Counts saved drawings: each one clears the strokes waiting on the page. */
+  drawingsSaved: number;
   comments: ReviewComment[];
   activeId: string | null;
   scrollRequest: number;
   pendingAnchor: Anchor | null;
   composer: ReactNode;
   composerPoint: Point | null;
-  onRequestComment: (anchor: Anchor, point: Point) => void;
+  onRequestComment: (anchor: Anchor, point: Point, capture?: Capture) => void;
   onSelectComment: (id: string) => void;
   /** Comments whose text or element the page no longer has. */
   onDetached: (ids: Set<string>) => void;
@@ -133,6 +191,8 @@ export function HtmlDoc({
   const away = awayKey === frameKey;
   const [button, setButton] = useState<{ anchor: HtmlAnchor; point: Point } | null>(null);
   const [menu, setMenu] = useState<{ top: number; left: number; anchor: HtmlAnchor } | null>(null);
+  /** Strokes drawn and not commented on yet, and where their bar goes. */
+  const [sketch, setSketch] = useState<{ count: number; point: Point } | null>(null);
   /** The bridge the panel last sent its state to. */
   const bridge = useRef({ key: "", session: "" });
   /** Loads of the frame, and the last one a bridge answered. */
@@ -171,8 +231,8 @@ export function HtmlDoc({
   );
 
   // Messages from the bridge.
-  const latest = useRef({ commentOn, onSelectComment, onDetached, pointFor, button, mode, comments, activeId, pendingAnchor });
-  latest.current = { commentOn, onSelectComment, onDetached, pointFor, button, mode, comments, activeId, pendingAnchor };
+  const latest = useRef({ commentOn, onRequestComment, onSelectComment, onDetached, pointFor, button, mode, tool, comments, activeId, pendingAnchor });
+  latest.current = { commentOn, onRequestComment, onSelectComment, onDetached, pointFor, button, mode, tool, comments, activeId, pendingAnchor };
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;
@@ -192,8 +252,8 @@ export function HtmlDoc({
             setReadyKey(key);
           } else if (bridge.current.session !== session) {
             bridge.current = { key, session };
-            const { mode, comments, activeId, pendingAnchor } = latest.current;
-            post(modeMessage(mode));
+            const { mode, tool, comments, activeId, pendingAnchor } = latest.current;
+            post(modeMessage(mode, tool));
             post(commentsMessage(comments, activeId));
             post(pendingMessage(pendingAnchor));
           }
@@ -230,6 +290,20 @@ export function HtmlDoc({
           }
           break;
         }
+        case "sketch": {
+          const rect = readRect(data.rect);
+          const count = typeof data.count === "number" ? data.count : 0;
+          setSketch(count > 0 && rect ? { count, point: pointFor(rect, 240) } : null);
+          break;
+        }
+        case "drawing": {
+          const anchor = readAnchor(data.anchor);
+          const rect = readRect(data.rect);
+          if (anchor?.kind === "html-drawing" && rect) {
+            latest.current.onRequestComment(anchor, pointFor(rect, COMPOSER_WIDTH), readSnapshot(data.snapshot));
+          }
+          break;
+        }
         case "select":
           if (typeof data.id === "string") onSelectComment(data.id);
           break;
@@ -256,6 +330,7 @@ export function HtmlDoc({
   useEffect(() => {
     setButton(null);
     setMenu(null);
+    setSketch(null);
   }, [frameKey]);
 
   const onLoad = () => {
@@ -271,9 +346,26 @@ export function HtmlDoc({
 
   // Keep the bridge in step with the panel.
   useEffect(() => {
-    if (ready) post(modeMessage(mode));
-    if (mode === "area") setButton(null);
-  }, [ready, mode, post]);
+    if (ready) post(modeMessage(mode, tool));
+    if (mode !== "text") setButton(null);
+  }, [ready, mode, tool, post]);
+
+  useEffect(() => {
+    if (ready && drawingsSaved) post({ type: "sketch-clear" });
+  }, [drawingsSaved]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Undo reaches the page from the panel too, when the focus is out here.
+  useEffect(() => {
+    if (mode !== "draw" || composer) return;
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.code === "KeyZ") {
+        event.preventDefault();
+        post({ type: "sketch-undo" });
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [mode, composer, post]);
 
   useEffect(() => {
     if (ready) post(commentsMessage(comments, activeId));
@@ -338,6 +430,14 @@ export function HtmlDoc({
           <Icon name="MessageSquarePlus" className="size-3.5" />
           Comment
         </button>
+      ) : null}
+      {sketch && !composer && mode === "draw" ? (
+        <DrawingBar
+          point={sketch.point}
+          onComment={() => post({ type: "sketch-done" })}
+          onUndo={() => post({ type: "sketch-undo" })}
+          onClear={() => post({ type: "sketch-clear" })}
+        />
       ) : null}
       {composer && composerPoint ? (
         <div

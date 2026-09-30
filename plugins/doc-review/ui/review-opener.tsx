@@ -23,14 +23,17 @@ import { cn } from "@/lib/utils";
 import { NeedsLibreOffice } from "@/components/viewer/NeedsLibreOffice";
 import type { SheetData } from "@/lib/sheet-model";
 import type {
+  Capture,
   NeedsLibreOffice as NeedsLibreOfficeResult,
   ViewerLink,
   WorkbookSummary,
 } from "../src/contract";
 import {
   anchorLabel,
+  isDrawing,
   isPaged,
   type Anchor,
+  type DrawTool,
   type PageInfo,
   type ReviewComment,
   type ReviewDoc,
@@ -290,12 +293,18 @@ export function Workspace({
   const showClassic = classic && paged && !touchOnly && Boolean(links?.document);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
-  const [pending, setPending] = useState<{ anchor: Anchor; point: Point; range: Range | null } | null>(
-    null,
-  );
+  const [pending, setPending] = useState<{
+    anchor: Anchor;
+    point: Point;
+    range: Range | null;
+    /** What a drawing's picture is made from. */
+    capture?: Capture;
+  } | null>(null);
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<PageMode>("text");
+  const [tool, setTool] = useState<DrawTool>("pen");
+  const [drawingsSaved, setDrawingsSaved] = useState(0);
   const [detached, setDetached] = useState<ReadonlySet<string>>(new Set());
   const [listOpen, setListOpen] = useState(false);
   const [listHidden, setListHidden] = useState(readListHidden);
@@ -344,13 +353,26 @@ export function Workspace({
     setActiveId(null);
   }, []);
 
-  const create = async (anchor: Anchor, body: string): Promise<ReviewComment | null> => {
-    try {
-      const comment = await rpc.call("comments.create", {
+  const requestPlaceComment = useCallback((anchor: Anchor, point: Point, capture?: Capture) => {
+    setPending({ anchor, point, range: null, capture });
+    setActiveId(null);
+  }, []);
+
+  const create = async (anchor: Anchor, body: string, capture?: Capture): Promise<ReviewComment | null> => {
+    const save = (withCapture: boolean) =>
+      rpc.call("comments.create", {
         docId: doc.id,
         anchor,
         body,
         docVersion: doc.version,
+        ...(withCapture && capture ? { capture } : {}),
+      });
+    try {
+      // A page too large to send still gets its drawing saved, without the picture.
+      const comment = await save(true).catch((cause: unknown) => {
+        if (!capture) throw cause;
+        toast.warning("The drawing is saved without a picture of the page.");
+        return save(false);
       });
       setComments((current) =>
         current && !current.some((item) => item.id === comment.id) ? [...current, comment] : current,
@@ -439,11 +461,12 @@ export function Workspace({
       onCancel={() => setPending(null)}
       onSubmit={(body) => {
         setSaving(true);
-        create(pending.anchor, body)
+        create(pending.anchor, body, pending.capture)
           .then((comment) => {
             if (!comment) return;
             setPending(null);
             setActiveId(comment.id);
+            if (isDrawing(comment.anchor)) setDrawingsSaved((count) => count + 1);
           })
           .finally(() => setSaving(false));
       }}
@@ -528,13 +551,15 @@ export function Workspace({
       url={content.url}
       name={doc.name}
       mode={mode}
+      tool={tool}
+      drawingsSaved={drawingsSaved}
       comments={list}
       activeId={activeId}
       scrollRequest={scrollRequest}
       pendingAnchor={pending?.anchor ?? null}
       composer={composer}
       composerPoint={pending?.point ?? null}
-      onRequestComment={requestComment}
+      onRequestComment={requestPlaceComment}
       onSelectComment={selectFromDoc}
       onDetached={onDetached}
     />
@@ -562,6 +587,8 @@ export function Workspace({
       version={content.version}
       pages={content.pages}
       mode={mode}
+      tool={tool}
+      drawingsSaved={drawingsSaved}
       comments={list}
       activeId={activeId}
       scrollRequest={scrollRequest}
@@ -572,14 +599,14 @@ export function Workspace({
       composer={composer}
       composerPoint={pending?.point ?? null}
       onStale={onStale}
-      onRequestComment={requestComment}
+      onRequestComment={requestPlaceComment}
       onSelectComment={selectFromDoc}
     />
   );
 
   const hasPages = paged && content?.kind === "pages" && !showClassic;
   const isHtml = content?.kind === "html";
-  // Pages switch between text and areas; HTML between text and elements.
+  // Pages switch between text, areas, and drawing; HTML between text, elements, and drawing.
   const hasModes = hasPages || isHtml;
   const ownScroll = content?.kind === "sheet" || isHtml || showClassic;
   return (
@@ -587,34 +614,54 @@ export function Workspace({
       <div className={cn("flex shrink-0 items-center border-b border-border py-2", compact ? "gap-1 px-2" : "gap-2 px-3")}>
         {hasModes ? (
           <div className="flex rounded-md border border-border p-0.5" role="group" aria-label="Selection mode">
-            {(["text", "area"] as const).map((value) => (
+            {(["text", "area", "draw"] as const).map((value) => {
+              const label = value === "text" ? "Text" : value === "draw" ? "Draw" : isHtml ? "Element" : "Area";
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={mode === value}
+                  onClick={() => setMode(value)}
+                  title={
+                    value === "text"
+                      ? "Select text to comment"
+                      : value === "draw"
+                        ? "Draw over the document: cross out, circle, or point with an arrow"
+                        : isHtml
+                          ? "Click an element to comment on it"
+                          : "Draw a box to comment on an area"
+                  }
+                  className={cn(
+                    "inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2 text-xs",
+                    mode === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Icon
+                    name={value === "text" ? "TextWrap" : value === "draw" ? "Edit" : isHtml ? "Target" : "Square"}
+                    className="size-3.5"
+                  />
+                  {compact ? <span className="sr-only">{label}</span> : label}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        {hasModes && mode === "draw" ? (
+          <div className="flex rounded-md border border-border p-0.5" role="group" aria-label="Drawing tool">
+            {(["pen", "arrow"] as const).map((value) => (
               <button
                 key={value}
                 type="button"
-                aria-pressed={mode === value}
-                onClick={() => setMode(value)}
-                title={
-                  value === "text"
-                    ? "Select text to comment"
-                    : isHtml
-                      ? "Click an element to comment on it"
-                      : "Draw a box to comment on an area"
-                }
+                aria-pressed={tool === value}
+                aria-label={value === "pen" ? "Pen" : "Arrow"}
+                title={value === "pen" ? "Pen: cross out, underline, circle" : "Arrow: show where to move something"}
+                onClick={() => setTool(value)}
                 className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2 text-xs",
-                  mode === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+                  "inline-flex size-7 items-center justify-center rounded-[5px]",
+                  tool === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                <Icon name={value === "text" ? "TextWrap" : isHtml ? "Target" : "Square"} className="size-3.5" />
-                {compact ? (
-                  <span className="sr-only">{value === "text" ? "Text" : isHtml ? "Element" : "Area"}</span>
-                ) : value === "text" ? (
-                  "Text"
-                ) : isHtml ? (
-                  "Element"
-                ) : (
-                  "Area"
-                )}
+                <Icon name={value === "pen" ? "Edit" : "ArrowUpRight"} className="size-3.5" />
               </button>
             ))}
           </div>

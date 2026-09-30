@@ -32,6 +32,37 @@ export interface Rect {
 }
 
 /**
+ * One stroke of a drawing: a freehand line (`pen`), or a straight arrow from
+ * its first point to its last. Points are flat `[x0, y0, x1, y1, …]`: on a
+ * page, fractions of the page size; on an HTML page, CSS pixels from the top
+ * left of the page as it scrolls.
+ */
+export interface Stroke {
+  tool: "pen" | "arrow";
+  points: number[];
+}
+
+export type DrawTool = Stroke["tool"];
+
+/**
+ * What a stroke on an HTML page touches:
+ * - `over`: a line drawn across the element (crossed out, underlined).
+ * - `around`: the largest element inside a closed loop.
+ * - `from` and `to`: the elements at an arrow's tail and head.
+ */
+export interface DrawMark {
+  /** 0-based index of the stroke in the drawing. */
+  stroke: number;
+  role: "over" | "around" | "from" | "to";
+  selector: string;
+  tag: string;
+  /** The element's visible text, shortened. */
+  text: string;
+  /** Set when the element is inside a frame, as for `html-text`. */
+  frame?: string;
+}
+
+/**
  * Where a comment points.
  * - `doc`: the whole document.
  * - `md-text`: selected text in a Markdown file, with its source line range.
@@ -40,6 +71,8 @@ export interface Rect {
  * - `cell`: a cell or range in a workbook.
  * - `html-text`: selected text on an HTML page.
  * - `html-element`: an element picked on an HTML page.
+ * - `page-drawing`: strokes drawn on a page, with the text under them.
+ * - `html-drawing`: strokes drawn over an HTML page, with the elements they touch.
  */
 export type Anchor =
   | { kind: "doc" }
@@ -89,6 +122,14 @@ export type Anchor =
       html: string;
       /** Set when the element is inside a frame, as for `html-text`. */
       frame?: string;
+    }
+  | { kind: "page-drawing"; page: number; strokes: Stroke[]; text: string }
+  | {
+      kind: "html-drawing";
+      strokes: Stroke[];
+      /** The page's viewport when it was drawn on: the layout the strokes match. */
+      viewport: { w: number; h: number };
+      marks: DrawMark[];
     };
 
 /**
@@ -115,6 +156,8 @@ export interface ReviewComment {
   /** The agent's latest note: what it changed, or its question. */
   agentNote: string | null;
   resolvedAt: number | null;
+  /** The picture a drawing went with, served to the panel; absent without one. */
+  imageUrl?: string;
 }
 
 export interface ReviewDoc {
@@ -192,6 +235,10 @@ export function anchorLabel(anchor: Anchor, kind: DocKind): string {
       return "Text";
     case "html-element":
       return `Element <${anchor.tag}>`;
+    case "page-drawing":
+      return `${pageNoun(kind)} ${anchor.page}, drawing`;
+    case "html-drawing":
+      return "Drawing";
   }
 }
 
@@ -204,9 +251,11 @@ export function anchorQuote(anchor: Anchor): string | null {
     case "html-text":
       return anchor.quote;
     case "page-area":
+    case "page-drawing":
     case "cell":
     case "html-element":
       return anchor.text || null;
+    case "html-drawing":
     case "doc":
       return null;
   }
@@ -215,6 +264,10 @@ export function anchorQuote(anchor: Anchor): string | null {
 /** Collapse whitespace so quotes compare across line wrapping. */
 export function squash(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+export function isDrawing(anchor: Anchor): anchor is Extract<Anchor, { kind: "page-drawing" | "html-drawing" }> {
+  return anchor.kind === "page-drawing" || anchor.kind === "html-drawing";
 }
 
 export function truncate(text: string, max: number): string {

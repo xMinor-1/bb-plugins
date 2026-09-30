@@ -8,7 +8,7 @@ description: Apply review comments that the user left on a Markdown, PDF, Word, 
 The user comments on a file in the Doc Review panel and sends the batch to a
 chat. The message lists each comment as `[<id>] <location> · <quote>` followed
 by the requested change. Area comments on pages come with an attached image of
-that region (or a path to it). The panel shows every comment's status live, so
+that region (or a path to it), and so do drawings. The panel shows every comment's status live, so
 report each one as you finish it.
 
 ## Procedure
@@ -39,6 +39,14 @@ report each one as you finish it.
      working. A comment marked `in frame` is on a page shown inside an
      `<iframe>`: its quote, CSS path, and HTML belong to that inner page, so
      edit what fills the frame (its `srcdoc` or the source it is built from).
+   - Drawings: the user drew red strokes over the page, and the image shows
+     them over the page as the user saw it. A line across something usually
+     means remove it, a loop marks what the comment is about, and an arrow
+     means move what is at its tail to where its head points; the comment
+     text decides. On HTML each stroke is listed with the elements it
+     touches (`Stroke 2: an arrow from <button> «Delete» … to <header> …`):
+     find them in the source the same way as element comments. Open the
+     image before editing.
 3. Close each handled comment with a one-line note in the user's language:
    `bb doc-review resolve <id> --note "what changed"`. Several ids can share
    one note when one edit covers them.

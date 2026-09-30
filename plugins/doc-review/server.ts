@@ -9,20 +9,23 @@
 // in this plugin's SQLite database; the reviewed file is never modified by
 // the plugin. Agents report back with the `bb doc-review` command, and every
 // change reaches open panels through a realtime signal.
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { isSupportedPath } from "./lib/formats.js";
-import { rpcContract, type RecentDocument } from "./src/contract.js";
+import { rpcContract, type Capture, type RecentDocument } from "./src/contract.js";
 import { reviewCli } from "./src/cli.js";
 import { DocFiles } from "./src/files.js";
 import { BRIDGE_SCRIPT, HTML_SANDBOX, injectIntoHtml } from "./src/html-bridge.js";
 import { buildHandoffMessage } from "./src/message.js";
 import { Renderer, renderWidth, type PageSize } from "./src/render.js";
+import { findChrome, PageCamera } from "./src/snapshot.js";
 import { MIGRATIONS, ReviewStore, type Db, type DocRow } from "./src/store.js";
 import {
   docKindFor,
   HTML_EXTENSIONS,
+  isDrawing,
   isPaged,
   MARKDOWN_EXTENSIONS,
   type ReviewComment,
@@ -43,6 +46,8 @@ export type { RpcContract } from "./src/contract.js";
 const CHANGED = "review-changed";
 const PAGE_ROUTE = "/page";
 const HTML_ROUTE = "/html";
+const DRAWING_ROUTE = "/drawing";
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 /** The largest HTML page served into the review frame. */
 const HTML_MAX_BYTES = 20 * 1024 * 1024;
 const NO_PROJECT =
@@ -82,7 +87,47 @@ export default async function plugin(bb: BbPluginApi) {
         "Word and PowerPoint files are converted with LibreOffice on the machine bb runs on. Leave empty to find it automatically; set the full path to soffice if it lives somewhere unusual.",
       default: "",
     },
+    chromePath: {
+      type: "string",
+      label: "Chrome executable",
+      description:
+        "A drawing on an HTML page reaches the agent as a picture of the page taken by headless Chrome or Chromium on the machine bb runs on. Leave empty to find it automatically; without it the agent gets the elements the drawing touches.",
+      default: "",
+    },
   });
+  const camera = new PageCamera(
+    async () => findChrome((await settings.get()).chromePath),
+    path.join(dataDir, "shots"),
+  );
+  const drawingsDir = path.join(dataDir, "drawings");
+  const drawingFile = (id: string) => path.join(drawingsDir, `${id}.png`);
+
+  /** A comment as the panel gets it: drawings with a picture carry its URL. */
+  function present(comment: ReviewComment): ReviewComment {
+    if (!isDrawing(comment.anchor) || !existsSync(drawingFile(comment.id))) return comment;
+    return { ...comment, imageUrl: `/api/v1/plugins/${bb.pluginId}/http${DRAWING_ROUTE}?c=${comment.id}` };
+  }
+
+  /** Makes and keeps the picture of a new drawing; a drawing without one still works. */
+  async function saveDrawing(doc: DocRow, comment: ReviewComment, capture: Capture): Promise<void> {
+    const anchor = comment.anchor;
+    let bytes: Buffer | null = null;
+    if (capture.kind === "png") {
+      const data = Buffer.from(capture.data.replace(/^data:image\/png;base64,/, ""), "base64");
+      if (data.subarray(0, 8).equals(PNG_SIGNATURE)) bytes = data;
+    } else if (anchor.kind === "html-drawing" && doc.kind === "html") {
+      bytes = await camera.shoot({
+        html: capture.html,
+        folder: doc.hostId === null ? path.posix.dirname(doc.absPath) : null,
+        viewport: anchor.viewport,
+        scroll: capture.scroll,
+        strokes: anchor.strokes,
+      });
+    }
+    if (!bytes) return;
+    await mkdir(drawingsDir, { recursive: true });
+    await writeFile(drawingFile(comment.id), bytes);
+  }
   const viewer = createViewer(bb, {
     dataDir,
     localHostId: () => files.localHostId(),
@@ -219,27 +264,43 @@ export default async function plugin(bb: BbPluginApi) {
     }
   });
 
-  /** Crops for area comments on pages, in comment order. */
-  async function areaImages(
+  bb.http.route("GET", DRAWING_ROUTE, async (context) => {
+    const id = context.req.query("c") ?? "";
+    if (!/^c_[a-z0-9]+$/.test(id)) return context.text("Not found", 404);
+    const bytes = await readFile(drawingFile(id)).catch(() => null);
+    if (!bytes) return context.text("Not found", 404);
+    return new Response(new Uint8Array(bytes), {
+      headers: { "content-type": "image/png", "cache-control": "private, max-age=86400, immutable" },
+    });
+  });
+
+  /** Pictures for comments: crops of area comments on pages, and the pictures drawings came with. */
+  async function commentImages(
     doc: DocRow,
     comments: ReviewComment[],
   ): Promise<Map<string, Buffer>> {
     const images = new Map<string, Buffer>();
     const areas = comments.filter((comment) => comment.anchor.kind === "page-area");
-    if (areas.length === 0 || !isPaged(doc.kind)) return images;
-    const version = await currentVersion(doc);
-    const pdf = await pdfFor(doc);
-    const sizes = await renderer.pageSizes(doc.id, version, pdf);
-    for (const comment of areas) {
-      const anchor = comment.anchor;
-      if (anchor.kind !== "page-area") continue;
-      const size: PageSize | undefined = sizes[anchor.page - 1];
-      if (!size) continue;
-      try {
-        images.set(comment.id, await renderer.crop(pdf, anchor.page, size, anchor.rect));
-      } catch (error) {
-        bb.log.warn(`crop for ${comment.id}: ${String(error)}`);
+    if (areas.length > 0 && isPaged(doc.kind)) {
+      const version = await currentVersion(doc);
+      const pdf = await pdfFor(doc);
+      const sizes = await renderer.pageSizes(doc.id, version, pdf);
+      for (const comment of areas) {
+        const anchor = comment.anchor;
+        if (anchor.kind !== "page-area") continue;
+        const size: PageSize | undefined = sizes[anchor.page - 1];
+        if (!size) continue;
+        try {
+          images.set(comment.id, await renderer.crop(pdf, anchor.page, size, anchor.rect));
+        } catch (error) {
+          bb.log.warn(`crop for ${comment.id}: ${String(error)}`);
+        }
       }
+    }
+    for (const comment of comments) {
+      if (!isDrawing(comment.anchor)) continue;
+      const bytes = await readFile(drawingFile(comment.id)).catch(() => null);
+      if (bytes) images.set(comment.id, bytes);
     }
     return images;
   }
@@ -430,14 +491,19 @@ export default async function plugin(bb: BbPluginApi) {
 
     async "comments.list"({ docId }) {
       requireDoc(docId);
-      return { comments: store.listComments(docId) };
+      return { comments: store.listComments(docId).map(present) };
     },
 
-    async "comments.create"({ docId, anchor, body, docVersion }) {
-      requireDoc(docId);
+    async "comments.create"({ docId, anchor, body, docVersion, capture }) {
+      const doc = requireDoc(docId);
       const comment = store.createComment({ docId, anchor, body, docVersion });
+      if (capture && isDrawing(anchor)) {
+        await saveDrawing(doc, comment, capture).catch((error: unknown) =>
+          bb.log.warn(`picture for drawing ${comment.id}: ${String(error)}`),
+        );
+      }
       publish([docId]);
-      return comment;
+      return present(comment);
     },
 
     async "comments.update"({ id, body }) {
@@ -445,12 +511,13 @@ export default async function plugin(bb: BbPluginApi) {
       if (!existing) throw new Error("This comment was deleted.");
       const comment = store.updateBody(id, body);
       publish([existing.doc.id]);
-      return comment;
+      return present(comment);
     },
 
     async "comments.delete"({ id }) {
       const existing = store.getComment(id);
       const deleted = store.deleteComment(id);
+      if (deleted) await rm(drawingFile(id), { force: true });
       if (existing) publish([existing.doc.id]);
       return { deleted };
     },
@@ -460,7 +527,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (!existing) throw new Error("This comment was deleted.");
       const comment = store.reopen(id);
       publish([existing.doc.id]);
-      return comment;
+      return present(comment);
     },
 
     async "comments.send"({ docId, ids, target }) {
@@ -482,9 +549,10 @@ export default async function plugin(bb: BbPluginApi) {
         if (!projectId) throw new Error(NO_PROJECT);
       }
 
-      // Area comments carry a crop of the page. Attach them as images when
-      // bb accepts the upload; otherwise point the agent at a saved file.
-      const crops = await areaImages(doc, comments);
+      // Area comments carry a crop of the page and drawings their picture.
+      // Attach them as images when bb accepts the upload; otherwise point the
+      // agent at a saved file.
+      const crops = await commentImages(doc, comments);
       const imageNumbers = new Map<string, number>();
       const imageInputs: { type: "localImage"; path: string }[] = [];
       const unattached = new Map<string, Buffer>();
@@ -563,7 +631,7 @@ export default async function plugin(bb: BbPluginApi) {
     async "comments.handoffPrompt"({ docId, ids }) {
       const doc = requireDoc(docId);
       const comments = pickComments(docId, ids);
-      const imagePaths = await saveCrops(await areaImages(doc, comments));
+      const imagePaths = await saveCrops(await commentImages(doc, comments));
       const prompt = buildHandoffMessage({
         kind: doc.kind,
         absPath: doc.absPath,
