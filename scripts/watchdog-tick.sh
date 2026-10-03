@@ -29,7 +29,7 @@ prompt_file="$repo/scripts/watchdog-agent-prompt.md"
 
 project="${WATCHDOG_PROJECT:-proj_58ezp634x9}"
 provider="${WATCHDOG_PROVIDER:-claude-code}"
-model="${WATCHDOG_MODEL:-claude-opus-5[1m]}"
+model="${WATCHDOG_MODEL:-claude-opus-5-5[1m]}"
 
 report="$("$repo/scripts/check-after-bb-upgrade.sh" 2>&1)"
 code=$?

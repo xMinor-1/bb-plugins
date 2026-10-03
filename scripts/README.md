@@ -87,7 +87,7 @@ printf '%s\n' "$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/
 Проект:      proj_58ezp634x9 (BB Plugins)
 Автоматизация: auto_jbumkothkqy — «Сторож плагинов после обновления bb»
 Расписание:  15 9 * * * (Europe/Sofia), раз в сутки
-Агент:       claude-code / claude-opus-5[1m], доступ full
+Агент:       claude-code / claude-opus-5-5[1m], доступ full
 Каталог:     /home/coder/Work/3. projects/BB Plugins
 ```
 
