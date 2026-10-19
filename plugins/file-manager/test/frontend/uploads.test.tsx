@@ -130,6 +130,7 @@ function entryFor(name: string, sizeBytes: number): FileEntry {
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,

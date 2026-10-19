@@ -65,6 +65,7 @@ const INNER = makeEntry({ name: "inner.txt", path: `${DOCS}/inner.txt` });
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,

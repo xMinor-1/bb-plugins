@@ -57,7 +57,11 @@ every path is re-resolved and clamped on the server before a single byte moves.
 - **On a phone or tablet** — tick rows and an **Actions** bar appears; it
   opens the whole row menu as a sheet from the bottom, and a long press no
   longer turns a row into a drag.
-- **Organize** — new folder, rename, delete, cut / copy / paste, drag to move.
+- **Organize** — new folder, rename, move to Trash, cut / copy / paste, drag to move.
+- **Safe by default** — delete and overwrite move the old item to the Trash
+  instead of erasing it, and credential / config locations such as `~/.ssh`,
+  `~/.aws` or `~/.claude` refuse every change (see [Trash and protected
+  locations](#trash-and-protected-locations)).
   Batch operations report a result per path, and name collisions become
   `name (1).ext` instead of silently overwriting.
 - **Extract archives** — `zip`, `tar`, `tar.gz`, `tar.bz2`, `tar.xz`, `7z`
@@ -523,7 +527,9 @@ Change them in bb's settings UI, from the panel, or with
 | `restoreLastFolder` | boolean | `true` | Reopen the folder you were last in instead of the start folder. |
 | `openThreadWorkspace` | boolean | `false` | Open a File Manager tab inside a thread in that thread's project folder — its environment checkout — instead of the remembered or start folder. Ignored where there is no thread (the nav panel, the New thread launcher, the file openers) and wherever the thread has no environment, no folder on disk, or a folder outside the root; those fall back to the ordinary choice. |
 | `showHiddenFiles` | boolean | `false` | Show dot-files and dot-directories. |
-| `confirmOnDelete` | boolean | `true` | Ask before deleting. |
+| `confirmOnDelete` | boolean | `true` | Ask before moving items to the Trash. |
+| `permanentDelete` | boolean | `false` | Delete removes items for good instead of moving them to the Trash, and then always asks first, whatever `confirmOnDelete` says. Overwrites still go to the Trash. |
+| `extraProtectedPaths` | string | empty | Comma-separated paths relative to your home folder to protect in addition to the built-in list. |
 | `sortField` | `name` \| `size` \| `modified` \| `kind` | `name` | Default sort column. |
 | `sortDirection` | `asc` \| `desc` | `asc` | Default sort direction. |
 | `viewMode` | `list` \| `gallery` | `list` | Which view the panel opens in — the sortable table, or the thumbnail grid. |
@@ -531,6 +537,37 @@ Change them in bb's settings UI, from the panel, or with
 
 Toggles made in the panel are written back through the plugin's own
 `savePreferences` method, so they persist without a reload.
+
+### Trash and protected locations
+
+**Delete moves to the Trash.** Nothing is erased unless `permanentDelete` is
+on. Where it goes depends on the host, with no native dependencies and no
+shelling out:
+
+- macOS: `~/.Trash`, under a new name (`report 2.txt`) if the name is taken.
+  Finder's *Put Back* is not available for these items — drag them out of the
+  Trash to restore them.
+- Linux and other Unix: the freedesktop.org Trash, `$XDG_DATA_HOME/Trash`
+  (default `~/.local/share/Trash`) with a `.trashinfo` file per item, so desktop
+  file managers can restore it.
+- Anywhere the system Trash is unusable (it resolves outside your home, or
+  macOS denies access to it): `~/.bb-file-manager/trash`, same layout.
+
+Symlinks are trashed as links, never followed. Overwriting an existing item —
+move, copy, upload or extract with *overwrite* — moves the old item to the
+Trash first.
+
+**Protected locations refuse every change.** Delete, move, rename, overwrite,
+new folder, upload and extract are refused for these paths and everything
+inside them: `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
+`.config/gh`, `.claude`, `.claude-*`, `.codex`, `.bb`, `.bb-*`, `.netrc`,
+`.npmrc`, `.pypirc`, `.git-credentials`, `.zshrc`, `.zprofile`, `.bashrc`,
+`.bash_profile`, `.profile`, `Library/Keychains` and
+`Library/Application Support/com.apple.TCC`, plus anything in
+`extraProtectedPaths`. Paths are matched after resolving symlinks, so an alias
+pointing into `~/.ssh` is covered, as is the real folder behind a symlinked
+`~/.gnupg`. Browsing, previewing and downloading them still work. A parent
+folder such as `~/.config` or `~/Library` is not itself protected.
 
 ### Choosing the start folder
 

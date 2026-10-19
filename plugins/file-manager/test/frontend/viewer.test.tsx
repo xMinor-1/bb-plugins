@@ -74,6 +74,7 @@ const ENTRIES = [FOLDER, MAKEFILE, README, SCRIPT, SHOT, CLIP, SONG, MANUAL, BIN
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,

@@ -67,6 +67,7 @@ const ARCHIVE = makeEntry({ name: "bundle.tar.gz", archiveFormat: "tar.gz" });
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,
@@ -343,8 +344,8 @@ describe("ConfirmDeleteDialog", () => {
     await waitFor(() => {
       expect(dialog.contains(document.activeElement)).toBe(true);
     });
-    expect(dialog.textContent).toContain("Delete “notes.txt”?");
-    expect(dialog.textContent).toContain("This cannot be undone");
+    expect(dialog.textContent).toContain("Move “notes.txt” to Trash?");
+    expect(dialog.textContent).toContain("You can restore them from the Trash");
   });
 
   it("closes on Escape and deletes nothing", async () => {
@@ -358,13 +359,13 @@ describe("ConfirmDeleteDialog", () => {
     expect(callsTo(slot, "deleteEntries")).toHaveLength(0);
   });
 
-  it("warns that folders are deleted recursively", async () => {
+  it("warns that folders go to the Trash with their contents", async () => {
     const slot = await mountPanel();
     fireEvent.click(rowFor(slot, DOCS));
     fireEvent.keyDown(slot.getByTestId("fm-panel"), { key: "Delete" });
 
     const dialog = await slot.findByTestId("fm-delete-dialog");
-    expect(dialog.textContent).toContain("will be deleted with all");
+    expect(dialog.textContent).toContain("will be moved to the Trash with all");
   });
 });
 

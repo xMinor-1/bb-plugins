@@ -1,7 +1,8 @@
 // components/dialogs/ConfirmDeleteDialog.tsx
 //
-// Shown only when the `confirmOnDelete` setting is on (§7.1); the panel calls
-// `deleteEntries` directly otherwise. Deleting a symlink removes the link, not
+// Shown when the `confirmOnDelete` setting is on (§7.1), and always when
+// `permanentDelete` is on; the panel calls `deleteEntries` directly otherwise.
+// By default delete moves items to the Trash, so the wording says so. Deleting a symlink removes the link, not
 // its target (§6 rule 2) — worth saying out loud, because it is the one case
 // where "delete" does less than it looks like it does.
 import { useEffect, useState } from "react";
@@ -24,6 +25,8 @@ export interface ConfirmDeleteDialogProps {
   onOpenChange: (open: boolean) => void;
   entries: readonly FileEntry[];
   onConfirm: (entries: readonly FileEntry[]) => Promise<void>;
+  /** The `permanentDelete` setting: true removes for good instead of trashing. */
+  permanent?: boolean;
 }
 
 export function ConfirmDeleteDialog({
@@ -31,6 +34,7 @@ export function ConfirmDeleteDialog({
   onOpenChange,
   entries,
   onConfirm,
+  permanent = false,
 }: ConfirmDeleteDialogProps) {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -42,10 +46,11 @@ export function ConfirmDeleteDialog({
   const first = entries[0];
   const folders = entries.filter((entry) => effectiveKind(entry) === "directory").length;
   const links = entries.filter((entry) => entry.isSymlink).length;
-  const title =
+  const subject =
     entries.length === 1 && first !== undefined
-      ? `Delete “${first.name}”?`
-      : `Delete ${String(entries.length)} items?`;
+      ? `“${first.name}”`
+      : `${String(entries.length)} items`;
+  const title = permanent ? `Delete ${subject} permanently?` : `Move ${subject} to Trash?`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -59,7 +64,9 @@ export function ConfirmDeleteDialog({
             {title}
           </DialogTitle>
           <DialogDescription>
-            This cannot be undone — there is no trash in this plugin.
+            {permanent
+              ? "This cannot be undone — permanent delete is on, so nothing goes to the Trash."
+              : "You can restore them from the Trash."}
           </DialogDescription>
         </DialogHeader>
 
@@ -80,14 +87,14 @@ export function ConfirmDeleteDialog({
 
         {folders > 0 ? (
           <p className="rounded-md bg-surface-attention px-2 py-1.5 text-xs text-warning-text">
-            {folders === 1 ? "One folder" : `${String(folders)} folders`} will be deleted with all
-            of their contents.
+            {folders === 1 ? "One folder" : `${String(folders)} folders`} will be{" "}
+            {permanent ? "deleted" : "moved to the Trash"} with all of their contents.
           </p>
         ) : null}
         {links > 0 ? (
           <p className="text-xs text-muted-foreground">
-            {links === 1 ? "One symbolic link" : `${String(links)} symbolic links`} will be removed;
-            the files they point at are left alone.
+            {links === 1 ? "One symbolic link" : `${String(links)} symbolic links`} will be{" "}
+            {permanent ? "removed" : "moved to the Trash"}; the files they point at are left alone.
           </p>
         ) : null}
 
@@ -111,7 +118,7 @@ export function ConfirmDeleteDialog({
               })();
             }}
           >
-            Delete
+            {permanent ? "Delete permanently" : "Move to Trash"}
           </Button>
         </DialogFooter>
       </DialogContent>

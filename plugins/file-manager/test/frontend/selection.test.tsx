@@ -52,6 +52,7 @@ const ENTRIES = ["a.txt", "b.txt", "c.txt", "d.txt"].map((name) => makeEntry({ n
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,
@@ -261,10 +262,10 @@ describe("bulk delete", () => {
 
     const dialog = await slot.findByTestId("fm-delete-dialog");
     expect(slot.getAllByTestId("fm-delete-dialog")).toHaveLength(1);
-    expect(dialog.textContent).toContain("Delete 3 items?");
+    expect(dialog.textContent).toContain("Move 3 items to Trash?");
     expect(deletes).toHaveLength(0);
 
-    fireEvent.click(slot.getByRole("button", { name: "Delete" }));
+    fireEvent.click(slot.getByRole("button", { name: "Move to Trash" }));
 
     await waitFor(() => {
       expect(deletes).toEqual([
@@ -322,6 +323,34 @@ describe("bulk delete", () => {
     expect(slot.queryByTestId("fm-delete-dialog")).toBeNull();
   });
 
+  it("always confirms a permanent delete, even with confirmOnDelete off", async () => {
+    const deletes: unknown[] = [];
+    const preferences = { ...PREFERENCES, confirmOnDelete: false, permanentDelete: true };
+    const slot = await mountPanel(
+      baseRpc(
+        {
+          deleteEntries: (input) => {
+            deletes.push(input);
+            return { succeeded: (input as { paths: string[] }).paths, failed: [] };
+          },
+        },
+        preferences,
+      ),
+    );
+
+    fireEvent.click(rowFor(slot, "b.txt"));
+    fireEvent.keyDown(slot.getByTestId("fm-panel"), { key: "Delete" });
+
+    const dialog = await slot.findByTestId("fm-delete-dialog");
+    expect(dialog.textContent).toContain("Delete “b.txt” permanently?");
+    expect(dialog.textContent).toContain("This cannot be undone");
+    expect(deletes).toEqual([]);
+    fireEvent.click(slot.getByRole("button", { name: "Delete permanently" }));
+    await waitFor(() => {
+      expect(deletes).toEqual([{ paths: [`${ROOT}/b.txt`], recursive: true }]);
+    });
+  });
+
   it("surfaces per-path failures from the batch result as a toast", async () => {
     const slot = await mountPanel(
       baseRpc({
@@ -335,7 +364,7 @@ describe("bulk delete", () => {
     fireEvent.click(rowFor(slot, "a.txt"));
     fireEvent.keyDown(slot.getByTestId("fm-panel"), { key: "Delete" });
     await slot.findByTestId("fm-delete-dialog");
-    fireEvent.click(slot.getByRole("button", { name: "Delete" }));
+    fireEvent.click(slot.getByRole("button", { name: "Move to Trash" }));
 
     await waitFor(() => {
       expect(toasts.error).toHaveLength(1);

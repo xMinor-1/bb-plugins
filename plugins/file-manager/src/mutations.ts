@@ -2,15 +2,20 @@
 // copyEntries. Every source is resolved with resolveLink (never follow the
 // final symlink); every destination with resolveNew (§6 A/B/C).
 //
+// Safety: delete and overwrite move the old entry to the Trash (src/trash.ts)
+// unless the `permanentDelete` setting is on (delete only), and every mutation
+// refuses protected locations such as ~/.ssh (src/protect.ts).
+//
 // Batch methods echo back the caller's own path strings in `succeeded` and
 // `failed[].path` so the panel can match rows 1:1 with what it sent (§4.1).
-import { cp, lstat, mkdir, rename, rm, rmdir, unlink } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, rename, rm, rmdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
 import type { FileEntry } from "../contract";
 import { fmError, isFileManagerError, mapNodeError, toBatchFailure, type BatchFailure } from "./errors";
 import { buildEntry } from "./listing";
+import { assertNotProtected, getSafetyPolicy } from "./protect";
 import {
   assertInside,
   assertNotInsideSelf,
@@ -21,6 +26,7 @@ import {
   validateName,
 } from "./root";
 import { publishFs } from "./signals";
+import { moveToTrash } from "./trash";
 
 export type ConflictPolicy = "rename" | "overwrite" | "fail";
 
@@ -97,12 +103,8 @@ async function applyConflictPolicy(
     const free = await uniqueName(destDirReal, desiredName);
     return assertInside(path.join(destDirReal, free));
   }
-  // overwrite
-  try {
-    await rm(naive, { recursive: true, force: true });
-  } catch (error) {
-    throw mapNodeError(error, naive);
-  }
+  // overwrite: the old entry goes to the Trash, never straight to rm -rf.
+  await moveToTrash(naive);
   return naive;
 }
 
@@ -115,6 +117,7 @@ export async function createFolder(
   input: { path: string; name: string },
 ): Promise<{ entry: FileEntry }> {
   const target = await resolveNew(input.path, input.name);
+  await assertNotProtected(target, "create a folder in");
   try {
     await mkdir(target);
   } catch (error) {
@@ -136,6 +139,8 @@ export async function renameEntry(
   validateName(input.newName);
   const parentDir = path.dirname(source.path);
   const target = assertInside(path.join(parentDir, input.newName));
+  await assertNotProtected(source.path, "rename", { subtree: true });
+  await assertNotProtected(target, "rename onto", { subtree: true });
 
   if (target === source.path) return { entry: await buildEntry(source.path) };
   // fs.rename silently replaces an existing destination — refuse instead.
@@ -165,15 +170,18 @@ export async function deleteEntries(
   for (const requested of input.paths) {
     try {
       const source = await resolveLink(requested);
-      if (source.lstat.isDirectory()) {
-        // A symlink is never a directory under lstat, so links go to unlink.
-        if (input.recursive) {
-          await rm(source.path, { recursive: true, force: false });
-        } else {
-          await rmdir(source.path);
-        }
+      await assertNotProtected(source.path, "delete", { subtree: true });
+      if (getSafetyPolicy().permanentDelete) {
+        await removePermanently(source.path, source.lstat.isDirectory(), input.recursive);
       } else {
-        await unlink(source.path);
+        // Keep the non-recursive contract: a non-empty folder is refused.
+        if (source.lstat.isDirectory() && !input.recursive) {
+          const children = await readdir(source.path).catch((error: unknown) => {
+            throw mapNodeError(error, source.path);
+          });
+          if (children.length > 0) throw fmError("not_empty", source.path);
+        }
+        await moveToTrash(source.path);
       }
       succeeded.push(requested);
       touched.push(path.dirname(source.path));
@@ -184,6 +192,27 @@ export async function deleteEntries(
 
   if (succeeded.length > 0) publishFs(bb, touched, "delete");
   return { succeeded, failed };
+}
+
+async function removePermanently(
+  target: string,
+  isDirectory: boolean,
+  recursive: boolean,
+): Promise<void> {
+  try {
+    if (isDirectory) {
+      // A symlink is never a directory under lstat, so links go to unlink.
+      if (recursive) {
+        await rm(target, { recursive: true, force: false });
+      } else {
+        await rmdir(target);
+      }
+    } else {
+      await unlink(target);
+    }
+  } catch (error) {
+    throw mapNodeError(error, target);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -205,6 +234,12 @@ async function transferEntries(
       const source = await resolveLink(requested);
       if (source.path === getRoot()) throw fmError("path_escape", source.path);
       assertNotInsideSelf(source.path, destDirReal);
+      if (mode === "move") await assertNotProtected(source.path, "move", { subtree: true });
+      await assertNotProtected(
+        path.join(destDirReal, path.basename(source.path)),
+        mode === "move" ? "move into" : "copy into",
+        { subtree: true },
+      );
 
       const target = await applyConflictPolicy(
         destDirReal,

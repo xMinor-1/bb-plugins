@@ -123,6 +123,7 @@ function makeSize(partial: Partial<DirectorySize> = {}): DirectorySize {
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,

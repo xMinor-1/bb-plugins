@@ -39,7 +39,9 @@ import { fmError, mapNodeError } from "./errors";
 import type { JobsModule } from "./jobs";
 import { detectArchiveFormat } from "./listing";
 import { uniqueName } from "./mutations";
+import { assertNotProtected } from "./protect";
 import { isInside, resolveExisting, resolveExistingDir, resolveNew, validateName } from "./root";
+import { moveToTrash } from "./trash";
 import type { SettingsModule } from "./settings";
 import { publishFs } from "./signals";
 
@@ -435,14 +437,14 @@ export async function createArchives(
     conflict: ExtractArchiveInput["conflict"],
   ): Promise<string> {
     const naive = await resolveNew(destReal, validateName(desiredName));
+    await assertNotProtected(naive, "extract into");
     if (!(await exists(naive))) return naive;
     if (conflict === "fail") throw fmError("exists", naive);
     if (conflict === "rename") {
       return resolveNew(destReal, await uniqueName(destReal, desiredName));
     }
-    await rm(naive, { recursive: true, force: true }).catch((error: unknown) => {
-      throw mapNodeError(error, naive);
-    });
+    // overwrite: the existing entry goes to the Trash, not rm -rf.
+    await moveToTrash(naive);
     return naive;
   }
 
@@ -458,9 +460,9 @@ export async function createArchives(
    * Undo a partial "extract here" commit. Best effort by nature — the entries
    * go back into the staging tree, which `run()` deletes either way, so the
    * user sees the failed job on an untouched destination instead of half an
-   * archive. What cannot be undone is a `conflict: "overwrite"` claim that
-   * already removed an existing entry; that is why every name is validated
-   * before the first move.
+   * archive. A `conflict: "overwrite"` claim that already replaced an existing
+   * entry is not put back automatically — the old entry is in the Trash —
+   * which is why every name is validated before the first move.
    */
   async function rollback(moved: readonly { source: string; target: string }[]): Promise<void> {
     for (let index = moved.length - 1; index >= 0; index -= 1) {
@@ -494,6 +496,7 @@ export async function createArchives(
         ? path.dirname(archiveReal)
         : input.destinationDir,
     );
+    await assertNotProtected(destReal, "extract into");
 
     // Probe the plan before promising a job: "no extractor installed" is a
     // synchronous, actionable failure, not a job that dies a second later.

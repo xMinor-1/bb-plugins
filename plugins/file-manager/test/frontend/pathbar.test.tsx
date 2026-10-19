@@ -96,6 +96,7 @@ const ENTRIES: Record<string, FileEntry[]> = {
 const PREFERENCES: Preferences = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name",

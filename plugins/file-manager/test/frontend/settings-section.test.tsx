@@ -63,6 +63,7 @@ const PROJECTS_REAL = `${ROOT}/real-projects`;
 const PREFERENCES: Preferences = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name",

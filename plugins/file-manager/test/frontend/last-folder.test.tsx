@@ -96,6 +96,7 @@ function listing(path: string, entries: readonly FileEntry[]) {
 const PREFERENCES: Preferences = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name",

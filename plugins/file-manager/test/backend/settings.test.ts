@@ -52,13 +52,15 @@ afterEach(async () => {
 });
 
 describe("settingsDescriptors", () => {
-  it("declares exactly the nine settings of §7.1 with their defaults", () => {
+  it("declares exactly the eleven settings of §7.1 with their defaults", () => {
     expect(Object.keys(settingsDescriptors)).toEqual([
       "startFolder",
       "restoreLastFolder",
       "openThreadWorkspace",
       "showHiddenFiles",
       "confirmOnDelete",
+      "permanentDelete",
+      "extraProtectedPaths",
       "sortField",
       "sortDirection",
       "viewMode",
@@ -119,6 +121,7 @@ describe("defaults and derived values", () => {
     expect(settings.preferences()).toEqual({
       showHiddenFiles: false,
       confirmOnDelete: true,
+      permanentDelete: false,
       restoreLastFolder: true,
       openThreadWorkspace: false,
       sortField: "name",
@@ -224,6 +227,7 @@ describe("savePreferences", () => {
     expect(result.preferences).toEqual({
       showHiddenFiles: true,
       confirmOnDelete: true,
+      permanentDelete: false,
       restoreLastFolder: true,
       openThreadWorkspace: false,
       sortField: "size",
