@@ -191,6 +191,38 @@ export const voiceHostContract = defineRpcContract({
       z.object({ ok: z.literal(false), code: z.string(), message: z.string() }).strict(),
     ]),
   },
+  /** One filler sentence from the quick voice (src/quick-voice.ts). */
+  "voice.quick": {
+    input: z
+      .object({
+        prompt: z.string().min(1).max(8_000),
+        model: z.string().min(1),
+        claudePath: z.string().nullable(),
+        timeoutMs: z.number().int().positive(),
+      })
+      .strict(),
+    output: z.union([
+      z
+        .object({
+          ok: z.literal(true),
+          text: z.string(),
+          firstTokenMs: z.number().nullable(),
+          totalMs: z.number(),
+        })
+        .strict(),
+      z
+        .object({
+          ok: z.literal(false),
+          code: z.enum(["busy", "unavailable", "timeout", "failed"]),
+          message: z.string(),
+        })
+        .strict(),
+    ]),
+  },
+  "voice.quick.warm": {
+    input: z.object({ model: z.string().min(1), claudePath: z.string().nullable() }).strict(),
+    output: z.object({ ok: z.boolean() }).strict(),
+  },
   "voice.transcribeSegment": {
     input: z
       .object({
@@ -204,6 +236,94 @@ export const voiceHostContract = defineRpcContract({
     output: transcriptionResultSchema,
   },
 });
+
+export const speakResultSchema = z.union([
+  z
+    .object({
+      ok: z.literal(true),
+      audioBase64: z.string(),
+      mimeType: z.string(),
+      /** Time the speech service spent synthesizing, and the audio it made. */
+      synthMs: z.number().nullable(),
+      audioMs: z.number().nullable(),
+      /** The text after the service turned digits and Latin into words. */
+      spokenText: z.string().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      /** "empty" means nothing pronounceable was left; skip it, it is not an error. */
+      code: z.enum(["empty", "loading", "unreachable", "failed"]),
+      message: z.string(),
+    })
+    .strict(),
+]);
+export type SpeakResult = z.infer<typeof speakResultSchema>;
+
+const clipSchema = z
+  .object({ text: z.string(), audioBase64: z.string(), mimeType: z.string() })
+  .strict();
+export type SpokenClip = z.infer<typeof clipSchema>;
+
+export const quickReplyResultSchema = z.union([
+  z
+    .object({
+      ok: z.literal(true),
+      text: z.string(),
+      /** From the request to the quick voice's whole sentence. */
+      quickMs: z.number(),
+      clip: clipSchema,
+    })
+    .strict(),
+  z.object({ ok: z.literal(false), code: z.string(), message: z.string() }).strict(),
+]);
+export type QuickReplyResult = z.infer<typeof quickReplyResultSchema>;
+
+export const conversationConfigSchema = z
+  .object({
+    /** Silence after speech that ends the user's turn. */
+    endOfSpeechMs: z.number().int().positive(),
+    /** Stop speaking when the user starts talking over the reply. */
+    bargeIn: z.boolean(),
+    /** Appended to every message sent from conversation mode, or "" for none. */
+    marker: z.string(),
+    /** A small model says one sentence while the agent is still thinking. */
+    quickVoice: z.boolean(),
+  })
+  .strict();
+export type ConversationConfig = z.infer<typeof conversationConfigSchema>;
+
+/**
+ * Milliseconds from the moment the user stopped talking; null when the step
+ * did not happen (no reply text, nothing spoken, the user interrupted).
+ */
+export const conversationTimingSchema = z
+  .object({
+    at: z.number(),
+    threadId: z.string(),
+    /** Words in the user's phrase and characters in the reply. */
+    words: z.number().int().nonnegative(),
+    replyChars: z.number().int().nonnegative(),
+    transcribedMs: z.number().nullable(),
+    submittedMs: z.number().nullable(),
+    firstTextMs: z.number().nullable(),
+    firstSentenceMs: z.number().nullable(),
+    firstAudioMs: z.number().nullable(),
+    playingMs: z.number().nullable(),
+    turnDoneMs: z.number().nullable(),
+    /** The instant "mm-hm" when the pause was detected. */
+    ackMs: z.number().nullable(),
+    /** The quick voice: its sentence written, and heard. */
+    quickTextMs: z.number().nullable(),
+    quickPlayingMs: z.number().nullable(),
+    /** Synthesis time of the first sentence as the speech service reported it. */
+    firstSynthMs: z.number().nullable(),
+    sentences: z.number().int().nonnegative(),
+    interrupted: z.boolean(),
+  })
+  .strict();
+export type ConversationTiming = z.infer<typeof conversationTimingSchema>;
 
 /** What the browser side calls; the server relays it to the host. */
 export const rpcContract = defineRpcContract({
@@ -229,6 +349,38 @@ export const rpcContract = defineRpcContract({
   history_clear: {
     input: z.object({}).strict(),
     output: z.object({ removed: z.number() }).strict(),
+  },
+  /** One sentence of the agent's reply, spoken by the local speech service. */
+  speak: {
+    input: z.object({ text: z.string().min(1).max(4_000) }).strict(),
+    output: speakResultSchema,
+  },
+  /** Conversation-mode settings the browser needs before it starts listening. */
+  conversation_config: {
+    input: z.object({}).strict(),
+    output: conversationConfigSchema,
+  },
+  /** The quick voice's sentence for the phrase just sent, already spoken. */
+  quick_reply: {
+    input: z
+      .object({
+        text: z.string().min(1).max(4_000),
+        recent: z
+          .array(z.object({ who: z.enum(["user", "agent"]), text: z.string().max(2_000) }).strict())
+          .max(12),
+      })
+      .strict(),
+    output: quickReplyResultSchema,
+  },
+  /** Short spoken acknowledgements, synthesized once and kept. */
+  fillers: {
+    input: z.object({}).strict(),
+    output: z.object({ ack: z.array(clipSchema), wait: z.array(clipSchema) }).strict(),
+  },
+  /** One exchange's timings, kept so `bb voice-ink latency` can report them. */
+  conversation_log: {
+    input: z.object({ entry: conversationTimingSchema }).strict(),
+    output: z.object({ ok: z.literal(true) }).strict(),
   },
 });
 

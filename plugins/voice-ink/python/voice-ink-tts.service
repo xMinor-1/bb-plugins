@@ -1,0 +1,23 @@
+# systemd user unit for the voice-ink text-to-speech service (Vosk TTS, Russian).
+# Install: see "Spoken replies (text-to-speech service)" in the plugin README.
+#   cp voice-ink-tts.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now voice-ink-tts
+
+[Unit]
+Description=Voice Ink text-to-speech (Vosk TTS, Russian)
+After=network.target
+
+[Service]
+Type=simple
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=%h/.local/share/voice-ink-tts/venv/bin/python -I -B %h/.local/share/voice-ink-tts/tts_server.py
+Restart=on-failure
+RestartSec=10
+# Loading peaks at about 1.9 GB; the service sits in its own cgroup, away from bb.
+MemoryMax=3G
+OOMScoreAdjust=500
+Nice=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

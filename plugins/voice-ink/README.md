@@ -181,6 +181,130 @@ capped and de-prioritized rather than allowed to take what it likes:
 - The worker runs at a **lowered priority** (nice 10), so when the machine is
   busy the agents and the bb server get the cores first.
 
+## Conversation mode
+
+The headphones button in the composer turns a thread into a spoken
+conversation: talk, pause, and the phrase is sent; the agent's reply is read
+aloud while it is still being written; then the button listens again.
+
+- **End of phrase.** A pause of `endOfSpeechMs` (900 ms by default) after at
+  least 300 ms of speech sends the phrase, tagged with the conversation marker
+  (`(voice)` by default) so the agent can answer briefly and without tables.
+- **Reading the reply.** The reply is followed through the thread's event log
+  (`item/agentMessage/delta`, `turn/completed`) and cut into sentences
+  (`lib/sentences.ts`); fenced code, table rows and bb directives are skipped.
+  Each sentence goes to the speech service below while the previous one plays.
+- **No silence while the agent thinks.** In a long thread the agent takes ten
+  seconds and more to start. The moment the pause is detected a recorded
+  acknowledgement plays ("Угу.", "Секунду."), and a small resident model, the
+  quick voice (`src/quick-voice.ts`, one Claude Code process in stream-json mode,
+  `claude-sonnet-5-5` at low effort), says one sentence that shows the request
+  was understood. It never states facts; replies that look like tool calls or
+  markup are dropped. After seven quiet seconds a "still on it" filler plays once.
+- **Interrupting.** Talking over the reply stops it (`lib/barge-in.ts`: the
+  microphone only measures loudness while audio plays, nothing is recorded).
+  Escape skips the reply; pressing the button again ends the conversation.
+- **Timings.** Every exchange is logged; `bb voice-ink latency` prints them in
+  seconds from the end of the phrase, and `bb voice-ink say <text> -o x.mp3`
+  checks the speech service on its own.
+
+Measured on a 4-core server: an acknowledgement synthesizes in 0.4–0.9 s and is
+cached; a 3-second sentence in ~1.3 s; the quick voice's first token arrives
+1.1–4.8 s after the request (a fresh `claude -p` per phrase would take ~9 s,
+which is why the process stays resident).
+
+## Spoken replies (text-to-speech service)
+
+Voice-conversation mode reads agent replies aloud through a local Russian
+text-to-speech service: `python/tts_server.py`, Vosk TTS with the
+`vosk-model-tts-ru-0.10-multi` model and the `kyznetsov_vsevolod` voice. Loading
+the model takes about two minutes and ~1.9 GB of memory, so it runs as a
+resident systemd user service rather than inside the plugin.
+
+### Install
+
+The virtualenv and the model live outside any synced folder (the model is ~950 MB):
+
+```sh
+D=~/.local/share/voice-ink-tts
+python3 -m venv $D/venv
+$D/venv/bin/pip install --no-cache-dir vosk-tts num2words
+mkdir -p $D/models && cd $D/models
+curl -LO https://alphacephei.com/vosk/models/vosk-model-tts-ru-0.10-multi.zip
+unzip vosk-model-tts-ru-0.10-multi.zip && rm vosk-model-tts-ru-0.10-multi.zip
+ln -s <plugin dir>/python/tts_server.py $D/tts_server.py   # or copy it
+cp <plugin dir>/python/voice-ink-tts.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now voice-ink-tts
+```
+
+`ffmpeg` with `libmp3lame` must be on the `PATH`. On a headless server, enable
+lingering (`loginctl enable-linger`) so the service survives logout.
+
+### API
+
+Listens on `127.0.0.1:38951` only.
+
+- `GET /health` → `{"ready": bool, "loadMs": int|null, "speaker": "kyznetsov_vsevolod"}`.
+  The server answers right away; `ready` turns true once the model is loaded and
+  warmed up.
+- `POST /synth` with `{"text": str, "speaker"?: str, "rate"?: float}` → `200`
+  `audio/mpeg` (mono, 22.05 kHz, 48 kbit/s). Headers: `X-Synth-Ms`, `X-Encode-Ms`,
+  `X-Audio-Ms`, `X-Queue-Ms`, and `X-Spoken-Text` — the normalized text,
+  URL-encoded, cut at 1000 characters (`X-Spoken-Text-Truncated: 1` then).
+  `rate` is clamped to 0.5–2.0.
+- `503 {"error": "loading"}` while the model loads; `400 {"error": ...}` for a bad
+  body or when nothing speakable is left after normalization (skip that piece);
+  `500 {"error": ...}` when synthesis fails — the service itself keeps running.
+
+Requests are synthesized one at a time, first come first served: parallel model
+runs on the same cores only slow each other down. A request whose client
+disconnects while it waits in the queue is dropped without synthesis. Text over
+280 characters is split at sentence and clause boundaries and the audio joined
+with a short pause, so a paragraph works too, but sending one sentence per
+request keeps the first sound early.
+
+### Text normalization
+
+The model knows only Russian letters and `. , ! ? : ; -`; anything else used to
+crash it. `normalize()` turns an agent reply into something it can say:
+
+- markdown: code blocks and table rows are dropped, headings and list items
+  become sentences, emphasis markers go, `[text](url)` keeps the text, bare URLs
+  become «ссылка», inline code is read unless it holds a path or a command with
+  slashes;
+- numbers are read in Russian: integers, decimals and versions by parts with
+  «точка» (`1.8.0`), times (`19:57`), dates (`27.10.2026`), percentages, ranges
+  (`3–5` → «от трёх до пяти»), `#37`/`№ 5`, ordinal endings (`2-й`, `90-х`),
+  common units and currencies — without full grammatical agreement;
+- Latin: a dictionary of common terms (GitHub → «гитхаб», bb → «би би», Claude
+  Code → «клод код», API → «эй пи ай»…), abbreviations of 2–5 capitals spelled
+  letter by letter, camelCase and snake_case split, everything else
+  transliterated by rough English reading rules;
+- words missing from the model dictionary get a stress mark on the first
+  syllable (or on «ё»), otherwise all their vowels come out reduced.
+
+Tests: `~/.local/share/voice-ink-tts/venv/bin/python -I -B python/test_tts_normalize.py`.
+With `VOICE_INK_TTS_LIVE=1` it also posts 200 random strings (Cyrillic, Latin,
+digits, emoji, markdown) to the running service and fails on any `500`.
+
+### Measured
+
+On a 4-core VPS with 4 onnxruntime threads, warm service:
+
+| words | audio | synthesis | mp3 encoding | HTTP total |
+|---|---|---|---|---|
+| 3 | 1.4 s | 0.6 s | 77 ms | 0.7 s |
+| 6 | 3.1 s | 1.1 s | 89 ms | 1.2 s |
+| 10 | 4.2 s | 1.9 s | 102 ms | 2.0 s |
+| 15 | 6.5 s | 2.5 s | 121 ms | 2.6 s |
+| 25 | 9.6 s | 3.3 s | 145 ms | 3.5 s |
+
+Synthesis runs at 0.35–0.45 of real time on an idle machine and up to ~0.7 when
+other work takes the cores (the service runs at nice 5 and yields). Start to
+`ready`: ~126 s, nearly all of it spent creating the onnxruntime session for
+`model.onnx` — turning graph optimizations off does not shorten it. Memory at
+rest: ~1.6 GB resident, peak ~1.95 GB while loading.
+
 ## How it works
 
 ```
@@ -191,6 +315,7 @@ components/      the History panel, its player, and the sidebar-footer drop-down
 src/host.ts      the bb.host entry, running on the machine bb runs on
 src/history.ts   recordings and transcripts on disk, and their retention
 python/worker.py resident faster-whisper process, model kept in memory
+python/tts_server.py  text-to-speech service for spoken replies (see above)
 ```
 
 Loading a model costs seconds and recognizing a phrase costs less than that, so

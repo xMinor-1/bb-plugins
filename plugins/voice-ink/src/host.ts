@@ -15,6 +15,7 @@ import {
 } from "../contract.js";
 import { TranscriptHistory } from "./history.js";
 import { polishTranscript } from "./polish.js";
+import { QuickVoice } from "./quick-voice.js";
 import { WhisperEngine } from "./whisper-engine.js";
 import { WORKER_SOURCE } from "./worker-source.js";
 
@@ -119,6 +120,20 @@ async function engineFor(context: HostContext): Promise<WhisperEngine> {
   });
 
   return preparing;
+}
+
+let quickVoice: QuickVoice | null = null;
+
+/** The resident quick-voice model, started on the first conversation. */
+function quickVoiceFor(context: HostContext): QuickVoice {
+  if (quickVoice === null) {
+    const created = new QuickVoice(join(context.experimental_paths.dataDir, "quick-voice"), (message) =>
+      console.log(`[voice-ink] ${message}`),
+    );
+    context.lifecycle.signal.addEventListener("abort", () => created.stop(), { once: true });
+    quickVoice = created;
+  }
+  return quickVoice;
 }
 
 /** The dictation archive, opened against the same data directory as the engine. */
@@ -233,6 +248,12 @@ export default experimental_defineHostEntry({
       const text = result.partial === true ? `${polished}${PARTIAL_NOTE}` : polished;
       return { ok: true, text };
     },
+
+    "voice.quick": async ({ prompt, model, claudePath, timeoutMs }, context) =>
+      quickVoiceFor(context as HostContext).reply(prompt, { model, claudePath, timeoutMs }),
+    "voice.quick.warm": async ({ model, claudePath }, context) => ({
+      ok: await quickVoiceFor(context as HostContext).warm(model, claudePath),
+    }),
 
     "voice.configure": async ({ config }, context): Promise<EngineStatus> => {
       const active = await engineFor(context as HostContext);

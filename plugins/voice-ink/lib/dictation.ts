@@ -33,7 +33,16 @@ export interface DictationHandlers {
   /** 0..1 loudness for the button's animation. */
   onLevel(level: number): void;
   onError(message: string): void;
+  /**
+   * Conversation mode: fired once, when the user has said something and then
+   * stayed quiet for `endOfSpeechMs`. Dictation leaves both unset.
+   */
+  onSpeechEnd?(): void;
+  endOfSpeechMs?: number;
 }
+
+/** Less speech than this is a cough or a click, not a phrase that can end. */
+const MIN_PHRASE_MS = 300;
 
 export interface DictationSession {
   /** Finish the current segment and release the microphone. */
@@ -145,6 +154,9 @@ export async function startDictation(
   let silenceSamples = 0;
   let index = 0;
   let closed = false;
+  // Speech heard across the whole session: segments reset their own counter.
+  let heardSamples = 0;
+  let speechEnded = false;
 
   const msToSamples = (ms: number) => Math.round((ms / 1000) * sampleRate);
   const prerollLimit = msToSamples(PREROLL_MS);
@@ -152,6 +164,9 @@ export async function startDictation(
   const minSegment = msToSamples(MIN_SEGMENT_MS);
   const maxSegment = msToSamples(MAX_SEGMENT_MS);
   const tail = msToSamples(TAIL_MS);
+  const minPhrase = msToSamples(MIN_PHRASE_MS);
+  const endOfSpeech =
+    handlers.endOfSpeechMs === undefined ? null : msToSamples(handlers.endOfSpeechMs);
 
   function concat(parts: Float32Array[], total: number): Float32Array {
     const merged = new Float32Array(total);
@@ -212,6 +227,7 @@ export async function startDictation(
       preroll.length = 0;
       prerollSamples = 0;
       speechSamples = frame.length;
+      heardSamples += frame.length;
       silenceSamples = 0;
       return;
     }
@@ -220,9 +236,20 @@ export async function startDictation(
     segmentSamples += frame.length;
     if (speaking) {
       speechSamples += frame.length;
+      heardSamples += frame.length;
       silenceSamples = 0;
     } else {
       silenceSamples += frame.length;
+    }
+
+    if (
+      endOfSpeech !== null &&
+      !speechEnded &&
+      heardSamples >= minPhrase &&
+      silenceSamples >= endOfSpeech
+    ) {
+      speechEnded = true;
+      handlers.onSpeechEnd?.();
     }
 
     const pauseEnded = silenceSamples >= silenceHold && segmentSamples >= minSegment;

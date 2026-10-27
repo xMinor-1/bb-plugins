@@ -11,6 +11,7 @@ import {
   useSettings,
 } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
+import { ConversationButton } from "@/components/ConversationButton";
 import { HistoryDisclosure } from "@/components/HistoryDisclosure";
 import { HistoryPanel } from "@/components/HistoryPanel";
 import { Icon } from "@/components/ui/icon";
@@ -120,7 +121,10 @@ function VoiceButton() {
 export default definePluginApp((app) => {
   app.composer.customize({
     id: "voice-ink",
-    actions: [{ id: "dictate", component: VoiceButton }],
+    actions: [
+      { id: "dictate", component: VoiceButton },
+      { id: "converse", component: ConversationButton },
+    ],
   });
 
   // Dictations outlive the composer they were meant for: bb stops waiting

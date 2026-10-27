@@ -8,15 +8,19 @@
 // The heavy lifting happens in the `bb.host` entry (src/host.ts), which keeps a
 // Python worker with the model resident in memory. This file owns settings, the
 // CLI, and the RPC the composer button calls.
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import {
   HISTORY_AUDIO_ROUTE,
   rpcContract,
   voiceHostContract,
+  type ConversationTiming,
   type EngineConfig,
   type EngineStatus,
+  type QuickReplyResult,
+  type SpeakResult,
+  type SpokenClip,
   type TranscriptionResult,
 } from "./contract.js";
 
@@ -33,6 +37,25 @@ const SERVICE_ID = "voice-ink";
  * with what it has just before that, so the composer never gets nothing.
  */
 const VOICE_WAIT_MS = 70_000;
+
+/** Where python/tts_server.py listens unless the settings say otherwise. */
+const DEFAULT_SPEECH_SERVICE_URL = "http://127.0.0.1:38951";
+
+/** One sentence never takes this long; past it the service is stuck, not busy. */
+const SPEAK_TIMEOUT_MS = 30_000;
+
+/** The quick voice is only worth it while it beats the agent by a wide margin. */
+const QUICK_TIMEOUT_MS = 8_000;
+
+/** Default fillers when the settings leave them empty. */
+const ACK_RU = ["Угу.", "Так.", "Ага.", "Секунду.", "Понял."];
+const WAIT_RU = ["Ещё секунду.", "Секунду, разбираюсь."];
+const ACK_EN = ["Mm-hm.", "Okay.", "Right.", "One sec.", "Got it."];
+const WAIT_EN = ["Just a moment.", "Still on it."];
+
+/** Exchanges kept for `bb voice-ink latency`, newest last. */
+const TIMING_KEY = "conversation-timings";
+const TIMING_LIMIT = 200;
 
 /** Cleanup backends the settings offer; the value is validated on the way out. */
 const CLEANUP_PROVIDERS = ["off", "groq", "anthropic", "openai-compatible"] as const;
@@ -183,6 +206,54 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Delete dictations older than N days (0 = keep them)",
       default: "30",
     },
+    // Conversation mode: talk, the phrase is sent on a pause, the reply is
+    // read aloud sentence by sentence, and listening resumes.
+    conversationButton: {
+      type: "boolean",
+      label: "Show the conversation button (talk and hear replies)",
+      default: true,
+    },
+    speechServiceUrl: {
+      type: "string",
+      label: "Speech service URL (python/tts_server.py)",
+      default: DEFAULT_SPEECH_SERVICE_URL,
+    },
+    endOfSpeechMs: {
+      type: "string",
+      label: "Pause that ends your phrase, in milliseconds",
+      default: "900",
+    },
+    bargeIn: {
+      type: "boolean",
+      label: "Stop reading when you start talking",
+      default: true,
+    },
+    conversationMarker: {
+      type: "string",
+      label: "Tag appended to spoken messages, so the agent answers briefly",
+      default: "(voice)",
+    },
+    // The agent takes seconds to start answering in a long thread. A small
+    // model fills that silence with one sentence; the agent's answer follows.
+    quickVoice: {
+      type: "boolean",
+      label: "Quick voice: a small model says one sentence while the agent thinks",
+      default: true,
+    },
+    quickModel: { type: "string", label: "Quick voice model", default: "claude-sonnet-5-5" },
+    claudePath: { type: "string", label: "Claude Code binary for the quick voice", default: "" },
+    fillers: {
+      type: "string",
+      label: "Instant acknowledgements, one per line (empty = by spoken language)",
+      experimental_multiline: true,
+      default: "",
+    },
+    waitFillers: {
+      type: "string",
+      label: "Said once when a reply keeps you waiting, one per line (empty = by language)",
+      experimental_multiline: true,
+      default: "",
+    },
   });
 
   async function currentConfig(): Promise<EngineConfig> {
@@ -298,7 +369,140 @@ export default async function plugin(bb: BbPluginApi) {
       const id = await hostId();
       return host.call("voice.history.clear", {}, { hostId: id });
     },
+    speak: async ({ text }) => speak(text),
+    conversation_config: async () => {
+      const values = await settings.get();
+      if (values.quickVoice) {
+        // The resident model starts loading now, while the user says the first phrase.
+        void hostId()
+          .then((id) =>
+            host.call("voice.quick.warm", quickTarget(values), { hostId: id }),
+          )
+          .catch((error: unknown) => bb.log.warn(`quick voice did not start: ${String(error)}`));
+      }
+      return {
+        endOfSpeechMs: parsePositiveInt(values.endOfSpeechMs, 900),
+        bargeIn: values.bargeIn,
+        marker: values.conversationMarker.trim(),
+        quickVoice: values.quickVoice,
+      };
+    },
+    quick_reply: async ({ text, recent }): Promise<QuickReplyResult> => {
+      const values = await settings.get();
+      if (!values.quickVoice) return { ok: false, code: "off", message: "quick voice is off" };
+      const started = Date.now();
+      const history = recent
+        .map((line) => `${line.who === "user" ? "User" : "Agent"}: ${line.text}`)
+        .join("\n");
+      const prompt = [
+        history === "" ? "" : `Recent conversation, oldest first:\n${history}\n`,
+        `The user just said: «${text}»`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const answer = await host.call(
+        "voice.quick",
+        { prompt, ...quickTarget(values), timeoutMs: QUICK_TIMEOUT_MS },
+        { hostId: await hostId(), timeoutMs: QUICK_TIMEOUT_MS + 2_000 },
+      );
+      if (!answer.ok) return { ok: false, code: answer.code, message: answer.message };
+      const spoken = await speak(answer.text);
+      if (!spoken.ok) return { ok: false, code: spoken.code, message: spoken.message };
+      return {
+        ok: true,
+        text: answer.text,
+        quickMs: Date.now() - started,
+        clip: { text: answer.text, audioBase64: spoken.audioBase64, mimeType: spoken.mimeType },
+      };
+    },
+    fillers: async () => {
+      const values = await settings.get();
+      const russian = values.language !== "en";
+      const lines = (value: string, fallback: readonly string[]) => {
+        const listed = value
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        return listed.length > 0 ? listed : [...fallback];
+      };
+      const ack = lines(values.fillers, russian ? ACK_RU : ACK_EN);
+      const wait = lines(values.waitFillers, russian ? WAIT_RU : WAIT_EN);
+      return { ack: await clips(ack), wait: await clips(wait) };
+    },
+    conversation_log: async ({ entry }) => {
+      const kept = (await bb.storage.kv.get<ConversationTiming[]>(TIMING_KEY)) ?? [];
+      kept.push(entry);
+      await bb.storage.kv.set(TIMING_KEY, kept.slice(-TIMING_LIMIT));
+      return { ok: true as const };
+    },
   });
+
+  function quickTarget(values: { quickModel: string; claudePath: string }) {
+    return {
+      model: values.quickModel.trim() || "claude-sonnet-5-5",
+      claudePath: values.claudePath.trim() === "" ? null : values.claudePath.trim(),
+    };
+  }
+
+  /** Fillers are the same few phrases every time: synthesized once, kept in memory. */
+  const clipCache = new Map<string, SpokenClip>();
+  async function clips(texts: readonly string[]): Promise<SpokenClip[]> {
+    const out: SpokenClip[] = [];
+    for (const text of texts) {
+      let clip = clipCache.get(text);
+      if (clip === undefined) {
+        const spoken = await speak(text);
+        if (!spoken.ok) continue;
+        clip = { text, audioBase64: spoken.audioBase64, mimeType: spoken.mimeType };
+        clipCache.set(text, clip);
+      }
+      out.push(clip);
+    }
+    return out;
+  }
+
+  /**
+   * The speech service runs next to bb on this machine, outside bb's own
+   * process: the model holds about two gigabytes and takes two minutes to load,
+   * which is not something to restart with the plugin.
+   */
+  async function speak(text: string): Promise<SpeakResult> {
+    const base = (await settings.get()).speechServiceUrl.trim() || DEFAULT_SPEECH_SERVICE_URL;
+    let response: Response;
+    try {
+      response = await fetch(new URL("/synth", base), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text }),
+        signal: AbortSignal.timeout(SPEAK_TIMEOUT_MS),
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        code: "unreachable",
+        message: `speech service at ${base} did not answer: ${String(error)}`,
+      };
+    }
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      const code =
+        response.status === 400 ? "empty" : response.status === 503 ? "loading" : "failed";
+      return { ok: false, code, message: body.slice(0, 300) || `HTTP ${response.status}` };
+    }
+    const header = (name: string) => {
+      const value = Number(response.headers.get(name));
+      return Number.isFinite(value) && response.headers.has(name) ? value : null;
+    };
+    const spoken = response.headers.get("x-spoken-text");
+    return {
+      ok: true,
+      audioBase64: Buffer.from(await response.arrayBuffer()).toString("base64"),
+      mimeType: response.headers.get("content-type") ?? "audio/mpeg",
+      synthMs: header("x-synth-ms"),
+      audioMs: header("x-audio-ms"),
+      spokenText: spoken === null ? null : decodeURIComponent(spoken),
+    };
+  }
 
   // The panel plays audio through an <audio> element, which needs bytes at a
   // URL rather than a base64 string in an RPC reply.
@@ -364,6 +568,8 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb voice-ink show <id> [--json]     Show one dictation in full",
     "  bb voice-ink forget <id>|--all      Delete a dictation, or all of them",
     "  bb voice-ink enable                 Point bb's microphone at this plugin",
+    "  bb voice-ink say <text> [-o file]   Speak a phrase through the speech service",
+    "  bb voice-ink latency [--json] [-n N] Timings of recent conversation exchanges",
   ].join("\n");
 
   bb.cli.register({
@@ -401,6 +607,16 @@ export default async function plugin(bb: BbPluginApi) {
         name: "enable",
         summary: "Point bb's microphone at this plugin",
         usage: "bb voice-ink enable",
+      },
+      {
+        name: "say",
+        summary: "Speak a phrase through the speech service",
+        usage: "bb voice-ink say <text> [-o file.mp3] [--json]",
+      },
+      {
+        name: "latency",
+        summary: "Timings of recent conversation exchanges",
+        usage: "bb voice-ink latency [--json] [-n N]",
       },
     ],
     async run(argv) {
@@ -546,9 +762,99 @@ export default async function plugin(bb: BbPluginApi) {
             ].join("\n"),
           );
         }
+
+        case "say": {
+          const out = args.indexOf("-o");
+          const file = out === -1 ? null : (args[out + 1] ?? null);
+          const words = args.filter((_, index) => out === -1 || (index !== out && index !== out + 1));
+          const text = words.join(" ").trim();
+          if (text === "") break;
+          const started = Date.now();
+          const result = await speak(text);
+          if (!result.ok) return { exitCode: 1, stderr: `${result.code}: ${result.message}` };
+          if (file !== null) await writeFile(file, Buffer.from(result.audioBase64, "base64"));
+          const { audioBase64: _audio, ...meta } = result;
+          return reply(
+            { ...meta, wallMs: Date.now() - started, file },
+            [
+              `spoken: ${result.spokenText ?? text}`,
+              `audio ${result.audioMs ?? "?"} ms, synthesized in ${result.synthMs ?? "?"} ms, ` +
+                `${Date.now() - started} ms end to end`,
+              file === null ? "" : `saved to ${file}`,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          );
+        }
+
+        case "latency": {
+          const limitAt = args.indexOf("-n");
+          const limit = limitAt === -1 ? 20 : parsePositiveInt(args[limitAt + 1] ?? "", 20);
+          const kept = ((await bb.storage.kv.get<ConversationTiming[]>(TIMING_KEY)) ?? []).slice(
+            -limit,
+          );
+          if (kept.length === 0) {
+            return { exitCode: 1, stderr: "No conversation exchanges recorded yet." };
+          }
+          return reply(kept, formatTimings(kept));
+        }
       }
 
       return { exitCode: 1, stderr: usage };
     },
   });
 }
+
+/** Seconds with one decimal, or a dash for a step that did not happen. */
+function seconds(ms: number | null): string {
+  return ms === null ? "-" : (ms / 1000).toFixed(1);
+}
+
+function median(values: readonly number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? (sorted[middle] as number)
+    : ((sorted[middle - 1] as number) + (sorted[middle] as number)) / 2;
+}
+
+/**
+ * One row per exchange, all times in seconds from the end of the user's
+ * phrase, then the medians. "quick" is when the quick voice was heard and
+ * "voice" when the agent's own reply started.
+ */
+function formatTimings(entries: readonly ConversationTiming[]): string {
+  const header =
+    "time      words  ack    text   sent   quick  reply  1st    audio  voice  done   synth";
+  const rows = entries.map((entry) =>
+    [
+      new Date(entry.at).toTimeString().slice(0, 8),
+      String(entry.words).padStart(5),
+      seconds(entry.ackMs).padStart(6),
+      seconds(entry.transcribedMs).padStart(6),
+      seconds(entry.submittedMs).padStart(6),
+      seconds(entry.quickPlayingMs).padStart(6),
+      seconds(entry.firstTextMs).padStart(6),
+      seconds(entry.firstSentenceMs).padStart(6),
+      seconds(entry.firstAudioMs).padStart(6),
+      seconds(entry.playingMs).padStart(6),
+      seconds(entry.turnDoneMs).padStart(6),
+      seconds(entry.firstSynthMs).padStart(6),
+      entry.interrupted ? " interrupted" : "",
+    ].join(" "),
+  );
+  const pick = (key: keyof ConversationTiming) =>
+    median(
+      entries
+        .map((entry) => entry[key])
+        .filter((value): value is number => typeof value === "number"),
+    );
+  const summary = [
+    `median, s: text ${seconds(pick("transcribedMs"))}, sent ${seconds(pick("submittedMs"))}, ` +
+      `quick voice ${seconds(pick("quickPlayingMs"))}, reply ${seconds(pick("firstTextMs"))}, ` +
+      `first sentence ${seconds(pick("firstSentenceMs"))}, voice ${seconds(pick("playingMs"))}`,
+  ];
+  return [header, ...rows, "", ...summary].join("\n");
+}
+
