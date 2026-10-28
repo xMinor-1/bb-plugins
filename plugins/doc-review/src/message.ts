@@ -5,7 +5,9 @@
 import path from "node:path";
 import {
   anchorLabel,
+  anchorQuote,
   anchorPage,
+  draftReply,
   isDrawing,
   truncate,
   type DocKind,
@@ -150,7 +152,7 @@ export function buildHandoffMessage(input: {
   ];
   for (const comment of input.comments) {
     const label = anchorLabel(comment.anchor, input.kind);
-    const parts = [`[${comment.id}] ${label}`];
+    const parts = [`[${comment.id}] Comment #${comment.seq} · ${label}`];
     const imageNumber = input.imageNumbers.get(comment.id);
     const imagePath = input.imagePaths.get(comment.id);
     if (imageNumber !== undefined) parts.push(`image ${imageNumber} attached`);
@@ -204,4 +206,22 @@ export function buildHandoffMessage(input: {
     `If you cannot apply one or need an answer first, reply instead: \`bb ${CLI_NAME} reply <id> --note "question or reason"\`.`,
   );
   return lines.join("\n");
+}
+
+/** Keep source coordinates and agent instructions out of the chat bubble. */
+export function buildHandoffInput(input: Parameters<typeof buildHandoffMessage>[0]) {
+  const name = input.kind === "web" ? input.absPath.replace(/^https?:\/\//, "") : path.posix.basename(input.absPath.replace(/\\/g, "/"));
+  const lines = [`**Комментарии к ${name.replace(/[\\`*_{}\[\]<>]/g, "\\$&")} · ${input.comments.length}**`, ""];
+  input.comments.forEach((comment) => {
+    const imageNumber = input.imageNumbers.get(comment.id);
+    const image = imageNumber === undefined ? "" : ` · ${isDrawing(comment.anchor) ? "рисунок" : "область"} ниже`;
+    lines.push(`**Комментарий №${comment.seq}${image}**`, "");
+    lines.push((draftReply(comment)?.body ?? comment.body).trim(), "");
+    const quote = anchorQuote(comment.anchor)?.replace(/\s+/g, " ").trim();
+    if (quote) lines.push(`> ${truncate(quote, 180).replace(/[\\`*_{}\[\]<>]/g, "\\$&")}`, "");
+  });
+  return [
+    { type: "text" as const, text: lines.join("\n").trim(), mentions: [] },
+    { type: "text" as const, text: buildHandoffMessage(input), mentions: [], visibility: "agent-only" as const },
+  ];
 }

@@ -20,9 +20,13 @@ import { HTML_EXTENSIONS, MARKDOWN_EXTENSIONS } from "./src/types";
 import { AttachmentTab } from "./ui/attachment-tab";
 import { ReviewOpener } from "./ui/review-opener";
 import { PANEL_PATH, ReviewsPage } from "./ui/reviews-page";
+import { SelectionQuote } from "./ui/selection-quote";
+import { mountDrawingCaptions } from "./ui/drawing-captions";
 import { WebReviewAction } from "./ui/web-review";
 
 export default definePluginApp((app) => {
+  app.contentScripts.register({ id: "drawing-captions", mount: mountDrawingCaptions });
+  app.slots.experimental_threadHeaderAction({ id: "selection-quote", title: "Цитирование пользовательских сообщений", component: SelectionQuote });
   app.slots.fileOpener({
     id: "review",
     title: "Doc Review (view and comment)",

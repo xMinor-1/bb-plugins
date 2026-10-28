@@ -82,4 +82,20 @@ describe("LeaseCache", () => {
     expect(a.closed).toBe(true);
     expect(cache.size).toBe(0);
   });
+
+  it("expires a continuously used value without closing its active lease", async () => {
+    let now = 0;
+    const cache = new LeaseCache<Resource>({ maxEntries: 2, idleMs: 100, maxAgeMs: 200, now: () => now });
+    const open = () => Promise.resolve(new Resource("a"));
+    const first = await cache.use("a", open, async (value) => value);
+    now = 90;
+    expect(await cache.use("a", open, async (value) => value)).toBe(first);
+    now = 180;
+    await cache.use("a", open, async (held) => {
+      now = 200;
+      expect(await cache.use("a", open, async (value) => value)).not.toBe(held);
+      expect(held.closed).toBe(false);
+    });
+    expect(first.closed).toBe(true);
+  });
 });

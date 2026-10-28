@@ -162,7 +162,9 @@ export function HtmlDoc({
   onRequestComment,
   onSelectComment,
   onDetached,
+  onOpenFile,
 }: {
+  onOpenFile: (href: unknown) => void;
   url: string;
   name: string;
   mode: PageMode;
@@ -231,8 +233,8 @@ export function HtmlDoc({
   );
 
   // Messages from the bridge.
-  const latest = useRef({ commentOn, onRequestComment, onSelectComment, onDetached, pointFor, button, mode, tool, comments, activeId, pendingAnchor });
-  latest.current = { commentOn, onRequestComment, onSelectComment, onDetached, pointFor, button, mode, tool, comments, activeId, pendingAnchor };
+  const latest = useRef({ commentOn, onRequestComment, onSelectComment, onDetached, onOpenFile, pointFor, button, mode, tool, comments, activeId, pendingAnchor });
+  latest.current = { commentOn, onRequestComment, onSelectComment, onDetached, onOpenFile, pointFor, button, mode, tool, comments, activeId, pendingAnchor };
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;
@@ -240,6 +242,9 @@ export function HtmlDoc({
       if (!data || data.docReview !== 1) return;
       const { commentOn, onSelectComment, onDetached, pointFor, button } = latest.current;
       switch (data.type) {
+        case "file-link":
+          latest.current.onOpenFile(data.href);
+          break;
         case "ready": {
           // A bridge announces itself when its page starts and answers each
           // hello; a new session in the same frame is the page loading again.

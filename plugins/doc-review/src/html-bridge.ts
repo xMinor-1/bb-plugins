@@ -355,6 +355,8 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
       revealRect(outerRect(element, data.rect));
     } else if (data.type === "select") {
       post({ type: "select", id: data.id });
+    } else if (data.type === "file-link") {
+      post({ type: "file-link", href: data.href });
     } else if (data.type === "escape") {
       post({ type: "escape" });
     } else if (data.type === "hits-result" || data.type === "serialized") {
@@ -1052,6 +1054,28 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
       schedulePaint();
       post({ type: "element", anchor: elementAnchor(element), rect: toRect(element.getBoundingClientRect()) });
       return;
+    }
+    if (mode === "text") {
+      var link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+      var href = link && link.getAttribute("href");
+      if (link && (link.getAttribute("target") || "").toLowerCase() === "_blank") return;
+      if (href && !link.hasAttribute("download")) {
+        href = href.trim();
+        if (href.charAt(0) === "#") {
+          event.preventDefault();
+          var id = href.slice(1);
+          try { id = decodeURIComponent(id); } catch (error) { /* keep the literal id */ }
+          var target = document.getElementById(id) || document.getElementsByName(id)[0];
+          if (target) target.scrollIntoView();
+          return;
+        }
+        if (href && !/^[#?\/\\]|^[a-z][a-z0-9+.-]*:/i.test(href)) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          post({ type: "file-link", href: href });
+          return;
+        }
+      }
     }
     // A click on highlighted text opens its comment.
     var selection = window.getSelection();

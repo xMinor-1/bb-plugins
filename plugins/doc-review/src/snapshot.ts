@@ -63,6 +63,7 @@ export async function findChrome(configured: string): Promise<string | null> {
 }
 
 export interface PageShot {
+  label?: string;
   html: string;
   /** Folder the page's relative files load from; null when it is not on this machine. */
   folder: string | null;
@@ -274,7 +275,18 @@ async function capture(executable: string, pageUrl: string, profile: string, sho
       clip ? { format: "png", clip: { ...clip, scale: 1 }, captureBeyondViewport: true } : { format: "png" },
       sessionId,
     );
-    return Buffer.from(picture.data, "base64");
+    if (!shot.label) return Buffer.from(picture.data, "base64");
+    const labelled = await send<{ result: { value?: string }; exceptionDetails?: unknown }>("Runtime.evaluate", {
+      expression: `(async function(data, label) {
+        const image = new Image(); image.src = 'data:image/png;base64,' + data; await image.decode();
+        const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight + 44;
+        const ctx = canvas.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#243247'; ctx.font = 'bold 20px sans-serif'; ctx.fillText(label, 16, 29, canvas.width - 32);
+        ctx.drawImage(image, 0, 44); return canvas.toDataURL('image/png').split(',')[1];
+      })(${JSON.stringify(picture.data)}, ${JSON.stringify(shot.label)})`, awaitPromise: true, returnByValue: true,
+    }, sessionId);
+    if (!labelled.result?.value || labelled.exceptionDetails) throw new Error("Could not label the drawing image.");
+    return Buffer.from(labelled.result.value, "base64");
   } finally {
     clearTimeout(timer);
     // Wait for Chrome to let go of its profile before the folder is removed.

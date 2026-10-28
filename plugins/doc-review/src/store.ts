@@ -186,7 +186,13 @@ export class ReviewStore {
   constructor(private readonly db: Db) {}
 
   upsertDoc(hostId: string | null, absPath: string, kind: DocKind): DocRow {
-    const id = docIdFor(hostId, absPath);
+    // Windows separators identify the same file; keep its existing comment ids.
+    const existing = /^[a-z]:[\\/]/i.test(absPath)
+      ? this.db.prepare(`SELECT * FROM docs WHERE host_id IS ? AND replace(abs_path, char(92), '/') = ? ORDER BY created_at, id LIMIT 1`)
+          .get(hostId, absPath.replace(/\\/g, "/")) as RawDoc | undefined
+      : undefined;
+    if (existing) absPath = existing.abs_path;
+    const id = existing?.id ?? docIdFor(hostId, absPath);
     const now = Date.now();
     this.db
       .prepare(

@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { buildShared } from "./share";
@@ -164,4 +165,18 @@ describe("comments from another reviewer", () => {
     expect(comment!.originFile).toBe("deck.pptx");
     expect(comment!.thread[0]!.name).toBe("Reviewer");
   });
+});
+
+it("keeps Windows document identity across separators and isolates hosts", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    for (const sql of MIGRATIONS) db.exec(sql);
+    const store = new ReviewStore(db as unknown as Db);
+    const original = store.upsertDoc("windows", "D:\\Reports/audit.html", "html");
+    expect(store.upsertDoc("windows", "D:/Reports/audit.html", "html")).toEqual(original);
+    expect(store.upsertDoc("another-host", "D:/Reports/audit.html", "html").id).not.toBe(original.id);
+    expect(db.prepare("SELECT count(*) AS count FROM docs").get()?.count).toBe(2);
+  } finally {
+    db.close();
+  }
 });

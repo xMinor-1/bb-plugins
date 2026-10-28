@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
 import { BRIDGE_SCRIPT, declaredCharset, injectIntoHtml } from "./html-bridge";
 import { buildHandoffMessage } from "./message";
 import { docKindFor, type ReviewComment } from "./types";
@@ -120,6 +121,26 @@ describe("injectIntoHtml", () => {
 });
 
 describe("the bridge script", () => {
+  it("leaves blank links to the browser and routes ordinary relative links to BB", () => {
+    const listeners = new Map<string, (event: any) => void>();
+    const messages: any[] = [];
+    runInNewContext(BRIDGE_SCRIPT, {
+      window: { parent: { postMessage: (message: any) => messages.push(message) }, addEventListener: (type: string, handler: any) => listeners.set(type, handler) },
+      document: { readyState: "loading", addEventListener: () => {} },
+    });
+    for (const target of ["_blank", "_BLANK", ""]) {
+      messages.length = 0;
+      let prevented = false;
+      const link = { getAttribute: (key: string) => key === "href" ? "details.html" : target, hasAttribute: () => false };
+      listeners.get("click")!({
+        target: { nodeType: 1, closest: (selector: string) => selector === "a[href]" ? link : null },
+        preventDefault: () => { prevented = true; }, stopImmediatePropagation: () => {},
+      });
+      expect(prevented).toBe(target === "");
+      expect(messages.map((message) => message.type)).toEqual(target === "" ? ["file-link"] : []);
+    }
+  });
+
   it("parses as a script", () => {
     expect(() => new Function(BRIDGE_SCRIPT)).not.toThrow();
   });
@@ -164,8 +185,8 @@ describe("HTML comments", () => {
       imageNumbers: new Map(),
       imagePaths: new Map(),
     });
-    expect(message).toContain("[c_text] Text · «20% discount» · `main > p:nth-of-type(2)`");
-    expect(message).toContain("[c_elem] Element <button> · text: «Buy now» · `#buy`");
+    expect(message).toContain("[c_text] Comment #1 · Text · «20% discount» · `main > p:nth-of-type(2)`");
+    expect(message).toContain("[c_elem] Comment #2 · Element <button> · text: «Buy now» · `#buy`");
     expect(message).toContain('HTML: `<button id="buy" class="cta">Buy now</button>`');
     expect(message).toContain("HTML page");
     expect(message).not.toContain("in frame");
@@ -194,7 +215,7 @@ describe("HTML comments", () => {
       imageNumbers: new Map(),
       imagePaths: new Map(),
     });
-    expect(message).toContain("[c_frame] Text · «Pickup» · in frame `#desk` · `h1`");
+    expect(message).toContain("[c_frame] Comment #1 · Text · «Pickup» · in frame `#desk` · `h1`");
     expect(message).toContain("`srcdoc`");
   });
 });

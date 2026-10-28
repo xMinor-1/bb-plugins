@@ -11,6 +11,7 @@ export interface Closable {
 
 interface Entry<T extends Closable> {
   value: Promise<T>;
+  createdAtMs: number;
   usedAtMs: number;
   leases: number;
   evicted: boolean;
@@ -20,11 +21,13 @@ export class LeaseCache<T extends Closable> {
   readonly #entries = new Map<string, Entry<T>>();
   readonly #maxEntries: number;
   readonly #idleMs: number;
+  readonly #maxAgeMs: number;
   readonly #now: () => number;
 
-  constructor(options: { maxEntries: number; idleMs: number; now?: () => number }) {
+  constructor(options: { maxEntries: number; idleMs: number; maxAgeMs?: number; now?: () => number }) {
     this.#maxEntries = options.maxEntries;
     this.#idleMs = options.idleMs;
+    this.#maxAgeMs = options.maxAgeMs ?? Infinity;
     this.#now = options.now ?? Date.now;
   }
 
@@ -41,7 +44,8 @@ export class LeaseCache<T extends Closable> {
     this.sweep();
     let entry = this.#entries.get(key);
     if (!entry) {
-      entry = { value: open(), usedAtMs: this.#now(), leases: 0, evicted: false };
+      const now = this.#now();
+      entry = { value: open(), createdAtMs: now, usedAtMs: now, leases: 0, evicted: false };
       this.#entries.set(key, entry);
       const opened = entry;
       opened.value.catch(() => {
@@ -63,11 +67,11 @@ export class LeaseCache<T extends Closable> {
     }
   }
 
-  /** Evicts entries idle past the limit. */
+  /** Evicts idle or expired entries; active leases stay open until released. */
   sweep(): void {
     const now = this.#now();
     for (const [key, entry] of this.#entries) {
-      if (entry.leases === 0 && now - entry.usedAtMs > this.#idleMs) {
+      if (now - entry.createdAtMs >= this.#maxAgeMs || (entry.leases === 0 && now - entry.usedAtMs > this.#idleMs)) {
         this.#evict(key, entry);
       }
     }

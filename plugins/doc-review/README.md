@@ -347,7 +347,75 @@ bb doc-review import "deck (comments).pdf" --into deck.pptx
 ```sh
 npm install
 npm test           # vitest: formats, conversions, caches, workbook readers, anchors, exports
-npx tsc --noEmit
-bb plugin build .
-bb plugin dev .    # rebuild + reload on save
+npm run typecheck
+npm run build
+npm run dev        # rebuild + reload on save
 ```
+
+For local development, install this directory with `bb plugin install path:. --yes`
+first. These commands work in PowerShell as well as Unix shells. If the bb
+server runs on another machine, keep a checkout there and install that checkout's
+path. Transfer committed changes with Git. To keep builds off the server, build
+on the development machine, copy the generated `dist` directory into the server's
+checkout, and run `bb plugin reload doc-review`. A watcher is optional and builds
+on the machine where it runs.
+
+### Local links in HTML reports
+
+In Text mode, relative file links open in BB's preview panel on the report's
+host. Links with `target="_blank"` keep the browser's native new-tab behavior,
+using the document's preview URL to resolve relative paths. Paths are relative to the HTML
+file: `other.html`, `../screens/example.png`, or `../../src/app.ts#L12`.
+Spaces and percent-encoded names are supported; `:12:3` and `#L12C3` select a
+line and column in code. Links to `#section` scroll inside the report.
+External URLs and download links keep their ordinary browser behavior.
+
+Comments sent to the current chat default to queued delivery: if the agent is busy,
+the message waits until its current work finishes. If the chat is idle, it
+starts immediately. The send dropdown also offers immediate delivery to direct
+the agent's current work, or a new chat. The last used option is remembered in
+this browser and shown on the main send button. Sending comments to a new chat starts that new chat.
+
+The chat message shows the document name, comment count, requests and short
+quotes. File paths, selectors, comment IDs and handling instructions are sent
+in a separate `agent-only` text input. Copying the hand-off prompt still includes
+the complete instructions.
+Comment numbers always match their permanent document numbers, even when only
+a subset is sent. New drawing images have a header with that number and the
+document name, and uploaded filenames also carry the number.
+The frontend adds readable comment numbers under Doc Review attachment thumbnails
+in chat. This uses a disposable plugin content script; BB's image viewer and click
+handlers stay unchanged. In the Doc Review panel, drawing previews open in a
+dialog with the full image, a comment title and keyboard dismissal.
+
+HTML drawing snapshots are captured by Chrome on the document's host, where
+its local images and styles are available. The marked snapshot is attached as
+a visible image in chat. A missing capture, unavailable Chrome or failed image
+upload reports an error instead of silently sending a drawing without its image.
+
+Selecting text in a user message (including sent comments) shows **Цитировать**
+beside the selection. It inserts a Markdown quote into that thread's composer
+without sending. Assistant messages keep BB's own selection menu. The plugin
+adds no per-message action button and does not change BB core.
+
+### Remote document performance
+
+Version checks use file size and modification/change timestamps on the file's
+own machine through the plugin's host entry. Native directory watches invalidate
+cached versions; host disconnects, reconnects and worker exits clear the cache.
+Watches expire after five minutes and are limited to 64 files. Checks do not read
+or transfer the document body. The visible panel checks every four seconds, with at most one
+request in flight; closed documents ignore late responses. Permission and
+connection errors remain errors. HTML content is read once when its page is
+served, including any embedded images. Files whose content and filesystem
+metadata are deliberately restored to identical values cannot be distinguished
+by this metadata check.
+
+HTML opens directly from the URL returned by `doc.open`, without another
+`doc.html` RPC. The server reuses up to two prepared document versions for
+five minutes of inactivity and negotiates gzip for the response. Active entries
+expire after 55 minutes, before their one-hour folder preview leases. Each open still checks
+host connectivity and the watched version; a changed version gets a different URL and body.
+Responses retain the HTML sandbox, `nosniff`, and `no-store`. The cache holds
+immutable versions, not an offline copy of the latest file. A first open of a
+remote file still depends on the host connection and transfer speed.

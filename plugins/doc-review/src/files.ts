@@ -8,6 +8,9 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { z } from "zod";
 import type { openerSourceSchema } from "./contract.js";
 import type { DocRow } from "./store.js";
+import { fileVersion } from "./file-version.js";
+import { hostContract, hostSignals } from "./host-contract.js";
+import type { PageShot } from "./snapshot.js";
 
 export type OpenerSource = z.infer<typeof openerSourceSchema>;
 
@@ -24,6 +27,29 @@ export function joinPath(root: string, relative: string): string {
 
 export class DocFiles {
   private localHostIdPromise: Promise<string | null> | null = null;
+  private readonly versions = new Map<string, string | null>();
+  private readonly versionRequests = new Map<string, Promise<string | null>>();
+  private revision = 0;
+  private versionClient: import("@get-bb/plugin-sdk").ExperimentalHostClient<typeof hostContract, typeof hostSignals> | null = null;
+
+  private remoteVersions() {
+    if (this.versionClient) return this.versionClient;
+    const client = this.bb.hosts.experimental_client({ contract: hostContract, experimental_signals: hostSignals });
+    const invalidate = () => { this.revision++; this.versions.clear(); };
+    const subscriptions = [
+      client.experimental_onSignal("changed", ({ hostId, payload }) => {
+        this.revision++;
+        this.versions.delete(JSON.stringify([hostId, payload.path]));
+      }),
+      client.experimental_onWorkerExit(invalidate),
+      this.bb.sdk.subscribe({ event: "host:changed", callback: invalidate }),
+      this.bb.sdk.subscribe({ event: "realtime:connection", callback: invalidate }),
+    ];
+    this.bb.onDispose(() => { subscriptions.forEach((stop) => stop()); invalidate(); });
+    this.versionClient = client;
+    return client;
+  }
+
 
   constructor(
     private readonly bb: BbPluginApi,
@@ -92,7 +118,8 @@ export class DocFiles {
     }
     // "~/…" is a convenience for paths typed on the Doc Review page.
     if (rawPath === "~" || rawPath.startsWith("~/")) rawPath = path.posix.join(homedir(), rawPath.slice(1));
-    if (!path.posix.isAbsolute(rawPath)) throw new Error("Expected an absolute path.");
+    const windowsPath = path.win32.isAbsolute(rawPath) && !path.posix.isAbsolute(rawPath);
+    if (!windowsPath && !path.posix.isAbsolute(rawPath)) throw new Error("Expected an absolute path.");
     let hostId: string | null = source.experimental_hostId ?? null;
     if (!hostId && source.environmentId) {
       const environment = await this.bb.sdk.environments.get({
@@ -100,23 +127,44 @@ export class DocFiles {
       });
       hostId = environment.hostId;
     }
-    return { absPath: path.posix.normalize(rawPath), hostId: await this.canonicalHost(hostId) };
+    return {
+      absPath: windowsPath ? path.win32.normalize(rawPath).replace(/\\/g, "/") : path.posix.normalize(rawPath),
+      hostId: await this.canonicalHost(hostId),
+    };
   }
 
-  /**
-   * A cheap change token. Local files use size and mtime; remote files use
-   * the content hash bb reports.
-   */
+  /** Metadata only, on the machine that owns the file. */
   async version(doc: DocRow): Promise<string | null> {
-    if (doc.hostId === null) {
-      const info = await stat(doc.absPath).catch(() => null);
-      if (!info?.isFile()) return null;
-      return `m${Math.round(info.mtimeMs)}-s${info.size}`;
+    if (doc.hostId === null) return fileVersion(doc.absPath);
+    const host = await this.bb.sdk.hosts.get({ hostId: doc.hostId });
+    if (host.status !== "connected") {
+      this.versions.clear();
+      throw new Error("The file's host is not connected.");
     }
-    const file = await this.bb.sdk.files
-      .read({ hostId: doc.hostId, path: doc.absPath })
-      .catch(() => null);
-    return file ? `h${file.sha256.slice(0, 16)}` : null;
+    const client = this.remoteVersions();
+    const key = JSON.stringify([doc.hostId, doc.absPath]);
+    if (this.versions.has(key)) return this.versions.get(key)!;
+    let pending = this.versionRequests.get(key);
+    if (!pending) {
+      const revision = this.revision;
+      pending = client.call("fileVersion", { path: doc.absPath }, { hostId: doc.hostId }).then((version) => {
+        if (this.revision === revision) {
+          if (this.versions.size >= 64) this.versions.delete(this.versions.keys().next().value!);
+          this.versions.set(key, version);
+        }
+        return version;
+      }).finally(() => { this.versionRequests.delete(key); });
+      this.versionRequests.set(key, pending);
+    }
+    return pending;
+  }
+
+  /** Capture the drawing where the document's local assets and browser live. */
+  async drawing(doc: DocRow, shot: PageShot): Promise<Buffer> {
+    if (!doc.hostId || !shot.folder) throw new Error("Expected a remote drawing's host and folder.");
+    if (!shot.label) throw new Error("Expected a drawing's comment label.");
+    const data = await this.remoteVersions().call("drawing", { ...shot, label: shot.label, folder: shot.folder }, { hostId: doc.hostId });
+    return Buffer.from(data, "base64");
   }
 
   /** The file's bytes, from this machine or the host it lives on. */

@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import {
   useBbContext,
   useBbNavigate,
+  useSdk,
   type PluginFileOpenerProps,
   type PluginFileOpenerSource,
 } from "@get-bb/plugin-sdk/app";
@@ -42,6 +43,8 @@ import {
 } from "../src/types";
 import { CommentEditor } from "./comment-editor";
 import { CommentList, type CommentActions } from "./comment-list";
+import { htmlFileLink } from "./html-links";
+import { readSendChoice, writeSendChoice, type SendChoice } from "./send-choice";
 import { HtmlDoc } from "./html-doc";
 import { MarkdownDoc, type MarkdownDocument, type Point } from "./markdown-doc";
 import { documentRoot } from "./md-blocks";
@@ -128,7 +131,8 @@ function useDocContent(doc: ReviewDoc) {
         return { kind: "md", ...(await rpc.call("doc.markdown", { docId: doc.id })) };
       }
       if (doc.kind === "html") {
-        return { kind: "html", ...(await rpc.call("doc.html", { docId: doc.id })) };
+        if (!doc.htmlUrl) throw new Error("Missing HTML document URL.");
+        return { kind: "html", version: doc.version, url: doc.htmlUrl };
       }
       // A live site is reviewed in bb's browser; here are only its comments.
       if (doc.kind === "web") return { kind: "web", version: doc.version };
@@ -200,10 +204,17 @@ function SendMenu({
   canSendHere: boolean;
   busy: boolean;
   compact: boolean;
-  onSend: (target: "thread" | "new") => void;
+  onSend: (target: SendChoice) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [choice, setChoice] = useState(() => readSendChoice(window.localStorage));
   const box = useRef<HTMLDivElement>(null);
+  const submit = (next: SendChoice) => {
+    writeSendChoice(window.localStorage, next);
+    setChoice(next);
+    setOpen(false);
+    onSend(next);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -220,7 +231,8 @@ function SendMenu({
   }, [open]);
 
   const disabled = count === 0 || busy;
-  const primary: "thread" | "new" = canSendHere ? "thread" : "new";
+  const primary = canSendHere ? choice : "new";
+  const label = primary === "queue" ? "Queue to chat" : primary === "immediate" ? "Send now" : "Send to new chat";
   return (
     <div ref={box} className="relative flex">
       <Button
@@ -228,11 +240,11 @@ function SendMenu({
         size="sm"
         className="rounded-r-none"
         disabled={disabled}
-        onClick={() => onSend(primary)}
-        aria-label={primary === "thread" ? "Send the drafts to this chat" : "Start a new chat with the drafts"}
+        onClick={() => submit(primary)}
+        aria-label={label}
       >
         {busy ? <Icon name="Loading" className="size-3.5 animate-spin" /> : <Icon name="Sent" className="size-3.5" />}
-        {compact ? "Send" : primary === "thread" ? "Send to chat" : "Send to new chat"}
+        {compact ? primary === "queue" ? "Queue" : "Send" : label}
         {count > 0 ? <span className="tabular-nums opacity-80">{count}</span> : null}
       </Button>
       <Button
@@ -253,21 +265,28 @@ function SendMenu({
             disabled={!canSendHere}
             className="flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
             onClick={() => {
-              setOpen(false);
-              onSend("thread");
+              submit("queue");
             }}
           >
-            <span>To this chat</span>
+            <span>Queue to this chat</span>
             <span className="text-xs text-muted-foreground">
-              {canSendHere ? "The agent here gets them as the next message" : "Open the file from a chat to use this"}
+              {canSendHere ? "Queued until the agent finishes its current work" : "Open the file from a chat to use this"}
             </span>
+          </button>
+          <button
+            type="button"
+            disabled={!canSendHere}
+            className="flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+            onClick={() => submit("immediate")}
+          >
+            <span>Send to this chat now</span>
+            <span className="text-xs text-muted-foreground">Direct the agent's current work immediately</span>
           </button>
           <button
             type="button"
             className="flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left hover:bg-accent"
             onClick={() => {
-              setOpen(false);
-              onSend("new");
+              submit("new");
             }}
           >
             <span>To a new chat</span>
@@ -320,6 +339,7 @@ export function Workspace({
 }) {
   const rpc = useReviewRpc();
   const navigate = useBbNavigate();
+  const sdk = useSdk();
   const context = useBbContext();
   const threadId = context.threadId ?? source.threadId ?? null;
   // Keyed on values: a new object would re-render every Markdown block.
@@ -415,21 +435,16 @@ export function Workspace({
   }, []);
 
   const create = async (anchor: Anchor, body: string, capture?: Capture): Promise<ReviewComment | null> => {
-    const save = (withCapture: boolean) =>
+    const save = () =>
       rpc.call("comments.create", {
         docId: doc.id,
         anchor,
         body,
         docVersion: doc.version,
-        ...(withCapture && capture ? { capture } : {}),
+        ...(capture ? { capture } : {}),
       });
     try {
-      // A page too large to send still gets its drawing saved, without the picture.
-      const comment = await save(true).catch((cause: unknown) => {
-        if (!capture) throw cause;
-        toast.warning("The drawing is saved without a picture of the page.");
-        return save(false);
-      });
+      const comment = await save();
       setComments((current) =>
         current && !current.some((item) => item.id === comment.id) ? [...current, comment] : current,
       );
@@ -484,15 +499,15 @@ export function Workspace({
     },
   };
 
-  const send = async (target: "thread" | "new") => {
+  const send = async (target: SendChoice) => {
     if (drafts.length === 0 || sending) return;
     setSending(true);
     const count = drafts.length;
     const noun = count === 1 ? "comment" : "comments";
     try {
-      if (target === "thread") {
+      if (target !== "new") {
         if (!threadId) throw new Error("Open this file from a chat to send comments there.");
-        await rpc.call("comments.send", { docId: doc.id, target: { kind: "thread", threadId } });
+        await rpc.call("comments.send", { docId: doc.id, target: { kind: "thread", threadId, mode: target === "immediate" ? "steer-if-active" : "queue-if-active" } });
         toast.success(`Sent ${count} ${noun} to this chat`);
       } else {
         try {
@@ -629,6 +644,17 @@ export function Workspace({
     </Centered>
   ) : content.kind === "html" ? (
     <HtmlDoc
+      onOpenFile={(href) => {
+        const target = htmlFileLink(href, doc.absPath);
+        if (!target) { toast.error("Invalid relative file link."); return; }
+        void (async () => {
+          const hostId = doc.hostId ?? (await sdk.system.config()).primaryHostId;
+          if (!hostId || !navigate.experimental_openFilePreview({
+            target: { kind: "host", hostId, path: target.path },
+            location: target.location,
+          })) throw new Error("Could not open this file in BB.");
+        })().catch((error: unknown) => toast.error(errorText(error)));
+      }}
       url={content.url}
       name={doc.name}
       mode={mode}

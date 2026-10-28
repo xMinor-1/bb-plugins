@@ -28,7 +28,7 @@ const MAX_STROKES = 60;
 /** Coordinates per stroke: 2000 points. */
 const MAX_STROKE_NUMBERS = 4000;
 
-const strokeSchema = (coordinate: z.ZodNumber) =>
+export const strokeSchema = (coordinate: z.ZodNumber) =>
   z
     .object({
       tool: z.enum(DRAW_TOOLS),
@@ -187,6 +187,7 @@ const docSchema = z.object({
   absPath: z.string(),
   hostId: z.string().nullable(),
   version: z.string(),
+  htmlUrl: z.string().nullable(),
 });
 
 export const openerSourceSchema = z
@@ -244,7 +245,7 @@ const recentSchema = z.object({
 });
 
 const sendTargetSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("thread"), threadId: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("thread"), threadId: z.string().min(1), mode: z.enum(["queue-if-active", "steer-if-active"]).optional() }).strict(),
   z
     .object({
       kind: z.literal("new-thread"),

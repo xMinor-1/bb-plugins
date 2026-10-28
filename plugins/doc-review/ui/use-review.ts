@@ -59,22 +59,29 @@ export function useDocVersion(doc: ReviewDoc | null, setDoc: Dispatch<SetStateAc
   const rpc = useReviewRpc();
   const docId = doc?.id ?? null;
   const version = doc?.version ?? null;
+  const inFlight = useRef(false);
   useEffect(() => {
     if (!docId) return;
+    let alive = true;
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible" || inFlight.current) return;
+      inFlight.current = true;
       rpc.call("doc.version", { docId }).then(
         (result) => {
-          if (result.version && result.version !== version) {
+          if (alive && result.version && result.version !== version) {
             setDoc((current) =>
-              current && current.id === docId ? { ...current, version: result.version! } : current,
+              current && current.id === docId ? {
+                ...current,
+                version: result.version!,
+                htmlUrl: current.htmlUrl?.replace(/([?&]v=)[^&]*/, (_match, prefix: string) => prefix + encodeURIComponent(result.version!)) ?? null,
+              } : current,
             );
           }
         },
         () => undefined,
-      );
+      ).finally(() => { inFlight.current = false; });
     }, VERSION_POLL_MS);
-    return () => window.clearInterval(timer);
+    return () => { alive = false; window.clearInterval(timer); };
   }, [rpc, docId, version, setDoc]);
 }
 

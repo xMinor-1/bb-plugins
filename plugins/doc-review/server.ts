@@ -9,6 +9,9 @@
 // in this plugin's SQLite database; the reviewed file is never modified by
 // the plugin. Agents report back with the `bb doc-review` command, and every
 // change reaches open panels through a realtime signal.
+import { gzip } from "node:zlib";
+import { promisify } from "node:util";
+import { LeaseCache } from "./src/lease-cache.js";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -21,7 +24,7 @@ import { createAttachments } from "./src/attachments.js";
 import { createExchange } from "./src/exchange.js";
 import { DocFiles } from "./src/files.js";
 import { BRIDGE_SCRIPT, HTML_SANDBOX, injectIntoHtml } from "./src/html-bridge.js";
-import { buildHandoffMessage } from "./src/message.js";
+import { buildHandoffInput, buildHandoffMessage } from "./src/message.js";
 import { Renderer, renderWidth, type PageSize } from "./src/render.js";
 import { findChrome, PageCamera } from "./src/snapshot.js";
 import { MIGRATIONS, ReviewStore, type Db, type DocRow } from "./src/store.js";
@@ -52,6 +55,7 @@ const CHANGED = "review-changed";
 const PAGE_ROUTE = "/page";
 const HTML_ROUTE = "/html";
 const DRAWING_ROUTE = "/drawing";
+const gzipAsync = promisify(gzip);
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff]);
 /** Screenshots of live pages wait this long for their drawing comment. */
@@ -111,6 +115,10 @@ export default async function plugin(bb: BbPluginApi) {
   const store = new ReviewStore(database as unknown as Db);
   const dataDir = path.dirname(database.name);
   const files = new DocFiles(bb, dataDir);
+  const htmlPages = new LeaseCache<{
+    body: Buffer; compressed: Buffer; contentType: string; close(): void;
+  }>({ maxEntries: 2, idleMs: 5 * 60 * 1000, maxAgeMs: 55 * 60 * 1000 });
+  bb.onDispose(() => htmlPages.clear());
   const renderer = new Renderer(dataDir);
 
   const settings = bb.settings.define({
@@ -165,27 +173,38 @@ export default async function plugin(bb: BbPluginApi) {
     return { ...comment, imageUrl: `/api/v1/plugins/${bb.pluginId}/http${DRAWING_ROUTE}?c=${comment.id}` };
   }
 
-  /** Makes and keeps the picture of a new drawing; a drawing without one still works. */
+  /** Capture a new drawing with its permanent document comment number. */
   async function saveDrawing(doc: DocRow, comment: ReviewComment, capture: Capture): Promise<void> {
     const anchor = comment.anchor;
     let bytes: Buffer | null = null;
+    const label = `Комментарий №${comment.seq} · ${path.posix.basename(doc.absPath.replace(/\\/g, "/"))}`.slice(0, 200);
+    const photograph = (shot: import("./src/snapshot.js").PageShot) => doc.hostId === null ? camera.shoot(shot) : files.drawing(doc, shot);
     if (capture.kind === "png") {
       const data = Buffer.from(capture.data.replace(/^data:image\/png;base64,/, ""), "base64");
-      if (data.subarray(0, 8).equals(PNG_SIGNATURE)) bytes = data;
+      if (!data.subarray(0, 8).equals(PNG_SIGNATURE) || data.length < 24) throw new Error("Expected a PNG drawing capture.");
+      const w = data.readUInt32BE(16), h = data.readUInt32BE(20);
+      if (w < 1 || h < 1 || w > 20000 || h > 20000 || w * h > 16_000_000) throw new Error("The drawing image is too large.");
+      bytes = await photograph({ label, folder: path.posix.dirname(doc.absPath.replace(/\\/g, "/")),
+        html: `<html><body style="margin:0"><img style="display:block" src="data:image/png;base64,${data.toString("base64")}"></body></html>`,
+        viewport: { w, h }, scroll: { x: 0, y: 0 }, strokes: [],
+      });
     } else if (capture.kind === "shot") {
       bytes = shots.get(capture.token)?.bytes ?? null;
       shots.delete(capture.token);
     } else if (anchor.kind === "html-drawing" && doc.kind === "html") {
-      bytes = await camera.shoot({
+      const shot = {
+        label,
         html: capture.html,
-        folder: doc.hostId === null ? path.posix.dirname(doc.absPath) : null,
+        folder: path.posix.dirname(doc.absPath.replace(/\\/g, "/")),
         viewport: anchor.viewport,
         scroll: capture.scroll,
         strokes: anchor.strokes,
-      });
+      };
+      bytes = await photograph(shot);
     }
-    const type = bytes ? imageType(bytes) : null;
-    if (!bytes || !type) return;
+    if (!bytes) throw new Error("Could not capture the drawing; Chrome must be available on the document's host.");
+    const type = imageType(bytes);
+    if (!type) throw new Error("Unsupported drawing image format.");
     await mkdir(drawingsDir, { recursive: true });
     await writeFile(path.join(drawingsDir, `${comment.id}.${type.ext}`), bytes);
   }
@@ -225,6 +244,7 @@ export default async function plugin(bb: BbPluginApi) {
       absPath: doc.absPath,
       hostId: doc.hostId,
       version,
+      htmlUrl: doc.kind === "html" ? `/api/v1/plugins/${bb.pluginId}/http${HTML_ROUTE}?doc=${doc.id}&v=${encodeURIComponent(version)}` : null,
     };
   }
 
@@ -319,24 +339,36 @@ export default async function plugin(bb: BbPluginApi) {
     const doc = store.getDoc(docId);
     if (!doc || doc.kind !== "html") return context.text("Not found", 404);
     try {
-      const version = await currentVersion(doc);
-      if (version !== wanted) return context.text("This page changed; reload it.", 404);
-      const [source, baseUrl] = await Promise.all([
-        files.readBytes(doc, HTML_MAX_BYTES),
-        files.assetBaseUrl(doc),
-      ]);
-      const page = injectIntoHtml(source, {
-        baseHref: baseUrl ? `${baseUrl.replace(/\/+$/, "")}/` : null,
-        script: BRIDGE_SCRIPT,
-      });
-      return new Response(new Uint8Array(page.body), {
-        headers: {
-          "content-type": page.contentType,
-          "content-security-policy": `sandbox ${HTML_SANDBOX}`,
-          "cache-control": "no-store",
-          "x-content-type-options": "nosniff",
-          "referrer-policy": "no-referrer",
-        },
+      // Cached bytes are an immutable document version. Polling opens the new version.
+      const key = JSON.stringify([doc.id, wanted]);
+      return await htmlPages.use(key, async () => {
+        const version = await currentVersion(doc);
+        if (version !== wanted) throw new Error("This page changed; reload it.");
+        const [source, baseUrl] = await Promise.all([
+          files.readBytes(doc, HTML_MAX_BYTES), files.assetBaseUrl(doc),
+        ]);
+        const page = injectIntoHtml(source, {
+          baseHref: baseUrl ? `${baseUrl.replace(/\/+$/, "")}/` : null,
+          script: BRIDGE_SCRIPT,
+        });
+        return { ...page, compressed: await gzipAsync(page.body), close() {} };
+      }, async (page) => {
+        const compressed = (context.req.header("accept-encoding") ?? "").split(",").some((entry) => {
+          const [coding, ...parameters] = entry.trim().toLowerCase().split(";");
+          const quality = parameters.map((p) => p.trim()).find((p) => p.startsWith("q="));
+          return coding === "gzip" && (!quality || Number(quality.slice(2)) > 0);
+        });
+        return new Response(new Uint8Array(compressed ? page.compressed : page.body), {
+          headers: {
+            "content-type": page.contentType,
+            "content-security-policy": `sandbox ${HTML_SANDBOX}`,
+            "cache-control": "no-store",
+            "vary": "Accept-Encoding",
+            ...(compressed ? { "content-encoding": "gzip" } : {}),
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "no-referrer",
+          },
+        });
       });
     } catch (error) {
       bb.log.warn(`html page ${doc.absPath}: ${String(error)}`);
@@ -383,7 +415,8 @@ export default async function plugin(bb: BbPluginApi) {
       if (!isDrawing(comment.anchor)) continue;
       const file = drawingFile(comment.id);
       const bytes = file ? await readFile(file).catch(() => null) : null;
-      if (bytes) images.set(comment.id, bytes);
+      if (!bytes) throw new Error("This drawing has no captured image. Recreate the drawing before sending it.");
+      images.set(comment.id, bytes);
     }
     return images;
   }
@@ -630,11 +663,11 @@ export default async function plugin(bb: BbPluginApi) {
 
     async "comments.create"({ docId, anchor, body, docVersion, capture }) {
       const doc = requireDoc(docId);
+      if (isDrawing(anchor) && !capture) throw new Error("The drawing's page capture is missing. Reopen the document and try again.");
       const comment = store.createComment({ docId, anchor, body, docVersion });
       if (capture && isDrawing(anchor)) {
-        await saveDrawing(doc, comment, capture).catch((error: unknown) =>
-          bb.log.warn(`picture for drawing ${comment.id}: ${String(error)}`),
-        );
+        try { await saveDrawing(doc, comment, capture); }
+        catch (error) { store.deleteComment(comment.id); throw error; }
       }
       publish([docId]);
       return present(comment);
@@ -718,30 +751,31 @@ export default async function plugin(bb: BbPluginApi) {
           const uploaded = await bb.sdk.projects.attachments.upload({
             projectId,
             clientFile: new Uint8Array(bytes),
-            filename: `${comment.id}.${type.ext}`,
+            filename: `comment-${comment.seq}-${comment.id}.${type.ext}`,
             mimeType: type.mime,
           });
           imageInputs.push({ type: "localImage", path: uploaded.path });
           imageNumbers.set(comment.id, imageInputs.length);
         } catch (error) {
+          if (isDrawing(comment.anchor)) throw new Error(`Could not attach the drawing: ${String(error)}`);
           bb.log.warn(`attachment upload for ${comment.id}: ${String(error)}`);
           unattached.set(comment.id, bytes);
         }
       }
       const imagePaths = await saveCrops(unattached);
 
-      const text = buildHandoffMessage({
+      const handoffInput = buildHandoffInput({
         kind: doc.kind,
         absPath: doc.absPath,
         comments,
         imageNumbers,
         imagePaths,
       });
-      const input = [{ type: "text" as const, text, mentions: [] }, ...imageInputs];
+      const input = [...handoffInput, ...imageInputs];
 
       let threadId: string;
       if (target.kind === "thread") {
-        await bb.sdk.threads.send({ threadId: target.threadId, mode: "auto", input });
+        await bb.sdk.threads.send({ threadId: target.threadId, mode: target.mode ?? "queue-if-active", input });
         threadId = target.threadId;
       } else {
         // Reuse the model and workspace of the thread the panel was opened in.

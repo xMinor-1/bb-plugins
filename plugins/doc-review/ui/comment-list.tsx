@@ -18,6 +18,7 @@ import {
   type ReviewComment,
 } from "../src/types";
 import { CommentEditor } from "./comment-editor";
+import { DrawingPreview } from "./drawing-preview";
 
 const SECTIONS: { status: CommentStatus; title: string; hint: string }[] = [
   { status: "replied", title: "Needs you", hint: "The agent answered instead of changing the file." },
@@ -225,13 +226,7 @@ function CommentCard({
         </div>
       </div>
       {comment.imageUrl ? (
-        // The picture the agent gets with a drawing.
-        <img
-          src={comment.imageUrl}
-          alt="The drawing on the page"
-          loading="lazy"
-          className="mt-1.5 max-h-40 w-full rounded border border-border bg-muted object-contain"
-        />
+        <DrawingPreview src={comment.imageUrl} seq={comment.seq} />
       ) : quote ? (
         <div className="mt-1.5 line-clamp-2 border-l-2 border-border pl-2 text-xs text-muted-foreground">
           {truncate(quote, 240)}
