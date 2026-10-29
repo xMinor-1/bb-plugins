@@ -58,6 +58,7 @@ const FOLDER = makeEntry({ name: "docs", kind: "directory", path: DOCS });
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,

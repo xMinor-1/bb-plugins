@@ -454,6 +454,7 @@ export function FileManagerSurface({
   const showHiddenRef = useRef(showHidden);
   showHiddenRef.current = showHidden;
   const [confirmOnDelete, setConfirmOnDelete] = useState(true);
+  const [permanentDelete, setPermanentDelete] = useState(false);
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   /** List or gallery (§8.9), persisted exactly like sort and hidden files. */
@@ -555,6 +556,7 @@ export function FileManagerSurface({
         setState(result);
         setShowHidden(result.preferences.showHiddenFiles);
         setConfirmOnDelete(result.preferences.confirmOnDelete);
+        setPermanentDelete(result.preferences.permanentDelete === true);
         setSortField(result.preferences.sortField);
         setSortDirection(result.preferences.sortDirection);
         setViewMode(result.preferences.viewMode);
@@ -1368,13 +1370,14 @@ export function FileManagerSurface({
       const keep = new Set(topLevelPaths(entries.map((entry) => entry.path)));
       const targets = entries.filter((entry) => keep.has(entry.path));
       if (targets.length === 0) return;
-      if (confirmOnDelete) {
+      // A permanent delete cannot be undone, so it always asks.
+      if (confirmOnDelete || permanentDelete) {
         setDialog({ kind: "delete", entries: targets });
         return;
       }
       void deleteEntries(targets);
     },
-    [confirmOnDelete, deleteEntries],
+    [confirmOnDelete, permanentDelete, deleteEntries],
   );
 
   const paste = useCallback(() => {
@@ -2328,6 +2331,7 @@ export function FileManagerSurface({
   ): SelectedEntryActionsProps => ({
     entries,
     writable,
+    permanentDelete,
     canPaste,
     canExtract:
       entries.length === 1 &&
@@ -2706,6 +2710,7 @@ export function FileManagerSurface({
         <ConfirmDeleteDialog
           open
           entries={dialog.entries}
+          permanent={permanentDelete}
           onOpenChange={(open) => {
             if (!open) setDialog({ kind: "none" });
           }}

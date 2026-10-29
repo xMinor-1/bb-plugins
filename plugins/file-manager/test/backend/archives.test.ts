@@ -308,8 +308,8 @@ describe("extractArchive", () => {
     execFileSync("tar", ["-cf", archive, "-C", source, "aaa.txt", "zzz.txt"]);
 
     // The commit walks the members in sorted order, so `aaa.txt` moves first
-    // and `zzz.txt` then fails: `conflict: "overwrite"` has to remove the
-    // read-only directory sitting on its name, and cannot.
+    // and `zzz.txt` then fails: `conflict: "overwrite"` has to move the
+    // read-only directory sitting on its name to the Trash, and cannot.
     const dest = path.join(root, "blocked");
     await mkdir(path.join(dest, "zzz.txt"), { recursive: true });
     await writeFile(path.join(dest, "zzz.txt", "keep"), "keep");

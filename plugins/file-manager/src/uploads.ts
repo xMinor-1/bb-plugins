@@ -50,7 +50,9 @@ import {
 import { fmError, mapNodeError } from "./errors";
 import { buildEntry } from "./listing";
 import { uniqueName } from "./mutations";
+import { assertNotProtected } from "./protect";
 import { getUploadsDir, resolveExistingDir, resolveNew, validateName } from "./root";
+import { moveToTrash } from "./trash";
 import type { SettingsModule } from "./settings";
 import { publishFs } from "./signals";
 
@@ -409,6 +411,11 @@ export async function createUploads(
     const dirReal = await resolveExistingDir(input.dirPath);
     validateName(input.fileName);
     const relativeDir = normalizeRelativeDir(input.relativeDir);
+    // Fail fast; uploadFinish checks again against the re-resolved folder.
+    await assertNotProtected(
+      path.join(dirReal, ...relativeDir.split("/").filter((part) => part !== ""), input.fileName),
+      "upload into",
+    );
     if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 0) {
       throw fmError("invalid_path", `sizeBytes ${String(input.sizeBytes)}`);
     }
@@ -631,21 +638,28 @@ export async function createUploads(
 
       // Re-resolve now, not at create time: the directory may have moved.
       const baseReal = await resolveExistingDir(session.dirPath);
+      await assertNotProtected(
+        path.join(
+          baseReal,
+          ...session.relativeDir.split("/").filter((part) => part !== ""),
+          session.fileName,
+        ),
+        "upload into",
+      );
       const destDir = session.relativeDir
         ? await ensureRelativeDir(baseReal, session.relativeDir)
         : baseReal;
 
       let target = await resolveNew(destDir, session.fileName);
+      await assertNotProtected(target, "upload into", { subtree: true });
       if (await exists(target)) {
         if (input.conflict === "fail") throw fmError("exists", target);
         if (input.conflict === "rename") {
           target = await resolveNew(destDir, await uniqueName(destDir, session.fileName));
         } else {
           // overwrite: rename() replaces a regular file atomically, but not a
-          // directory — remove whatever is there first.
-          await rm(target, { recursive: true, force: true }).catch((error: unknown) => {
-            throw mapNodeError(error, target);
-          });
+          // directory — move whatever is there to the Trash first.
+          await moveToTrash(target);
         }
       }
 

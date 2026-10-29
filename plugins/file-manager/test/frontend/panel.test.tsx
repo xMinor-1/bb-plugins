@@ -79,6 +79,7 @@ const STATE = {
   preferences: {
     showHiddenFiles: false,
     confirmOnDelete: true,
+    permanentDelete: false,
     restoreLastFolder: true,
     openThreadWorkspace: false,
     sortField: "name" as const,

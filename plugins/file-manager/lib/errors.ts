@@ -145,6 +145,7 @@ const CODE_TEXT: Record<FileManagerErrorCode, string> = {
   no_space: "There is not enough free disk space.",
   io_error: "The filesystem reported an error.",
   unsupported: "That operation is not supported.",
+  protected_path: "That location is protected (credentials or configuration).",
 };
 
 /** One short, user-facing sentence for a domain code. */

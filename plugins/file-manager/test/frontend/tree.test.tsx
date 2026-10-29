@@ -88,6 +88,7 @@ const HIDDEN_IN_DOCS = makeEntry({ name: ".secret", path: `${DOCS}/.secret` });
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,
@@ -693,8 +694,8 @@ describe("tree interaction (§8.2)", () => {
     fireEvent.keyDown(slot.getByTestId("fm-panel"), { key: "Delete" });
 
     const dialog = await slot.findByTestId("fm-delete-dialog");
-    expect(dialog.textContent).toContain("Delete 2 items?");
-    fireEvent.click(slot.getByRole("button", { name: "Delete" }));
+    expect(dialog.textContent).toContain("Move 2 items to Trash?");
+    fireEvent.click(slot.getByRole("button", { name: "Move to Trash" }));
 
     await waitFor(() => {
       expect(callsTo(slot, "deleteEntries")).toEqual([
@@ -716,8 +717,8 @@ describe("tree interaction (§8.2)", () => {
     fireEvent.keyDown(slot.getByTestId("fm-panel"), { key: "Delete" });
 
     const dialog = await slot.findByTestId("fm-delete-dialog");
-    expect(dialog.textContent).toContain("Delete 6 items?");
-    fireEvent.click(slot.getByRole("button", { name: "Delete" }));
+    expect(dialog.textContent).toContain("Move 6 items to Trash?");
+    fireEvent.click(slot.getByRole("button", { name: "Move to Trash" }));
 
     await waitFor(() => {
       expect(callsTo(slot, "deleteEntries")).toHaveLength(1);
@@ -758,14 +759,14 @@ describe("tree interaction (§8.2)", () => {
       .map((item) => item.textContent ?? "");
     expect(labels.some((label) => label.startsWith("Rename"))).toBe(true);
     expect(labels.some((label) => label.startsWith("Cut"))).toBe(true);
-    expect(labels.some((label) => label.startsWith("Delete"))).toBe(true);
+    expect(labels.some((label) => label.startsWith("Move to Trash"))).toBe(true);
     expect(menu.textContent).toContain("inner.txt");
     expect(selectedPaths(slot)).toEqual([INNER.path]);
 
-    clickItem(menu, "Delete");
+    clickItem(menu, "Move to Trash");
     const dialog = await slot.findByTestId("fm-delete-dialog");
     expect(dialog.textContent).toContain("inner.txt");
-    fireEvent.click(slot.getByRole("button", { name: "Delete" }));
+    fireEvent.click(slot.getByRole("button", { name: "Move to Trash" }));
 
     await waitFor(() => {
       expect(callsTo(slot, "deleteEntries")).toEqual([
@@ -1248,7 +1249,7 @@ describe("the tree next to the rest of the panel (§8.2)", () => {
     fireEvent.click(rowFor(slot, DOCS));
     fireEvent.keyDown(slot.getByTestId("fm-panel"), { key: "Delete" });
     await slot.findByTestId("fm-delete-dialog");
-    fireEvent.click(slot.getByRole("button", { name: "Delete" }));
+    fireEvent.click(slot.getByRole("button", { name: "Move to Trash" }));
 
     await waitFor(() => {
       expect(rowPaths(slot)).not.toContain(DOCS);

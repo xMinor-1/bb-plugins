@@ -236,6 +236,7 @@ export const errorCodeSchema = z.enum([
   "no_space",
   "io_error",
   "unsupported",
+  "protected_path",
 ]);
 export type FileManagerErrorCode = z.infer<typeof errorCodeSchema>;
 
@@ -293,6 +294,12 @@ export type FileEntry = z.infer<typeof entrySchema>;
 export const preferencesSchema = z.strictObject({
   showHiddenFiles: z.boolean(),
   confirmOnDelete: z.boolean(),
+  /**
+   * Delete removes permanently instead of moving to the Trash. Off by default;
+   * when on, the panel always asks before deleting, whatever confirmOnDelete
+   * says, because there is no way back.
+   */
+  permanentDelete: z.boolean(),
   /**
    * Reopen the folder the panel was last in instead of `startFolder` (v0.4.0).
    *

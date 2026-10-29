@@ -111,13 +111,15 @@ describe("registrations", () => {
     expect(routes).toContainEqual({ method: "GET", path: DOWNLOAD_ZIP_ROUTE, auth: "local" });
   });
 
-  it("declares the nine §7.1 settings", () => {
+  it("declares the eleven §7.1 settings", () => {
     expect(Object.keys(host.harness.inspection.registrations.settingsDescriptors)).toEqual([
       "startFolder",
       "restoreLastFolder",
       "openThreadWorkspace",
       "showHiddenFiles",
       "confirmOnDelete",
+      "permanentDelete",
+      "extraProtectedPaths",
       "sortField",
       "sortDirection",
       "viewMode",

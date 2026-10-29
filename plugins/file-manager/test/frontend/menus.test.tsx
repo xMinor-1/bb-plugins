@@ -69,6 +69,7 @@ const ARCHIVE = makeEntry({ name: "bundle.zip", archiveFormat: "zip", sizeBytes:
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,
@@ -288,7 +289,7 @@ describe("compact viewport selection actions", () => {
     expect(menu.textContent).toContain("Download");
     expect(menu.textContent).toContain("Add to chat");
     expect(menu.textContent).toContain("Rename");
-    expect(menu.textContent).toContain("Delete");
+    expect(menu.textContent).toContain("Move to Trash");
 
     clickItem(menu, "Copy path");
     await waitFor(() => expect(clipboardWrites).toEqual([NOTES.path]));
@@ -412,7 +413,7 @@ describe("row context menu (§8.2)", () => {
     expect(labels.some((label) => label.startsWith("Rename"))).toBe(true);
     expect(labels.some((label) => label.startsWith("Cut"))).toBe(true);
     expect(labels.some((label) => label.startsWith("Copy") && !label.includes("path"))).toBe(true);
-    expect(labels.some((label) => label.startsWith("Delete"))).toBe(true);
+    expect(labels.some((label) => label.startsWith("Move to Trash"))).toBe(true);
     expect(labels.some((label) => label.startsWith("Extract"))).toBe(false);
   });
 
@@ -538,11 +539,11 @@ describe("row context menu (§8.2)", () => {
     const slot = await mountPanel(
       baseRpc({ deleteEntries: () => ({ succeeded: [NOTES.path], failed: [] }) }),
     );
-    clickItem(await openRowMenu(slot, NOTES.path), "Delete");
+    clickItem(await openRowMenu(slot, NOTES.path), "Move to Trash");
 
     const dialog = await slot.findByTestId("fm-delete-dialog");
     expect(callsTo(slot, "deleteEntries")).toHaveLength(0);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move to Trash" }));
 
     await waitFor(() => {
       expect(callsTo(slot, "deleteEntries")).toEqual([
@@ -625,10 +626,10 @@ describe("row context menu (§8.2)", () => {
 
     const menu = await openRowMenu(slot, OTHER.path);
     expect(menu.textContent).toContain("2 items");
-    clickItem(menu, "Delete");
+    clickItem(menu, "Move to Trash");
 
     const dialog = await slot.findByTestId("fm-delete-dialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move to Trash" }));
     await waitFor(() => {
       expect(callsTo(slot, "deleteEntries")).toEqual([
         {

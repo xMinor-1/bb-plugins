@@ -13,6 +13,7 @@ import {
   type Preferences,
 } from "../contract";
 import { fmError, mapNodeError } from "./errors";
+import { setSafetyPolicy } from "./protect";
 import { DEFAULT_ROOT, getRoot, resolveExisting } from "./root";
 
 /** §7.1 verbatim. Four descriptor types exist; there is no `path` type. */
@@ -64,6 +65,25 @@ export const settingsDescriptors = {
     description: "Ask for confirmation before deleting files and folders.",
     default: true,
   },
+  permanentDelete: {
+    type: "boolean",
+    label: "Delete permanently (skip the Trash)",
+    description:
+      "Off: Delete moves items to the Trash, where you can restore them. " +
+      "On: Delete removes items for good, and always asks first. " +
+      "Overwriting an existing item always moves the old one to the Trash.",
+    default: false,
+  },
+  extraProtectedPaths: {
+    type: "string",
+    label: "Extra protected paths",
+    description:
+      "Comma-separated paths relative to your home folder (e.g. \".config/op, secrets\") " +
+      "that the File Manager must never delete, move, rename, overwrite or write into, " +
+      "in addition to the built-in list (.ssh, .gnupg, .aws, .claude, shell start-up files, " +
+      "Keychains, …). Reading and downloading stay allowed.",
+    default: "",
+  },
   sortField: {
     type: "select",
     label: "Default sort column",
@@ -100,6 +120,8 @@ export interface FileManagerSettingsValues {
   openThreadWorkspace: boolean;
   showHiddenFiles: boolean;
   confirmOnDelete: boolean;
+  permanentDelete: boolean;
+  extraProtectedPaths: string;
   sortField: string;
   sortDirection: string;
   viewMode: string;
@@ -149,6 +171,7 @@ function toPreferences(values: FileManagerSettingsValues): Preferences {
   return {
     showHiddenFiles: values.showHiddenFiles,
     confirmOnDelete: values.confirmOnDelete,
+    permanentDelete: values.permanentDelete === true,
     restoreLastFolder: values.restoreLastFolder,
     openThreadWorkspace: values.openThreadWorkspace,
     sortField: sortField.success ? sortField.data : "name",
@@ -170,11 +193,22 @@ export async function validateStartFolder(input: string): Promise<string> {
   return real;
 }
 
+/** Push the delete/protection settings into src/protect.ts's module state. */
+function applySafetyPolicy(values: FileManagerSettingsValues): void {
+  setSafetyPolicy({
+    permanentDelete: values.permanentDelete === true,
+    extraProtectedPaths:
+      typeof values.extraProtectedPaths === "string" ? values.extraProtectedPaths : "",
+  });
+}
+
 export async function createSettings(bb: BbPluginApi): Promise<SettingsModule> {
   const handle = bb.settings.define(settingsDescriptors);
   let current: FileManagerSettingsValues = await handle.get();
+  applySafetyPolicy(current);
   handle.onChange((next) => {
     current = next;
+    applySafetyPolicy(current);
   });
 
   async function resolveStartFolder(): Promise<string> {
@@ -216,6 +250,7 @@ export async function createSettings(bb: BbPluginApi): Promise<SettingsModule> {
         await bb.sdk.plugins.updateSettings({ pluginId: bb.pluginId, values });
         // onChange fires asynchronously via the host; keep the cache correct now.
         current = { ...current, ...values } as FileManagerSettingsValues;
+        applySafetyPolicy(current);
       }
 
       return {

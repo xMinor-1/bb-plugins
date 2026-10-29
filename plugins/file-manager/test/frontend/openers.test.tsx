@@ -75,6 +75,7 @@ function entryFor(name: string, parent = BACKUPS): FileEntry {
 const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
+  permanentDelete: false,
   restoreLastFolder: true,
   openThreadWorkspace: false,
   sortField: "name" as const,

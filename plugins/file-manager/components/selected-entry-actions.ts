@@ -12,6 +12,11 @@ export interface SelectedEntryActionsProps {
   entries: readonly FileEntry[];
   /** False when `listDir` said the current directory is read-only. */
   writable: boolean;
+  /**
+   * The `permanentDelete` setting: off means the delete action moves to the
+   * Trash, and is labelled that way.
+   */
+  permanentDelete?: boolean;
   canPaste: boolean;
   /** True when at least one extractor exists for the selected archive. */
   canExtract: boolean;
@@ -214,7 +219,7 @@ export function selectedEntryActionModel(
       [
         {
           id: "delete",
-          label: "Delete",
+          label: props.permanentDelete === true ? "Delete permanently" : "Move to Trash",
           icon: "Trash2",
           disabled: !writable,
           destructive: true,
