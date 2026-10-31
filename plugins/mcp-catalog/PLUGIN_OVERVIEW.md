@@ -4,14 +4,15 @@ instance with its own address and token.
 
 ## What you get
 
-- An **MCP** page in the sidebar: your servers with an on/off switch, their
-  health (works, not answering, token not accepted) and since when, the number
-  of tools and a per-server call timeout.
-- **Connect by pasting**: copy the client settings the platform gives you
-  (OpenCode, `mcpServers` or VS Code shape) and press Add — several servers at
-  once. A new token is pasted the same way.
-- A **catalog** of the servers your company offers, with a button that opens
-  the platform page where you create yours.
+- An **MCP** page in the sidebar: your servers by a name people understand
+  and one line of what each does — taken from the platform's template list or
+  from the server itself — with an on/off switch, their health (works, not
+  answering, token not accepted) and since when, and the number of tools. Ids,
+  addresses and call timeouts sit under Details.
+- **Connect in three steps**: a button opens the platform page where you
+  create your server, you copy its client settings (OpenCode, `mcpServers` or
+  VS Code shape) and paste them — several servers at once. A new token is
+  pasted the same way.
 - **From a chat**, agents on the models you approve list your servers and
   switch them on or off; the change shows in a new thread.
 

@@ -18,7 +18,7 @@ afterEach(async () => {
 describe("probeServer", () => {
   it("reports a working server and counts its tools (JSON answers)", async () => {
     const server = await stub({ token: TOKEN, tools: 3 });
-    expect(await probeServer(server.url, auth)).toEqual({ status: "ok", detail: null, tools: 3 });
+    expect(await probeServer(server.url, auth)).toEqual({ status: "ok", detail: null, tools: 3, info: { name: "stub", title: null, summary: null } });
     expect(server.requests.map((request) => request.rpc ?? request.method)).toEqual(["initialize", "notifications/initialized", "tools/list", "DELETE"].slice(0, server.requests.length));
     expect(server.requests.filter((request) => request.rpc === "tools/list")[0]?.session).toBe("stub-session-1");
   });

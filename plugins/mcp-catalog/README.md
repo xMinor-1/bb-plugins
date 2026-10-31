@@ -6,13 +6,13 @@ server instances (their own address and token), so a fixed list in a build
 manifest cannot work.
 
 - **MCP** page in the bb sidebar:
-  - **Your MCP servers** — each with an on/off switch, its health (*works*,
-    *not answering*, *token not accepted*) and since when, the number of tools,
-    a call timeout, Check and Remove.
-  - **Connect servers** — paste the client settings the platform gives you;
+  - **Your MCP servers** — each by a name people understand and one line of
+    what it does, with an on/off switch, its health (*works*, *not answering*,
+    *token not accepted*) and since when, the number of tools, and Check.
+    *Details* show the id, the address, the call timeout and Remove.
+  - **Connect a server** — three steps: *Create a server on the platform*
+    (a link to the platform page), copy its client settings, paste them here;
     several servers at once.
-  - **Catalog** — the MCP servers your company offers, with descriptions and a
-    *Create on the platform* button.
 - **From a chat**, agents on approved models can list your servers with their
   health and switch one on or off.
 - Tokens go to the OS credential store. They are not kept in bb, not shown
@@ -28,9 +28,10 @@ bb plugin install git:github.com/xMinor-1/bb-plugins --plugin mcp-catalog --yes
 
 ## Use
 
-1. In **Catalog**, press *Create on the platform* and create your server there.
+1. On the **MCP** page, press *Create a server on the platform* and create your
+   server there.
 2. On the platform, copy the server's settings for OpenCode (or any MCP client).
-3. On the **MCP** page, paste them into **Connect servers** and press **Add**.
+3. Back on the **MCP** page, paste them into **Connect a server** and press **Add**.
    The plugin checks each server right away and switches it on.
 4. Start a new thread: OpenCode loads MCP servers when a session starts.
 
@@ -57,8 +58,8 @@ company:
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `catalogUrl` | empty | A JSON list of servers people can create, read without signing in: a list at the root or under `items`, `templates`, `servers`, `data` or `results`, each with `id`, `name`, `description`. Empty hides the catalog. |
-| `platformUrl` | empty | The page *Create on the platform* opens; `{id}` is replaced with the catalog item's id. |
+| `catalogUrl` | empty | A JSON list of the templates people create servers from, read without signing in: a list at the root or under `items`, `templates`, `servers`, `data` or `results`, each with `id`, `name`, `description`. It names the servers on the page (see *Names* below). Empty: names come from the servers themselves. |
+| `platformUrl` | empty | The page *Create a server on the platform* opens. Empty: the step says to use the company's platform, without a link. |
 | `allowedModels` | empty | Agents that get the chat tools, one `<provider-id> <model-glob>` per line, for example `acp-opencode corp/*`. Empty: no agent. |
 | `callTimeoutSeconds` | 30 | How long OpenCode waits for one tool call (`timeout.execution`), unless a server has its own on the page. 0 keeps OpenCode's default. |
 | `checkIntervalMinutes` | 10 | How often each machine checks its servers in the background; 0 turns it off. The page checks when opened. |
@@ -99,7 +100,24 @@ company:
   `mcp` stays byte for byte. A server of the same name that the plugin did not
   write is left alone; the page offers *Replace it*, which also removes an
   OpenCode 1 style `mcp.<name>` entry with its plain-text token. The plugin
-  writes the OpenCode 2 format and refuses to write when it finds OpenCode 1.
+  writes the OpenCode 2 format and refuses to write when it finds OpenCode 1:
+  the first `opencode` on bb's own `PATH`, which the bb server passes to its
+  own machine, the same one Fleet Kit checks. (bb gives its daemon and plugin
+  workers a rebuilt `PATH` with the login shell's entries first, where a
+  personal OpenCode may come before the one a build installed.) On other
+  machines it is the worker's `PATH`. The error names the version and path it
+  found.
+- **Names.** Platforms name a person's server after its template plus an
+  instance id, for example `corp_ai_gitlab_8ce17341`. With `catalogUrl` set,
+  the plugin cuts the trailing instance id (a run of 6+ hex digits with at
+  least one digit) and looks for the template whose `id` or `name`, as words,
+  ends what is left; the longest match wins (`ai_gitlab` over `gitlab`). The
+  page shows that template's name and the first sentence of its description.
+  Without a match it uses what the server says about itself on the last
+  check (`serverInfo.title` or `name`, the first sentence of `instructions`),
+  and as a last resort the id made readable. Matches are saved on the machine
+  and kept while the catalog cannot be reached; the catalog is read at most
+  every five minutes, with the checks.
 - **Health.** An MCP `initialize`, then `tools/list`, with the server's own
   headers and a 10-second limit, at most three servers at a time. 401 or 403
   means the token was not accepted; anything else that is not an MCP answer
