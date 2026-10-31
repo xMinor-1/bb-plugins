@@ -140,6 +140,18 @@ function strings(value: unknown, path: string[], out: { value: string; path: str
   return out;
 }
 
+/** Every object key, with its path: OpenCode substitutes inside keys too. */
+function keys(value: unknown, path: string[], out: { value: string; path: string[] }[] = []) {
+  if (Array.isArray(value)) value.forEach((item, index) => keys(item, [...path, String(index)], out));
+  else if (value !== null && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      out.push({ value: key, path: [...path, key] });
+      keys(item, [...path, key], out);
+    }
+  }
+  return out;
+}
+
 /** Every `{secret:name}` reference in a JSON value, with its JSON path. */
 export function secretRefs(value: unknown, path: string[] = []): { name: string; path: string[] }[] {
   return strings(value, path).flatMap((entry) => [...entry.value.matchAll(SECRET_REF)].map((match) => ({ name: match[1] ?? "", path: entry.path })));
@@ -180,6 +192,15 @@ export function selfSourcePinned(source: string): boolean {
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/** OpenCode installs a provider's `package` from npm; a build may name only OpenCode's own providers. */
+export function providerPackageProblem(value: unknown, allowDevSources = false): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string") return "package must be a string";
+  if (/^@opencode\/ai\/providers\/[a-z0-9][a-z0-9-]*$/.test(value)) return null;
+  if (allowDevSources) return null;
+  return `package "${value}" is not an OpenCode provider (@opencode/ai/providers/...); other packages need allowDevSources on this machine`;
+}
 
 /** Why a provider address may not receive a build key, or null. */
 export function baseUrlProblem(value: unknown, allowDevSources = false): string | null {
@@ -268,6 +289,11 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
       errors.push(`${path.join(".")}: {secret:...} is allowed only as a provider's whole settings.apiKey or in settings.headers`);
     }
   }
+  for (const { value, path } of keys(manifest, [])) {
+    if (OPENCODE_SUBSTITUTION.test(value) || /\{secret:/.test(value)) {
+      errors.push(`${path.join(".")}: substitutions such as {env:...}, {file:...} and {secret:...} are not allowed in names`);
+    }
+  }
 
   const ids = new Set<string>();
   for (const [index, entry] of manifest.plugins.entries()) {
@@ -304,6 +330,8 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
   const allowed = new Set(manifest.allowedProviders);
   for (const [providerId, provider] of Object.entries(manifest.opencode.providers)) {
     if (!allowed.has(providerId)) errors.push(`opencode.providers.${providerId}: not in allowedProviders`);
+    const packageProblem = providerPackageProblem(provider.package, allowDev);
+    if (packageProblem !== null) errors.push(`opencode.providers.${providerId}: ${packageProblem}`);
     const settings = provider.settings ?? {};
     const usesSecret = secretRefs(settings).length > 0;
     if (usesSecret || settings.baseURL !== undefined) {

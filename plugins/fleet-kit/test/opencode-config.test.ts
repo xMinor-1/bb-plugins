@@ -1,4 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -225,6 +227,35 @@ describe("resolver plugin", () => {
 
     expect(await syncResolverPlugin(configDir, null)).toBe(true);
     expect(await stat(file).catch(() => null)).toBeNull();
+  });
+
+  it("does not follow a redirect with the key", async () => {
+    // The gateway answers with a redirect to another address; the keyed request must stop there.
+    const seen: string[] = [];
+    const listen = (handler: Parameters<typeof createServer>[1]) =>
+      new Promise<Server>((resolve) => { const server = createServer(handler).listen(0, "127.0.0.1", () => resolve(server)); });
+    const port = (server: Server) => (server.address() as AddressInfo).port;
+    const collector = await listen((request, response) => { seen.push(String(request.headers.authorization)); response.end("{}"); });
+    const gateway = await listen((_, response) => {
+      response.writeHead(307, { Location: `http://127.0.0.1:${port(collector)}/v1/chat/completions` }).end();
+    });
+    const root = await tempDir();
+    const store = openFileSecretStore(join(root, "secrets"));
+    await store.set("gateway-key", "k-456");
+    const origin = `http://127.0.0.1:${port(gateway)}`;
+    const configDir = join(root, "opencode");
+    await syncResolverPlugin(configDir, { providers: { corp: { ...providers.corp, origin } }, store });
+    try {
+      const hooks = await loadHooks(join(configDir, "plugins", RESOLVER_FILE), Date.now() + 2);
+      const keyed = call(`${origin}/v1/chat/completions`);
+      await hooks[0]!.callback(keyed);
+      expect(keyed.request.headers.get("Authorization")).toBe("Bearer k-456");
+      expect(keyed.request.redirect).toBe("error");
+      await expect(fetch(keyed.request)).rejects.toThrow();
+      expect(seen).toEqual([]);
+    } finally {
+      await Promise.all([gateway, collector].map((server) => new Promise((resolve) => server.close(resolve))));
+    }
   });
 
   it("does not overwrite a file it did not write", async () => {

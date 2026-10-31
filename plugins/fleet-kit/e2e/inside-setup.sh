@@ -11,7 +11,13 @@ git config --global init.defaultBranch main
 
 rm -rf fleet-src fleet.git build .fk-e2e
 mkdir -p fleet-src/plugins fleet-src/.bb build .fk-e2e
-tar -xzf /tmp/fleet-kit-src.tgz -C fleet-src/plugins
+if [ -f /tmp/fleet-kit-base.tgz ]; then
+  # An earlier release first; release-current.sh releases the working copy later.
+  tar -xzf /tmp/fleet-kit-base.tgz -C fleet-src/plugins
+else
+  tar -xzf /tmp/fleet-kit-src.tgz -C fleet-src/plugins
+fi
+fleet_kit_version=$(jq -r .version fleet-src/plugins/fleet-kit/package.json)
 cat > fleet-src/.bb/plugins.json <<'EOF'
 { "schemaVersion": 1, "name": "e2e-plugins", "plugins": [
   { "name": "fixture-a", "source": "./plugins/fixture-a" },
@@ -34,7 +40,7 @@ export default async function plugin(bb: BbPluginApi) {
 EOF
 }
 fixture 0.1.0
-cd fleet-src && git init -q && git add -A && git commit -qm "initial" && git tag fixture-a/v0.1.0 && git tag fleet-kit/v0.1.0 && cd ..
+cd fleet-src && git init -q && git add -A && git commit -qm "initial" && git tag fixture-a/v0.1.0 && git tag "fleet-kit/v$fleet_kit_version" && cd ..
 git clone -q --bare fleet-src fleet.git
 
 umask 077

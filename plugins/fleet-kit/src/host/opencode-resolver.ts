@@ -7,7 +7,9 @@
 // sees the outgoing fetch Request. The headers are added only when the request
 // goes to the origin of the provider's baseURL in the manifest: a project's
 // opencode.json can override a provider's baseURL, and the key must not follow
-// it there. Values come from the operating system's credential store (the same
+// it there. A request that carries the key never follows a redirect either
+// (`redirect: "error"`), so the key cannot ride a 3xx to another origin.
+// Values come from the operating system's credential store (the same
 // locations secret-store.ts writes), are cached for a minute and never logged.
 // A wrong origin or a missing secret leaves the headers out and writes a
 // warning, without the value, to `fleet-kit.log` in OpenCode's log directory
@@ -178,16 +180,10 @@ async function addHeaders(providerID, event) {
     }
     values.push([header, rendered.value]);
   }
-  let headers;
-  try {
-    for (const [header, value] of values) event.request.headers.set(header, value);
-    return;
-  } catch {
-    // Immutable headers: rebuild the request with the extra headers.
-    headers = new Headers(event.request.headers);
-  }
+  // Rebuild the request: a fetch Request's redirect mode cannot be changed in place.
+  const headers = new Headers(event.request.headers);
   for (const [header, value] of values) headers.set(header, value);
-  event.request = new Request(event.request, { headers, duplex: "half" });
+  event.request = new Request(event.request, { headers, redirect: "error", duplex: "half" });
 }
 
 export default {
