@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import type { SheetSummary } from "@/lib/sheet-model";
+import { useMessages } from "@/lib/i18n";
+import { sheetMessages } from "./messages";
 
 interface IndexedSheet extends SheetSummary {
   index: number;
@@ -31,6 +33,7 @@ function HiddenSheetsMenu({
   selected: number;
   onSelect: (index: number) => void;
 }) {
+  const t = useMessages(sheetMessages);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -80,18 +83,18 @@ function HiddenSheetsMenu({
         onClick={() => setOpen((value) => !value)}
       >
         <Icon name="EyeOff" aria-hidden />
-        {sheets.length} hidden
+        {t.hiddenCount(sheets.length)}
       </Button>
       {open ? (
         <div
           ref={menuRef}
           role="menu"
-          aria-label="Hidden sheets"
+          aria-label={t.hiddenSheets}
           className="absolute bottom-full left-1 z-50 mb-1 max-h-64 min-w-48 max-w-72 overflow-auto rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
           onKeyDown={onMenuKeyDown}
         >
           <p className="px-2 pb-1 pt-0.5 text-xs text-muted-foreground">
-            Hidden sheets
+            {t.hiddenSheets}
           </p>
           {sheets.map((sheet) => (
             <button
@@ -109,7 +112,7 @@ function HiddenSheetsMenu({
                 <Icon
                   name="Check"
                   className="size-3.5 shrink-0"
-                  aria-label="Open"
+                  aria-label={t.open}
                 />
               ) : null}
             </button>
@@ -133,6 +136,7 @@ export function SheetTabs({
   panelId: string;
   onSelect: (index: number) => void;
 }) {
+  const t = useMessages(sheetMessages);
   const indexed = sheets.map((sheet, index) => ({ ...sheet, index }));
   // A hidden sheet opened from the menu shows as a tab while it is open.
   const tabs = indexed.filter(
@@ -225,7 +229,7 @@ export function SheetTabs({
           size="icon"
           className={scrollButton}
           onClick={() => scrollBy(-1)}
-          aria-label="Scroll sheet tabs left"
+          aria-label={t.scrollLeft}
           tabIndex={-1}
         >
           <Icon name="ChevronLeft" aria-hidden />
@@ -234,7 +238,7 @@ export function SheetTabs({
       <div
         ref={stripRef}
         role="tablist"
-        aria-label="Sheets"
+        aria-label={t.sheets}
         className="flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onScroll={updateOverflow}
         onWheel={onWheel}
@@ -252,7 +256,7 @@ export function SheetTabs({
               aria-selected={isSelected}
               aria-controls={panelId}
               tabIndex={isSelected ? 0 : -1}
-              title={sheet.hidden ? `${sheet.name} (hidden sheet)` : sheet.name}
+              title={sheet.hidden ? t.hiddenSheet(sheet.name) : sheet.name}
               className={cn(
                 "relative flex max-w-52 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap border-r border-border px-3 text-xs outline-none focus-visible:bg-state-hover",
                 isSelected
@@ -277,7 +281,7 @@ export function SheetTabs({
                 <Icon
                   name="Loading"
                   className="size-3 shrink-0 animate-spin"
-                  aria-label="Loading"
+                  aria-label={t.loadingShort}
                 />
               ) : null}
             </button>
@@ -291,7 +295,7 @@ export function SheetTabs({
           size="icon"
           className={scrollButton}
           onClick={() => scrollBy(1)}
-          aria-label="Scroll sheet tabs right"
+          aria-label={t.scrollRight}
           tabIndex={-1}
         >
           <Icon name="ChevronRight" aria-hidden />

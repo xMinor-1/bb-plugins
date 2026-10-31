@@ -2,12 +2,30 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { defineMessages, useMessages } from "@/lib/i18n";
+
+const messages = defineMessages(
+  {
+    comment: "Comment",
+    field: "Comment",
+    placeholder: "What should change here?",
+    toSave: "⌘↵ to save",
+    cancel: "Cancel",
+  },
+  {
+    comment: "Добавить",
+    field: "Комментарий",
+    placeholder: "Что здесь поменять?",
+    toSave: "⌘↵ — сохранить",
+    cancel: "Отмена",
+  },
+);
 
 export function CommentEditor({
   initial = "",
   label,
-  submitLabel = "Comment",
-  placeholder = "What should change here?",
+  submitLabel,
+  placeholder,
   busy = false,
   className,
   onSubmit,
@@ -23,6 +41,7 @@ export function CommentEditor({
   onSubmit: (body: string) => void;
   onCancel: () => void;
 }) {
+  const t = useMessages(messages);
   const [body, setBody] = useState(initial);
   const field = useRef<HTMLTextAreaElement>(null);
 
@@ -81,18 +100,18 @@ export function CommentEditor({
         onChange={(event) => setBody(event.target.value)}
         onKeyDown={onKeyDown}
         rows={2}
-        placeholder={placeholder}
-        aria-label="Comment"
+        placeholder={placeholder ?? t.placeholder}
+        aria-label={t.field}
         className="block w-full resize-none rounded-md border border-input bg-background px-2 py-1.5 text-base outline-none md:text-sm placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
       />
       <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="hidden text-xs text-muted-foreground sm:inline">⌘↵ to save</span>
+        <span className="hidden text-xs text-muted-foreground sm:inline">{t.toSave}</span>
         <div className="ml-auto flex gap-1.5">
           <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-            Cancel
+            {t.cancel}
           </Button>
           <Button type="button" size="sm" disabled={!trimmed || busy} onClick={submit}>
-            {submitLabel}
+            {submitLabel ?? t.comment}
           </Button>
         </div>
       </div>

@@ -3,6 +3,12 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { Icon } from "@/components/ui/icon";
+import { defineMessages, messagesNow, useMessages } from "@/lib/i18n";
+
+const messages = defineMessages(
+  { comment: "Comment", copy: "Copy", clipboardRefused: "The clipboard refused the text" },
+  { comment: "Комментировать", copy: "Копировать", clipboardRefused: "Буфер обмена не принял текст" },
+);
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 export const COMMENT_SHORTCUT = IS_MAC ? "⌘⌥M" : "Ctrl+Alt+M";
@@ -25,6 +31,7 @@ export function SelectionMenu({
   onComment: () => void;
   onClose: () => void;
 }) {
+  const t = useMessages(messages);
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -65,7 +72,7 @@ export function SelectionMenu({
         }}
       >
         <Icon name="MessageSquarePlus" className="size-4" />
-        <span className="flex-1">Comment</span>
+        <span className="flex-1">{t.comment}</span>
         <span className="text-xs text-muted-foreground">{COMMENT_SHORTCUT}</span>
       </button>
       <button
@@ -76,12 +83,12 @@ export function SelectionMenu({
           onClose();
           navigator.clipboard.writeText(quote).then(
             () => undefined,
-            () => toast.error("The clipboard refused the text"),
+            () => toast.error(messagesNow(messages).clipboardRefused),
           );
         }}
       >
         <Icon name="Copy" className="size-4" />
-        <span className="flex-1">Copy</span>
+        <span className="flex-1">{t.copy}</span>
       </button>
     </div>
   );

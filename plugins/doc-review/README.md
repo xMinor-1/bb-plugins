@@ -8,6 +8,8 @@ new one. The agent closes each comment with a note, so the tab shows what was
 fixed and what still needs you, and you answer it right in the comment's
 thread.
 
+Interface: English and Russian — switch with **EN | RU** on the Doc Review page, in a file tab's toolbar, and in the attachments tab.
+
 ![A PDF report in Doc Review with its comment list: the agent asked a question, got an answer, reported back, and a new reply is being typed](../../media/doc-review/catalog-reply.png)
 
 Version 0.2 absorbed the Document Viewer plugin (`pdf-viewer`): its Word,

@@ -14,6 +14,8 @@ import type { Point } from "./markdown-doc";
 import type { PageMode } from "./pages-doc";
 import { DrawingBar } from "./drawing-bar";
 import { SelectionMenu } from "./selection-menu";
+import { messagesNow } from "@/lib/i18n";
+import { countWords } from "./labels";
 
 interface FrameRect {
   x: number;
@@ -139,7 +141,13 @@ function commentsMessage(comments: ReviewComment[], activeId: string | null) {
     type: "comments",
     items: comments
       .filter((comment) => isHtmlAnchor(comment.anchor) && (comment.status !== "resolved" || comment.id === activeId))
-      .map((comment) => ({ id: comment.id, seq: comment.seq, active: comment.id === activeId, anchor: comment.anchor })),
+      .map((comment) => ({
+        id: comment.id,
+        seq: comment.seq,
+        label: messagesNow(countWords).pin(comment.seq),
+        active: comment.id === activeId,
+        anchor: comment.anchor,
+      })),
   };
 }
 

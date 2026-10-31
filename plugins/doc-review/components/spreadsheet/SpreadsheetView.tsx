@@ -4,6 +4,7 @@
 import { useCallback, useId, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { intlLocale, useLang, useMessages } from "@/lib/i18n";
 import {
   SHEET_CELL_LIMIT,
   type SheetData,
@@ -14,6 +15,7 @@ import { GRID_CSS } from "./paper";
 import { SheetGrid, layoutFor } from "./SheetGrid";
 import { SheetTabs, tabId } from "./SheetTabs";
 import { ZoomControl } from "./ZoomControl";
+import { sheetMessages } from "./messages";
 
 export interface SpreadsheetViewProps {
   workbook: WorkbookSummary;
@@ -31,9 +33,11 @@ export interface SpreadsheetViewProps {
   onSelectSheet: (index: number) => void;
 }
 
-const numberFormat = new Intl.NumberFormat("en-US");
-
-function truncationNotice(sheet: SheetData): string {
+function truncationNotice(
+  sheet: SheetData,
+  t: (typeof sheetMessages)["en"],
+  numberFormat: Intl.NumberFormat,
+): string {
   const rows = sheet.rowCount < sheet.totalRows;
   const cols = sheet.colCount < sheet.totalCols;
   const shownRows = numberFormat.format(sheet.rowCount);
@@ -41,13 +45,11 @@ function truncationNotice(sheet: SheetData): string {
   const shownCols = numberFormat.format(sheet.colCount);
   const allCols = numberFormat.format(sheet.totalCols);
   if (rows && cols) {
-    return `Showing the first ${shownRows} of ${allRows} rows and ${shownCols} of ${allCols} columns.`;
+    return t.rowsAndCols(shownRows, allRows, shownCols, allCols);
   }
-  if (rows) return `Showing the first ${shownRows} of ${allRows} rows.`;
-  if (cols) return `Showing the first ${shownCols} of ${allCols} columns.`;
-  return `Some cells are not shown: the viewer reads up to ${numberFormat.format(
-    SHEET_CELL_LIMIT,
-  )} cells per sheet.`;
+  if (rows) return t.rows(shownRows, allRows);
+  if (cols) return t.cols(shownCols, allCols);
+  return t.cellLimit(numberFormat.format(SHEET_CELL_LIMIT));
 }
 
 function StatusMessage({
@@ -110,6 +112,9 @@ export function SpreadsheetView({
   error,
   onSelectSheet,
 }: SpreadsheetViewProps) {
+  const t = useMessages(sheetMessages);
+  const lang = useLang();
+  const numberFormat = new Intl.NumberFormat(intlLocale(lang));
   const [zoom, setZoom] = useState(1);
   const panelId = useId();
   const onZoomStep = useCallback(
@@ -118,7 +123,7 @@ export function SpreadsheetView({
   );
 
   const selected = workbook.sheets[selectedSheet];
-  const selectedName = selected?.name ?? "sheet";
+  const selectedName = selected?.name ?? t.sheet;
   const stale = sheet !== null && sheet.index !== selectedSheet;
   const shownSummary = sheet ? workbook.sheets[sheet.index] : undefined;
   const layout = sheet ? layoutFor(sheet) : null;
@@ -133,14 +138,14 @@ export function SpreadsheetView({
       selected.kind === "chartsheet" ? (
         <StatusMessage
           icon="ChartColumn"
-          title={`“${selected.name}” is a chart sheet`}
-          detail="Charts are not shown in this viewer. Download the file to see it."
+          title={t.chartSheet(selected.name)}
+          detail={t.chartDetail}
         />
       ) : (
         <StatusMessage
           icon="FileQuestion"
-          title={`“${selected.name}” can't be shown`}
-          detail="It is a macro or dialog sheet, not a worksheet with cells."
+          title={t.cannotShow(selected.name)}
+          detail={t.cannotShowDetail}
         />
       );
   } else if (error) {
@@ -148,7 +153,7 @@ export function SpreadsheetView({
       <StatusMessage
         icon="AlertTriangle"
         tone="destructive"
-        title={`Could not load “${selectedName}”`}
+        title={t.couldNotLoad(selectedName)}
         detail={error}
       />
     );
@@ -157,7 +162,7 @@ export function SpreadsheetView({
     !layout ||
     (stale && shownSummary?.kind !== "worksheet")
   ) {
-    body = <LoadingMessage label={`Loading “${selectedName}”…`} />;
+    body = <LoadingMessage label={t.loading(selectedName)} />;
   } else if (layout.rows.length === 0 || layout.cols.length === 0) {
     dimmed = stale;
     body = (
@@ -165,8 +170,8 @@ export function SpreadsheetView({
         icon="Sheet"
         title={
           sheet.rowCount === 0 || sheet.colCount === 0
-            ? "This sheet is empty"
-            : "Every row or column of this sheet is hidden"
+            ? t.empty
+            : t.allHidden
         }
       />
     );
@@ -213,7 +218,7 @@ export function SpreadsheetView({
                 className="size-3.5 animate-spin"
                 aria-hidden
               />
-              Loading “{selectedName}”…
+              {t.loading(selectedName)}
             </div>
           </div>
         ) : null}
@@ -224,8 +229,8 @@ export function SpreadsheetView({
           className="flex h-6 shrink-0 items-center gap-1.5 border-t border-border bg-muted/40 px-2 text-xs text-muted-foreground"
         >
           <Icon name="Info" className="size-3.5 shrink-0" aria-hidden />
-          <span className="truncate" title={truncationNotice(sheet)}>
-            {truncationNotice(sheet)}
+          <span className="truncate" title={truncationNotice(sheet, t, numberFormat)}>
+            {truncationNotice(sheet, t, numberFormat)}
           </span>
         </div>
       ) : null}

@@ -2,7 +2,23 @@
 // last stroke, or start over. With one stroke the two would do the same, so
 // only Clear shows.
 import { Icon } from "@/components/ui/icon";
+import { defineMessages, useMessages } from "@/lib/i18n";
 import type { Point } from "./markdown-doc";
+
+const messages = defineMessages(
+  {
+    comment: "Comment",
+    undo: "Undo the last stroke",
+    undoTitle: "Undo the last stroke (⌘Z)",
+    clear: "Clear the whole drawing",
+  },
+  {
+    comment: "Комментировать",
+    undo: "Отменить последний штрих",
+    undoTitle: "Отменить последний штрих (⌘Z)",
+    clear: "Стереть весь рисунок",
+  },
+);
 
 export function DrawingBar({
   point,
@@ -18,6 +34,7 @@ export function DrawingBar({
   onUndo: () => void;
   onClear: () => void;
 }) {
+  const t = useMessages(messages);
   const stop = (event: { stopPropagation: () => void; preventDefault: () => void }) => {
     event.stopPropagation();
     event.preventDefault();
@@ -38,14 +55,14 @@ export function DrawingBar({
         }}
       >
         <Icon name="MessageSquarePlus" className="size-3.5" />
-        Comment
+        {t.comment}
       </button>
       {strokes > 1 ? (
         <button
           type="button"
           className="inline-flex size-7 items-center justify-center rounded-[5px] text-muted-foreground hover:bg-accent hover:text-foreground"
-          aria-label="Undo the last stroke"
-          title="Undo the last stroke (⌘Z)"
+          aria-label={t.undo}
+          title={t.undoTitle}
           onClick={(event) => {
             event.stopPropagation();
             onUndo();
@@ -57,8 +74,8 @@ export function DrawingBar({
       <button
         type="button"
         className="inline-flex size-7 items-center justify-center rounded-[5px] text-muted-foreground hover:bg-accent hover:text-foreground"
-        aria-label="Clear the whole drawing"
-        title="Clear the whole drawing"
+        aria-label={t.clear}
+        title={t.clear}
         onClick={(event) => {
           event.stopPropagation();
           onClear();

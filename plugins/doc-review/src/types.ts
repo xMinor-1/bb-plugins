@@ -262,9 +262,26 @@ export function pageNoun(kind: DocKind): "Slide" | "Page" {
   return kind === "presentation" ? "Slide" : "Page";
 }
 
+/**
+ * The words of a place label. Agents and the CLI read them in English; the
+ * panel passes its own language (ui/labels.ts).
+ */
+export const PLACE_WORDS = {
+  wholeDocument: "Whole document",
+  line: (n: number) => `Line ${n}`,
+  lines: (from: number, to: number) => `Lines ${from}–${to}`,
+  page: (slide: boolean, n: number) => `${slide ? "Slide" : "Page"} ${n}`,
+  pageArea: (slide: boolean, n: number) => `${slide ? "Slide" : "Page"} ${n}, area`,
+  pageDrawing: (slide: boolean, n: number) => `${slide ? "Slide" : "Page"} ${n}, drawing`,
+  text: "Text",
+  element: (tag: string) => `Element <${tag}>`,
+  drawing: "Drawing",
+};
+export type PlaceWords = typeof PLACE_WORDS;
+
 /** A short human label for where a comment points. */
-export function anchorLabel(anchor: Anchor, kind: DocKind): string {
-  const label = placeLabel(anchor, kind);
+export function anchorLabel(anchor: Anchor, kind: DocKind, words: PlaceWords = PLACE_WORDS): string {
+  const label = placeLabel(anchor, kind, words);
   // On a live site the page tells comments apart as much as the place does.
   const page = kind === "web" ? anchorPage(anchor) : null;
   if (!page) return label;
@@ -275,28 +292,29 @@ export function anchorLabel(anchor: Anchor, kind: DocKind): string {
   }
 }
 
-function placeLabel(anchor: Anchor, kind: DocKind): string {
+function placeLabel(anchor: Anchor, kind: DocKind, words: PlaceWords): string {
+  const slide = kind === "presentation";
   switch (anchor.kind) {
     case "doc":
-      return "Whole document";
+      return words.wholeDocument;
     case "md-text":
       return anchor.startLine === anchor.endLine
-        ? `Line ${anchor.startLine}`
-        : `Lines ${anchor.startLine}–${anchor.endLine}`;
+        ? words.line(anchor.startLine)
+        : words.lines(anchor.startLine, anchor.endLine);
     case "page-text":
-      return `${pageNoun(kind)} ${anchor.page}`;
+      return words.page(slide, anchor.page);
     case "page-area":
-      return `${pageNoun(kind)} ${anchor.page}, area`;
+      return words.pageArea(slide, anchor.page);
     case "cell":
       return `${anchor.sheet}!${anchor.ref}`;
     case "html-text":
-      return "Text";
+      return words.text;
     case "html-element":
-      return `Element <${anchor.tag}>`;
+      return words.element(anchor.tag);
     case "page-drawing":
-      return `${pageNoun(kind)} ${anchor.page}, drawing`;
+      return words.pageDrawing(slide, anchor.page);
     case "html-drawing":
-      return "Drawing";
+      return words.drawing;
   }
 }
 
@@ -348,11 +366,20 @@ export function sharedWithOthers(comment: ReviewComment): boolean {
   return comment.author !== null || comment.thread.some((reply) => reply.name !== null);
 }
 
+/** The words for who wrote a reply; the panel passes its own language (ui/labels.ts). */
+export const AUTHOR_WORDS = {
+  agentOf: (name: string) => `${name}'s agent`,
+  agent: "Agent",
+  you: "You",
+  youNotSent: "You, not sent",
+};
+export type AuthorWords = typeof AUTHOR_WORDS;
+
 /** Who wrote a reply, as the comment list and the agent read it. */
-export function replyAuthor(reply: CommentReply): string {
-  if (reply.author === "agent") return reply.name ? `${reply.name}'s agent` : "Agent";
+export function replyAuthor(reply: CommentReply, words: AuthorWords = AUTHOR_WORDS): string {
+  if (reply.author === "agent") return reply.name ? words.agentOf(reply.name) : words.agent;
   if (reply.name) return reply.name;
-  return reply.sentAt === null ? "You, not sent" : "You";
+  return reply.sentAt === null ? words.youNotSent : words.you;
 }
 
 /** The page of a live site a comment was left on, if it has one. */

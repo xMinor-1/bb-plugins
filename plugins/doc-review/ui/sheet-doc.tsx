@@ -19,6 +19,8 @@ import { Icon } from "@/components/ui/icon";
 import type { SheetData } from "@/lib/sheet-model";
 import type { WorkbookSummary } from "../src/contract";
 import type { Anchor, ReviewComment } from "../src/types";
+import { useMessages } from "@/lib/i18n";
+import { countWords } from "./labels";
 import type { Point } from "./markdown-doc";
 import { isCommentShortcut, SelectionMenu } from "./selection-menu";
 import { errorText, useReviewRpc } from "./use-review";
@@ -205,8 +207,9 @@ export function SheetDoc({
     pendingAnchor?.kind === "cell" && pendingAnchor.sheetIndex === shown.index ? parseRef(pendingAnchor.ref) : null;
 
   // Paint selection and comment marks onto the cells that exist right now.
-  const paintState = useRef({ sheetComments, selection, pendingRange, activeId });
-  paintState.current = { sheetComments, selection, pendingRange, activeId };
+  const words = useMessages(countWords);
+  const paintState = useRef({ sheetComments, selection, pendingRange, activeId, words });
+  paintState.current = { sheetComments, selection, pendingRange, activeId, words };
   const paint = useCallback(() => {
     const element = root.current;
     if (!element) return;
@@ -225,7 +228,7 @@ export function SheetDoc({
       setAttr(td, "data-dr-pin", pin ? String(pin.comment.seq) : null);
       // The number lives in the tooltip; the corner mark stays small.
       if (pin) {
-        setAttr(td, "title", `Comment ${pin.comment.seq}`);
+        setAttr(td, "title", state.words.pin(pin.comment.seq));
         setAttr(td, "data-dr-title", "");
       } else if (td.hasAttribute("data-dr-title")) {
         td.removeAttribute("title");
@@ -234,7 +237,7 @@ export function SheetDoc({
     }
   }, []);
 
-  useEffect(paint, [paint, shown, selection, pendingRange?.r1, pendingRange?.c1, pendingRange?.r2, pendingRange?.c2, activeId, comments]);
+  useEffect(paint, [paint, shown, selection, pendingRange?.r1, pendingRange?.c1, pendingRange?.r2, pendingRange?.c2, activeId, comments, words]);
   useEffect(() => {
     const element = root.current;
     if (!element) return;

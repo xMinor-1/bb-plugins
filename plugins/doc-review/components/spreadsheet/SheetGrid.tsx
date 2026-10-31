@@ -31,6 +31,8 @@ import {
 import type { SheetData } from "@/lib/sheet-model";
 import { GRIDLINE, HEADER_HEIGHT, Z } from "./paper";
 import { PaddingRow, SheetRow, type GridContext } from "./SheetRow";
+import { useMessages } from "@/lib/i18n";
+import { sheetMessages } from "./messages";
 
 /** Rows rendered when a sheet opens, before the viewport is known. */
 const INITIAL_ROWS = 150;
@@ -84,6 +86,7 @@ const HeaderRow = memo(function HeaderRow({
   ctx: GridContext;
   restWidth: number;
 }) {
+  const t = useMessages(sheetMessages);
   const { layout } = ctx;
   const restLetters: string[] = [];
   const firstRest = layout.sheet.colCount;
@@ -92,7 +95,7 @@ const HeaderRow = memo(function HeaderRow({
   }
   return (
     <tr style={{ height: HEADER_HEIGHT }}>
-      <th scope="col" className="ssv-corner" aria-label="Row" />
+      <th scope="col" className="ssv-corner" aria-label={t.row} />
       {layout.cols.map((col, pos) => {
         const frozen = pos < ctx.frozenCols;
         const previous = pos > 0 ? layout.cols[pos - 1] : -1;
@@ -137,6 +140,7 @@ export interface SheetGridProps {
 }
 
 export function SheetGrid({ sheet, zoom, onZoomStep }: SheetGridProps) {
+  const t = useMessages(sheetMessages);
   const layout = layoutFor(sheet);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const viewport = useViewportSize(scrollerRef);
@@ -313,7 +317,7 @@ export function SheetGrid({ sheet, zoom, onZoomStep }: SheetGridProps) {
         className="ssv-scroller peer absolute inset-0 overflow-auto outline-none"
         tabIndex={0}
         role="region"
-        aria-label={`Sheet ${sheet.name}`}
+        aria-label={t.sheetRegion(sheet.name)}
       >
         <div className="ssv-zoom" style={zoomCss}>
           <table
