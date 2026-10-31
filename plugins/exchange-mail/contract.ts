@@ -58,13 +58,33 @@ export const messageSummarySchema = z
   .strict();
 export type MessageSummary = z.infer<typeof messageSummarySchema>;
 
+/** An attachment of a message, by its place in the message (1-based): Exchange's own ids run to hundreds of characters. */
+export const messageAttachmentSchema = z
+  .object({
+    index: z.number().int().min(1),
+    name: z.string(),
+    size: z.number().nullable(),
+    contentType: z.string().nullable(),
+    /** "file" can be opened from bb; an attached message or a link to a file elsewhere opens in Outlook. */
+    kind: z.enum(["file", "item", "reference"]),
+    /** A picture shown inside the text of an HTML message (cid:). */
+    inline: z.boolean(),
+    contentId: z.string().nullable(),
+  })
+  .strict();
+export type MessageAttachment = z.infer<typeof messageAttachmentSchema>;
+
 export const messageSchema = messageSummarySchema
   .extend({
     to: z.array(addressSchema),
     cc: z.array(addressSchema),
     sent: z.string().nullable(),
+    /** Plain text, line breaks normalized. Exchange's written-out link targets are left for the reader to show. */
     body: z.string(),
-    attachments: z.array(z.object({ name: z.string(), size: z.number().nullable() }).strict()),
+    /** HTML as Exchange holds it, for the panel's sanitized view; null for plain-text messages and for agents. */
+    html: z.string().nullable(),
+    bodyFormat: z.enum(["text", "html", "rtf", "unknown"]),
+    attachments: z.array(messageAttachmentSchema),
   })
   .strict();
 export type MailMessage = z.infer<typeof messageSchema>;
@@ -86,7 +106,7 @@ export const listOutputSchema = z
   .strict();
 export type ListOutput = z.infer<typeof listOutputSchema>;
 
-export const draftKindSchema = z.enum(["new", "reply", "replyAll"]);
+export const draftKindSchema = z.enum(["new", "reply", "replyAll", "forward"]);
 export type DraftKind = z.infer<typeof draftKindSchema>;
 
 /** How Exchange stores the body. Anything but text goes out with formatting the plain-text view does not show. */
@@ -100,7 +120,7 @@ const recipientList = z.array(z.string().min(3).max(320)).max(100);
 export const draftInputSchema = z
   .object({
     kind: draftKindSchema,
-    /** The message answered (a ref from a list or read); required for replies. */
+    /** The message answered or forwarded (a ref from a list or read); required for replies and forwards. */
     replyTo: z.string().max(64).optional(),
     /** "Name <email>" or "email". Replies: omitted keeps the recipients Exchange picks. */
     to: recipientList.optional(),
@@ -155,12 +175,16 @@ export const toolInputSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("list"), folder: folderSchema.optional(), unreadOnly: z.boolean().optional(), limit: z.number().int().min(1).max(50).optional(), offset: z.number().int().min(0).max(10_000).optional() }).strict(),
   z.object({ tool: z.literal("search"), query: z.string().min(1).max(500), folder: z.enum(["inbox", "sent", "all"]).optional(), limit: z.number().int().min(1).max(50).optional() }).strict(),
   z.object({ tool: z.literal("read"), ref: z.string().min(1).max(64), maxChars: z.number().int().min(500).max(100_000).optional() }).strict(),
+  z.object({ tool: z.literal("attachment"), ref: z.string().min(1).max(64), index: z.number().int().min(1).max(500), maxChars: z.number().int().min(500).max(200_000).optional() }).strict(),
+  z.object({ tool: z.literal("conversation"), ref: z.string().min(1).max(64) }).strict(),
   z
     .object({
       tool: z.literal("draft"),
       threadId: z.string().max(200),
       replyTo: z.string().max(64).optional(),
       replyAll: z.boolean().optional(),
+      /** A message to forward, instead of replyTo. */
+      forward: z.string().max(64).optional(),
       to: recipientList.optional(),
       cc: recipientList.optional(),
       subject: z.string().max(500).optional(),
@@ -183,6 +207,16 @@ export const saveConnectionInputSchema = z
   })
   .strict();
 
+/** The other messages of a conversation, oldest first, the one asked about included. */
+export const conversationSchema = z.object({ messages: z.array(messageSummarySchema) }).strict();
+
+export const attachmentInputSchema = z.object({ ref: z.string().min(1).max(64), index: z.number().int().min(1).max(500) }).strict();
+/** The file itself, for the panel to open or save. Base64; files over ATTACHMENT_MAX_BYTES (src/shared/limits.ts) stay in Outlook. */
+export const attachmentContentSchema = z.object({ name: z.string(), contentType: z.string().nullable(), size: z.number().int(), base64: z.string() }).strict();
+
+/** Pictures an HTML message shows inside its text (cid:), as data: URLs. Large ones are left out. */
+export const inlineImagesSchema = z.object({ images: z.array(z.object({ contentId: z.string(), dataUrl: z.string() }).strict()), skipped: z.number().int() }).strict();
+
 const empty = z.object({}).strict();
 /** A draft by id. With `threadId`, only a draft prepared in that thread answers: a card in a thread shows its own drafts. */
 const draftRef = z.object({ id: z.string().min(1).max(64), threadId: z.string().min(1).max(200).optional() }).strict();
@@ -194,6 +228,9 @@ export const hostContract = defineRpcContract({
   check: { input: z.object({ retry: z.boolean().optional() }).strict(), output: z.object({ ok: z.boolean(), message: z.string(), unread: z.number().int().nullable() }).strict() },
   list: { input: listInputSchema, output: listOutputSchema, experimental_retryable: true },
   read: { input: z.object({ ref: z.string().min(1).max(64), markRead: z.boolean().optional() }).strict(), output: messageSchema },
+  conversation: { input: z.object({ ref: z.string().min(1).max(64) }).strict(), output: conversationSchema, experimental_retryable: true },
+  attachment: { input: attachmentInputSchema, output: attachmentContentSchema },
+  inlineImages: { input: z.object({ ref: z.string().min(1).max(64) }).strict(), output: inlineImagesSchema, experimental_retryable: true },
   drafts: { input: empty, output: z.object({ drafts: z.array(draftSchema) }).strict(), experimental_retryable: true },
   draft: { input: draftRef, output: draftSchema.nullable(), experimental_retryable: true },
   saveDraft: { input: draftInputSchema, output: draftSchema },

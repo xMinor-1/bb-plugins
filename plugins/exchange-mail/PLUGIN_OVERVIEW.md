@@ -4,7 +4,10 @@ with agents that help answer mail but never send it on their own.
 ## What you get
 
 - **Mail** in the sidebar: Inbox and Sent with Outlook-style search, the open
-  message, Reply and Reply all.
+  message with its whole conversation, Reply, Reply all and Forward.
+- **Readable mail**: people by name, links that work, HTML mail shown
+  sanitized in a frame without scripts, pictures from the internet only on
+  request, attachments to open or save.
 - **To send**: every draft prepared in bb — by you or by an agent — with its
   recipients (Bcc included), subject, attachments, format and text, and a Send
   button.
@@ -13,8 +16,8 @@ with agents that help answer mail but never send it on their own.
 
 ## Agents read; people send
 
-Agents on the models you approve can list, search and read mail and save
-drafts. There is no agent tool that sends. Send is confirmed in a system
+Agents on the models you approve can list, search and read mail, read
+attachments (text files and PDF) and whole conversations, and save drafts. There is no agent tool that sends. Send is confirmed in a system
 window on your computer that lists every recipient, Bcc included, and the
 text, and it names the exact version you were shown; if an agent or Outlook
 changed the draft meanwhile, nothing goes out and you see the new version.

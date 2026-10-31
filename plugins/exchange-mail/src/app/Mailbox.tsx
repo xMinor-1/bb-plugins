@@ -1,12 +1,16 @@
 // A folder: the message list with search, the open message, and a reply box.
 import { useCallback, useEffect, useState } from "react";
-import type { Folder, MailMessage, MessageSummary } from "../../contract";
+import type { Folder, MailAddress, MailMessage, MessageSummary } from "../../contract";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { intlLocale, useLang, useMessages, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { messages as texts } from "../messages";
+import { Attachments } from "./Attachments";
+import { Conversation } from "./Conversation";
 import { DraftCard, formatAddress, textareaClass } from "./DraftCard";
+import { MessageBody } from "./MessageBody";
+import { People, Person, shownName } from "./People";
 import { Notice, errorText } from "./ui";
 import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
@@ -94,7 +98,7 @@ export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; fol
                   <span className="flex items-baseline justify-between gap-2">
                     <span className={cn("truncate", !message.isRead && "font-semibold")}>
                       {!message.isRead ? <span className="mr-1.5 inline-block size-2 rounded-full bg-foreground align-middle" aria-label={t.unread} /> : null}
-                      {folder === "sent" || folder === "drafts" ? message.displayTo || t.noRecipients : message.from ? message.from.name || message.from.email : t.unknownSender}
+                      {folder === "sent" || folder === "drafts" ? message.displayTo || t.noRecipients : message.from ? shownName(message.from) : t.unknownSender}
                     </span>
                     <span className="shrink-0 text-xs text-muted-foreground">{shortTime(message.received, lang)}</span>
                   </span>
@@ -122,7 +126,7 @@ export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; fol
           </Button>
         ) : null}
         {selected ? (
-          <MessageView key={selected} rpc={rpc} hostId={hostId} ref_={selected} onRead={markRead} canReply={folder !== "drafts"} />
+          <MessageView key={selected} rpc={rpc} hostId={hostId} ref_={selected} onRead={markRead} onOpen={setSelected} canReply={folder !== "drafts"} />
         ) : (
           <Notice tone="info">{t.chooseMessage}</Notice>
         )}
@@ -131,17 +135,33 @@ export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; fol
   );
 }
 
-function MessageView({ rpc, hostId, ref_, onRead, canReply }: { rpc: Rpc; hostId: string; ref_: string; onRead: (ref: string) => void; canReply: boolean }) {
+type ComposeMode = { kind: "reply" | "replyAll" | "forward" } | { kind: "new"; to: MailAddress };
+
+const cidKey = (value: string) => value.replace(/^cid:/i, "").replace(/^<|>$/g, "").trim().toLowerCase();
+
+function MessageView({
+  rpc,
+  hostId,
+  ref_,
+  onRead,
+  onOpen,
+  canReply,
+}: {
+  rpc: Rpc;
+  hostId: string;
+  ref_: string;
+  onRead: (ref: string) => void;
+  onOpen: (ref: string) => void;
+  canReply: boolean;
+}) {
   const t = useMessages(texts);
   const explain = useExplain();
   const lang = useLang();
   const [message, setMessage] = useState<MailMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reply, setReply] = useState<null | "reply" | "replyAll">(null);
-  const [text, setText] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [compose, setCompose] = useState<ComposeMode | null>(null);
   const [draftId, setDraftId] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [images, setImages] = useState<ReadonlyMap<string, string>>(new Map());
 
   useEffect(() => {
     rpc.call("read", { hostId, ref: ref_ }).then(
@@ -154,24 +174,29 @@ function MessageView({ rpc, hostId, ref_, onRead, canReply }: { rpc: Rpc; hostId
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rpc, hostId, ref_]);
 
-  const save = async () => {
-    if (!reply) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const draft = await rpc.call("saveDraft", { hostId, kind: reply, replyTo: ref_, body: text });
-      setDraftId(draft.id);
-      setReply(null);
-      setText("");
-    } catch (cause) {
-      setSaveError(errorText(cause));
-    } finally {
-      setSaving(false);
-    }
-  };
+  // Pictures the message carries itself, for its HTML: fetched only when the HTML names one.
+  useEffect(() => {
+    if (!message?.html || !/\bcid:/i.test(message.html)) return;
+    let live = true;
+    rpc.call("inlineImages", { hostId, ref: ref_ }).then(
+      (result) => live && setImages(new Map(result.images.map((image) => [cidKey(image.contentId), image.dataUrl]))),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [rpc, hostId, ref_, message?.html]);
 
   if (error) return <Notice tone="error">{explain(error)}</Notice>;
   if (!message) return <Notice tone="info">{t.opening}</Notice>;
+
+  const write = (person: MailAddress) => {
+    setDraftId(null);
+    setCompose({ kind: "new", to: person });
+  };
+  const html = message.bodyFormat === "text" ? null : message.html;
+  // Pictures shown inside an HTML text are not listed again as files.
+  const files = message.attachments.filter((a) => !(a.inline && html));
 
   return (
     <article className="space-y-3">
@@ -179,51 +204,135 @@ function MessageView({ rpc, hostId, ref_, onRead, canReply }: { rpc: Rpc; hostId
         <h2 className="text-base font-semibold break-words">{message.subject || t.noSubject}</h2>
         <p className="text-sm break-words">
           <span className="text-muted-foreground">{t.from} </span>
-          {message.from ? formatAddress(message.from) : t.unknownSender}
+          {message.from ? <Person person={message.from} onWrite={write} /> : t.unknownSender}
         </p>
         <p className="text-sm break-words">
           <span className="text-muted-foreground">{t.to} </span>
-          {message.to.map(formatAddress).join(", ") || t.nobodyListed}
+          {message.to.length ? <People people={message.to} onWrite={write} /> : t.nobodyListed}
         </p>
         {message.cc.length ? (
           <p className="text-sm break-words">
             <span className="text-muted-foreground">{t.cc} </span>
-            {message.cc.map(formatAddress).join(", ")}
+            <People people={message.cc} onWrite={write} />
           </p>
         ) : null}
         <p className="text-xs text-muted-foreground">{message.received ? new Date(message.received).toLocaleString(intlLocale(lang)) : ""}</p>
-        {message.attachments.length ? <p className="text-xs text-muted-foreground">{t.attachmentsInOutlook(message.attachments.map((a) => a.name).join(", "))}</p> : null}
       </header>
+
+      <Conversation rpc={rpc} hostId={hostId} messageRef={ref_} onOpen={onOpen} />
 
       {canReply ? (
         <div className="flex flex-wrap gap-2">
-          <Button variant={reply === "reply" ? "secondary" : "outline"} size="sm" onClick={() => setReply("reply")}>
-            {t.reply}
-          </Button>
-          <Button variant={reply === "replyAll" ? "secondary" : "outline"} size="sm" onClick={() => setReply("replyAll")}>
-            {t.replyAll}
-          </Button>
+          {(["reply", "replyAll", "forward"] as const).map((kind) => (
+            <Button
+              key={kind}
+              variant={compose?.kind === kind ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => {
+                setDraftId(null);
+                setCompose({ kind });
+              }}
+            >
+              {kind === "reply" ? t.reply : kind === "replyAll" ? t.replyAll : t.forward}
+            </Button>
+          ))}
         </div>
       ) : null}
 
-      {reply ? (
-        <div className="space-y-2">
-          <textarea className={textareaClass} rows={8} autoFocus value={text} onChange={(event) => setText(event.target.value)} placeholder={t.replyPlaceholder} />
-          {saveError ? <Notice tone="error">{explain(saveError)}</Notice> : null}
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => void save()} disabled={saving || text.trim() === ""}>
-              {saving ? t.saving : t.prepare}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setReply(null)} disabled={saving}>
-              {t.cancel}
-            </Button>
-          </div>
-        </div>
+      {compose ? (
+        <Composer
+          key={compose.kind === "new" ? `new:${compose.to.email}` : compose.kind}
+          rpc={rpc}
+          hostId={hostId}
+          mode={compose}
+          replyTo={ref_}
+          onSaved={(id) => {
+            setDraftId(id);
+            setCompose(null);
+          }}
+          onCancel={() => setCompose(null)}
+        />
       ) : null}
 
       {draftId ? <DraftCard rpc={rpc} target={{ hostId }} id={draftId} /> : null}
 
-      <div className="whitespace-pre-wrap break-words rounded-lg border border-border bg-card p-4 text-sm leading-relaxed">{message.body || t.emptyBody}</div>
+      <MessageBody text={message.body} html={html} images={images} />
+      <Attachments rpc={rpc} hostId={hostId} messageRef={ref_} attachments={files} />
     </article>
+  );
+}
+
+const recipientsOf = (text: string) =>
+  text
+    .split(/[;,\n]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+function Composer({
+  rpc,
+  hostId,
+  mode,
+  replyTo,
+  onSaved,
+  onCancel,
+}: {
+  rpc: Rpc;
+  hostId: string;
+  mode: ComposeMode;
+  replyTo: string;
+  onSaved: (draftId: string) => void;
+  onCancel: () => void;
+}) {
+  const t = useMessages(texts);
+  const explain = useExplain();
+  const [to, setTo] = useState(mode.kind === "new" ? formatAddress(mode.to) : "");
+  const [subject, setSubject] = useState("");
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const needsTo = mode.kind === "forward" || mode.kind === "new";
+  const ready = (!needsTo || recipientsOf(to).length > 0) && (mode.kind === "forward" || text.trim() !== "") && (mode.kind !== "new" || subject.trim() !== "");
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const draft = await rpc.call("saveDraft", {
+        hostId,
+        kind: mode.kind,
+        ...(mode.kind === "new" ? { subject } : { replyTo }),
+        ...(needsTo ? { to: recipientsOf(to) } : {}),
+        body: text,
+      });
+      onSaved(draft.id);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {needsTo ? <Input value={to} onChange={(event) => setTo(event.target.value)} placeholder={t.toPlaceholder} aria-label={t.to} spellCheck={false} /> : null}
+      {mode.kind === "new" ? <Input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t.subjectPlaceholder} aria-label={t.subjectPlaceholder} /> : null}
+      <textarea
+        className={textareaClass}
+        rows={8}
+        autoFocus={!needsTo}
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        placeholder={mode.kind === "forward" ? t.forwardPlaceholder : mode.kind === "new" ? t.newPlaceholder : t.replyPlaceholder}
+      />
+      {error ? <Notice tone="error">{explain(error)}</Notice> : null}
+      <div className="flex gap-2">
+        <Button size="sm" onClick={() => void save()} disabled={saving || !ready}>
+          {saving ? t.saving : t.prepare}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+          {t.cancel}
+        </Button>
+      </div>
+    </div>
   );
 }

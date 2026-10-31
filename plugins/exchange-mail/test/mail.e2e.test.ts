@@ -24,9 +24,10 @@ let answer: (summary: SendSummary) => Promise<ConfirmOutcome>;
 
 type Address = { name: string | null; email: string };
 async function state(): Promise<{
-  sent: { subject: string; to: Address[]; cc: Address[]; bcc: Address[]; body: string }[];
-  drafts: { id: string; subject: string }[];
+  sent: { subject: string; to: Address[]; cc: Address[]; bcc: Address[]; body: string; attachments: string[] }[];
+  drafts: { id: string; subject: string; attachments: string[] }[];
   requests: string[];
+  downloads: string[];
   signIns: number;
   refused: number;
 }> {
@@ -188,7 +189,11 @@ describe("reading", () => {
     const message = await service.read(meeting!.ref, false);
     expect(message.body).toContain("Переносим встречу на четверг");
     expect(message.from?.name).toBe("Кэрол Тестова");
-    expect(message.attachments).toEqual([{ name: "agenda.pdf", size: 12345 }]);
+    expect(message.attachments.map((a) => [a.index, a.name, a.kind])).toEqual([
+      [1, "agenda.pdf", "file"],
+      [2, "notes.txt", "file"],
+      [3, "slides.pptx", "file"],
+    ]);
 
     const [first] = (await service.list({ folder: "inbox", limit: 1 })).messages;
     await service.read(first!.ref, false);
@@ -223,6 +228,95 @@ describe("reading", () => {
     expect(read).toMatchObject({ isError: true });
     expect(read.text).toMatch(/Unknown message ref/);
     expect((await state()).requests.length).toBe(before);
+  });
+});
+
+describe("reading made readable", () => {
+  beforeEach(connect);
+
+  const bobs = async () => (await service.list({ folder: "inbox", limit: 1 })).messages[0]!.ref;
+  const carols = async () => (await service.list({ folder: "inbox", limit: 2 })).messages[1]!.ref;
+
+  it("decodes Exchange's &#xD; line breaks in the text and the list preview", async () => {
+    const [first] = (await service.list({ folder: "inbox", limit: 1 })).messages;
+    expect(first!.preview).not.toMatch(/&#x?d;|<mailto:|<https?:/i);
+    const message = await service.read(first!.ref, false);
+    expect(message.body).toContain("Hi Alice,\n\nCould you check the numbers in section 2 by Friday?");
+    expect(message.body).not.toMatch(/&#x?d;|\r/i);
+  });
+
+  it("gives agents the text without written-out link targets", async () => {
+    const read = await service.tool({ tool: "read", ref: await bobs() });
+    expect(read.text).toContain("Report <https://example.test/report>");
+    expect(read.text).toContain("\nbob@example.test\n");
+    expect(read.text).not.toContain("<mailto:");
+    // A signature picture inside the HTML is not offered as an attachment.
+    expect(read.text).not.toContain("chart.png");
+    expect(read.text).toContain("mail_conversation");
+  });
+
+  it("hands the panel the HTML with the pictures the message carries, and nothing from the internet", async () => {
+    const ref = await bobs();
+    const message = await service.read(ref, false, undefined, { html: true });
+    expect(message.bodyFormat).toBe("html");
+    expect(message.html).toContain('src="cid:chart1@example.test"');
+    expect(message.body).toContain("Could you check the numbers");
+    expect(message.attachments).toMatchObject([{ index: 1, name: "chart.png", inline: true, contentId: "chart1@example.test" }]);
+    const { images, skipped } = await service.inlineImages(ref);
+    expect(skipped).toBe(0);
+    expect(images).toHaveLength(1);
+    expect(images[0]).toMatchObject({ contentId: "chart1@example.test" });
+    expect(images[0]!.dataUrl).toMatch(/^data:image\/png;base64,iVBOR/);
+  });
+
+  it("opens a file attachment for the panel, by its number", async () => {
+    const ref = await carols();
+    const file = await service.attachment(ref, 1);
+    expect(file).toMatchObject({ name: "agenda.pdf", contentType: "application/pdf" });
+    expect(Buffer.from(file.base64, "base64").subarray(0, 5).toString()).toBe("%PDF-");
+    await expect(service.attachment(ref, 9)).rejects.toThrow(/no attachment 9/);
+  });
+
+  it("reads a PDF and a Windows-1251 text file for agents, and refuses other formats", async () => {
+    const ref = await carols();
+    const pdf = await service.tool({ tool: "attachment", ref, index: 1 });
+    expect(pdf.isError).toBe(false);
+    expect(pdf.text).toMatch(/^Mail is written by other people/);
+    expect(pdf.text).toContain("[page 1]\nAgenda: budget review");
+    const notes = await service.tool({ tool: "attachment", ref, index: 2 });
+    expect(notes.text).toContain("Повестка: бюджет и сроки");
+    const slides = await service.tool({ tool: "attachment", ref, index: 3 });
+    expect(slides).toMatchObject({ isError: true, text: expect.stringMatching(/not a text file or a PDF/) });
+    expect((await state()).downloads).toEqual(["agenda.pdf", "notes.txt", "slides.pptx"]);
+  });
+
+  it("shows the whole conversation, Sent Items included, oldest first", async () => {
+    const ref = await bobs();
+    const { messages } = await service.conversation(ref);
+    expect(messages.map((m) => m.subject)).toEqual(["Quarterly report", "Quarterly report draft"]);
+    const tool = await service.tool({ tool: "conversation", ref });
+    expect(tool.text).toMatch(/2 messages in Inbox and Sent Items, oldest first/);
+    expect(tool.text).toContain(`* [${ref}]`);
+    const single = await service.tool({ tool: "conversation", ref: await carols() });
+    expect(single.text).toMatch(/only one of its conversation/);
+  });
+
+  it("forwards a message with its attachments, sent only after the window confirms", async () => {
+    const ref = await carols();
+    const refused = await service.tool({ tool: "draft", threadId: "thr_1", forward: ref, body: "FYI" });
+    expect(refused).toMatchObject({ isError: true, text: expect.stringMatching(/needs at least one recipient/) });
+
+    const first = await service.tool({ tool: "draft", threadId: "thr_1", forward: ref, to: ["Dave Example <dave@example.test>"], cc: ["eve@example.test"], body: "FYI." });
+    expect(first.isError).toBe(false);
+    // A revision without to keeps the recipients of the version it replaces.
+    const saved = await service.tool({ tool: "draft", threadId: "thr_1", replaces: first.draftId!, body: "FYI, see the agenda." });
+    expect(saved).toMatchObject({ isError: false, draftId: first.draftId });
+    const [draft] = (await service.drafts()).drafts;
+    expect(draft).toMatchObject({ kind: "forward", subject: "FW: Встреча в четверг", text: "FYI, see the agenda.", to: [{ email: "dave@example.test" }], cc: [{ email: "eve@example.test" }] });
+    expect(draft!.attachments.map((a) => a.name)).toEqual(["agenda.pdf", "notes.txt", "slides.pptx"]);
+    expect((await service.send(draft!.id, draft!.revision)).status).toBe("sent");
+    expect(asked[0]).toMatchObject({ kind: "forward", attachments: [{ name: "agenda.pdf" }, { name: "notes.txt" }, { name: "slides.pptx" }] });
+    expect((await state()).sent[0]).toMatchObject({ subject: "FW: Встреча в четверг", attachments: ["agenda.pdf", "notes.txt", "slides.pptx"] });
   });
 });
 
