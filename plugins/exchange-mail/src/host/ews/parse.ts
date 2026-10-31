@@ -399,3 +399,55 @@ export function parseResolveNames(xmlText: string): { people: ParsedPerson[]; to
   }
   return { people, total: Number(text(set?.["@TotalItemsInView"])) || people.length };
 }
+
+/** One meeting or appointment, or one occurrence of a recurring one. Times are ISO strings as Exchange gives them (UTC). */
+export interface ParsedEvent {
+  readonly item: ItemRef;
+  readonly subject: string;
+  readonly start: string;
+  readonly end: string;
+  readonly allDay: boolean;
+  readonly location: string | null;
+  readonly organizer: Address | null;
+  /** Organizer, Accept, Tentative, Decline, NoResponseReceived, Unknown. */
+  readonly myResponse: string;
+  /** Free, Tentative, Busy, OOF, WorkingElsewhere, NoData. */
+  readonly showAs: string;
+  /** Single, Occurrence, Exception, RecurringMaster. */
+  readonly type: string;
+  readonly cancelled: boolean;
+  readonly isMeeting: boolean;
+  readonly recurring: boolean;
+  /** Normal, Personal, Private, Confidential. */
+  readonly sensitivity: string;
+  readonly displayTo: string;
+  readonly displayCc: string;
+}
+
+export function parseCalendarView(xmlText: string): { events: ParsedEvent[]; last: boolean } {
+  const message = responseMessage(xmlText, "FindItem");
+  const root = asNode(message.RootFolder);
+  const events = items(root?.Items).map(({ node }): ParsedEvent => {
+    const organizer = address(node.Organizer);
+    return {
+      item: ref(node.ItemId),
+      subject: text(node.Subject),
+      start: text(node.Start),
+      end: text(node.End),
+      allDay: bool(node.IsAllDayEvent),
+      location: text(node.Location).trim() || null,
+      // An organizer inside the organization may come with an X.500 address only: keep the name.
+      organizer: organizer ? { name: organizer.name, email: smtp(organizer.email) ?? "" } : null,
+      myResponse: text(node.MyResponseType) || "Unknown",
+      showAs: text(node.LegacyFreeBusyStatus) || "Busy",
+      type: text(node.CalendarItemType) || "Single",
+      cancelled: bool(node.IsCancelled),
+      isMeeting: bool(node.IsMeeting),
+      recurring: bool(node.IsRecurring),
+      sensitivity: text(node.Sensitivity) || "Normal",
+      displayTo: text(node.DisplayTo),
+      displayCc: text(node.DisplayCc),
+    };
+  });
+  return { events: events.filter((event) => event.start && event.end), last: text(root?.["@IncludesLastItemInRange"]).toLowerCase() !== "false" };
+}

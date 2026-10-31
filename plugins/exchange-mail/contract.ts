@@ -189,6 +189,39 @@ export const peopleSchema = z.object({ people: z.array(personSchema), more: z.bo
 export type People = z.infer<typeof peopleSchema>;
 export const peopleQuerySchema = z.string().trim().min(2).max(200);
 
+/** One meeting or appointment in the calendar, or one occurrence of a recurring one. */
+export const calendarEventSchema = z
+  .object({
+    /** Stable for the same occurrence on this machine. */
+    id: z.string(),
+    subject: z.string(),
+    /** ISO, UTC. An all-day event runs from midnight to midnight in the mailbox's time zone. */
+    start: z.string(),
+    end: z.string(),
+    allDay: z.boolean(),
+    location: z.string().nullable(),
+    organizer: addressSchema.nullable(),
+    /** Who else is invited, as Exchange lists them: names separated by semicolons. */
+    attendees: z.string(),
+    myResponse: z.enum(["organizer", "accepted", "tentative", "declined", "none", "unknown"]),
+    showAs: z.enum(["free", "tentative", "busy", "away", "elsewhere", "unknown"]),
+    /** single, an occurrence of a recurring meeting, or an occurrence that was moved or changed. */
+    kind: z.enum(["single", "occurrence", "exception"]),
+    cancelled: z.boolean(),
+    private: z.boolean(),
+  })
+  .strict();
+export type CalendarEvent = z.infer<typeof calendarEventSchema>;
+
+/** A stretch of the calendar: ISO moments, at most CALENDAR_MAX_DAYS (src/shared/limits.ts) apart. */
+export const calendarRangeSchema = z.object({ start: z.string().min(10).max(40), end: z.string().min(10).max(40) }).strict();
+/** `more`: the calendar holds more events in this stretch than were returned. */
+export const calendarSchema = z.object({ events: z.array(calendarEventSchema), more: z.boolean() }).strict();
+export type CalendarOutput = z.infer<typeof calendarSchema>;
+
+const whenSchema = z.string().min(10).max(40);
+const clockSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+
 /** What an agent may ask for. There is deliberately no send. */
 export const toolInputSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("list"), folder: folderSchema.optional(), unreadOnly: z.boolean().optional(), limit: z.number().int().min(1).max(50).optional(), offset: z.number().int().min(0).max(10_000).optional() }).strict(),
@@ -197,6 +230,19 @@ export const toolInputSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("attachment"), ref: z.string().min(1).max(64), index: z.number().int().min(1).max(500), maxChars: z.number().int().min(500).max(200_000).optional() }).strict(),
   z.object({ tool: z.literal("conversation"), ref: z.string().min(1).max(64) }).strict(),
   z.object({ tool: z.literal("people"), query: peopleQuerySchema }).strict(),
+  /** `from`/`to`: a date (2026-11-03) or a local time (2026-11-03T14:00) on the machine with the mailbox, or ISO with a zone. */
+  z.object({ tool: z.literal("events"), from: whenSchema.optional(), to: whenSchema.optional() }).strict(),
+  z
+    .object({
+      tool: z.literal("freeTime"),
+      from: whenSchema.optional(),
+      to: whenSchema.optional(),
+      minMinutes: z.number().int().min(5).max(600).optional(),
+      dayStart: clockSchema.optional(),
+      dayEnd: clockSchema.optional(),
+      weekends: z.boolean().optional(),
+    })
+    .strict(),
   z
     .object({
       tool: z.literal("draft"),
@@ -263,6 +309,7 @@ export const hostContract = defineRpcContract({
   attachment: { input: attachmentInputSchema, output: attachmentContentSchema },
   inlineImages: { input: z.object({ ref: z.string().min(1).max(64) }).strict(), output: inlineImagesSchema, experimental_retryable: true },
   findPeople: { input: z.object({ query: peopleQuerySchema }).strict(), output: peopleSchema, experimental_retryable: true },
+  calendar: { input: calendarRangeSchema, output: calendarSchema, experimental_retryable: true },
   drafts: { input: empty, output: z.object({ drafts: z.array(draftSchema) }).strict(), experimental_retryable: true },
   draft: { input: draftRef, output: draftSchema.nullable(), experimental_retryable: true },
   saveDraft: { input: draftInputSchema, output: draftSchema },

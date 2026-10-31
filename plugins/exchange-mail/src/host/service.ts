@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type {
   AuthMode,
+  CalendarOutput,
   ConnectionStatus,
   Lang,
   Draft,
@@ -20,7 +21,8 @@ import type {
   ToolInput,
   ToolOutput,
 } from "../../contract.js";
-import { ATTACHMENT_MAX_BYTES } from "../shared/limits.js";
+import { ATTACHMENT_MAX_BYTES, CALENDAR_MAX_DAYS, CALENDAR_MAX_EVENTS } from "../shared/limits.js";
+import { fixedOffset, formatEvents, formatFreeTime, freeSlots, minutesOf, rangeOf, systemOffset, toEvent, type Offset } from "./calendar.js";
 import { normalizeText } from "../shared/mail-text.js";
 import { isAddress } from "../shared/recipients.js";
 import { oneAtATime, systemConfirmer, type SendConfirmer, type SendSummary } from "./confirm.js";
@@ -46,6 +48,9 @@ const INLINE_IMAGE_MAX_BYTES = 1_500_000;
 const INLINE_IMAGES_MAX_BYTES = 6_000_000;
 const INLINE_IMAGES_MAX = 30;
 const CONVERSATION_MAX = 50;
+/** Free time is looked for in a month at most. */
+const FREE_TIME_MAX_DAYS = 31;
+const DAY_MS = 24 * 60 * 60_000;
 /** People shown for one search: enough to choose from, few enough to read. */
 export const PEOPLE_MAX = 25;
 
@@ -457,6 +462,35 @@ export class MailService {
 
   // -------------------------------------------------------------------- drafts
 
+  // ------------------------------------------------------------------ calendar
+
+  /** This machine's time zone, or the fixed offset tests give. */
+  private zone(): Offset {
+    return this.offset === undefined ? systemOffset : fixedOffset(this.offset);
+  }
+
+  /** Events between two ISO moments, recurring meetings expanded, for the panel and other plugins. */
+  async calendar(start: string, end: string, signal?: AbortSignal): Promise<CalendarOutput> {
+    const from = Date.parse(start);
+    const to = Date.parse(end);
+    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) throw new UserError("The calendar period is not valid: its end must come after its start.");
+    if (to - from > CALENDAR_MAX_DAYS * DAY_MS) throw new UserError(`Ask for ${CALENDAR_MAX_DAYS} days of calendar at most.`);
+    return this.readCalendar(from, to, signal);
+  }
+
+  private async readCalendar(from: number, to: number, signal?: AbortSignal): Promise<CalendarOutput> {
+    const client = await this.client();
+    const { events, last } = await client.calendar({ start: new Date(from).toISOString(), end: new Date(to).toISOString(), max: CALENDAR_MAX_EVENTS }, signal);
+    return {
+      // A CalendarView gives occurrences, never the recurring master itself; anything else that slips in is left out.
+      events: events
+        .filter((event) => event.type !== "RecurringMaster" && !Number.isNaN(Date.parse(event.start)) && !Number.isNaN(Date.parse(event.end)))
+        .map(toEvent)
+        .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end)),
+      more: !last,
+    };
+  }
+
   // -------------------------------------------------------------- address book
 
   /** People whose name or address starts like `query`, each address once. */
@@ -715,6 +749,26 @@ export class MailService {
         case "people": {
           const found = await this.findPeople(input.query, signal);
           return { text: formatPeople(input.query, found), isError: false, draftId: null, people: found.people, more: found.more };
+        }
+        case "events": {
+          const zone = this.zone();
+          const range = rangeOf(input, this.now(), zone, { maxDays: CALENDAR_MAX_DAYS });
+          const { events, more } = await this.readCalendar(range.start, range.end, signal);
+          return { text: formatEvents(events, range, more, zone), isError: false, draftId: null };
+        }
+        case "freeTime": {
+          const zone = this.zone();
+          const range = rangeOf(input, this.now(), zone, { fromNow: true, maxDays: FREE_TIME_MAX_DAYS });
+          const options = {
+            dayStart: minutesOf(input.dayStart ?? "09:00"),
+            dayEnd: minutesOf(input.dayEnd ?? "18:00"),
+            minMinutes: input.minMinutes ?? 30,
+            weekends: input.weekends ?? false,
+            offset: zone,
+          };
+          if (options.dayEnd <= options.dayStart) throw new UserError("day_end must come after day_start.");
+          const { events, more } = await this.readCalendar(range.start, range.end, signal);
+          return { text: formatFreeTime(freeSlots(events, range, options), range, options, more), isError: false, draftId: null };
         }
         case "draft": {
           let kind: Draft["kind"] = input.forward ? "forward" : input.replyTo ? (input.replyAll ? "replyAll" : "reply") : "new";

@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-exchange-mail",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "engines": {
     "bb": ">=0.48",
@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Exchange Mail",
-    "description": "Read your Exchange mailbox in bb and answer from it. Agents on the models you approve can read, search and draft replies; a draft leaves only when you press Send. Signs in with your Windows account, or a password kept in the OS store.",
+    "description": "Read your Exchange mailbox and calendar in bb and answer from them. Agents on the models you approve can read, search and draft replies and see your meetings and free time; a draft leaves only when you press Send. Signs in with your Windows account, or a password kept in the OS store.",
     "branding": {
       "icon": "Mail"
     },
@@ -58,7 +58,7 @@
     "vaul": "^1.1.2",
     "vitest": "^4.1.12"
   },
-  "description": "Read and answer Exchange mail in bb. Agents on approved models read and search mail and prepare reply drafts; only a person sends them.",
+  "description": "Read and answer Exchange mail and read the Exchange calendar in bb. Agents on approved models read and search mail, see meetings and free time, and prepare reply drafts; only a person sends them.",
   "license": "MIT",
   "author": "Foma",
   "repository": {
