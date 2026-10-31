@@ -161,7 +161,10 @@ An install that does not finish in ten minutes may still finish in bb, so
 Fleet Kit never installs another source under the same id after it. It looks
 at what bb lists: the new source counts as switched, a running install is
 left to the next sync, and only an install that is gone without a result gets
-the previous source back.
+the previous source back. A first install that times out is waited for the
+same way. If the build drops the plugin, or marks it `planned`, while such a
+switch is unfinished, Fleet Kit still puts the previous source back rather than
+leave the plugin removed.
 
 Fleet Kit's own update is the first step of every sync and reads only its own
 entry, before the rest of the manifest is checked. When its source offers a
@@ -184,11 +187,13 @@ The person who uses OpenCode edits this file too, so Fleet Kit:
   the rest of the file are kept.
 - Writes under a lock directory `<config>.bb-config-lock` with an `owner.json`
   (plugin, pid, host, time, token), so two syncs — or a sync and a lock reset —
-  never write at once. A writer waits and retries while the lock is held,
+  never write at once. `owner.json` is written whole (a synced temporary file
+  linked into place), so a writer killed half way leaves no empty owner file. A writer waits and retries while the lock is held,
   recovers an abandoned one under `.recovery`, and removes only a directory
   that still carries its own token. The panel shows who holds the lock; when it
-  has been held for more than two minutes, **Reset lock** breaks it under the
-  same recovery guard, after checking again that it is the lock it saw. Fleet
+  has been held for more than two minutes — or a minute, when its `owner.json`
+  is missing, empty or broken — **Reset lock** breaks it under the same
+  recovery guard, after checking again that it is the lock it saw. Fleet
   Kit never breaks a live lock on its own.
 - The file is re-read and its hash compared just before the atomic rename; a
   change made in between restarts the write.
@@ -288,6 +293,14 @@ and limits:
 ```sh
 e2e/run.sh                                     # build the image, start the container, prepare a fixture build
 e2e/x.sh 'bash /tmp/scenario.sh'               # install, sync, enter the key, run threads; one line per check
+```
+
+The run takes several minutes. To survive a lost terminal, start it detached
+and read its log from the container:
+
+```sh
+docker exec -d fleet-kit-e2e bash -c 'bash /tmp/scenario.sh > /tmp/scenario.log 2>&1; echo "exit=$?" >> /tmp/scenario.log'
+docker exec fleet-kit-e2e cat /tmp/scenario.log
 ```
 
 `e2e/scenario.sh` installs Fleet Kit from the container's git repository, sets

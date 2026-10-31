@@ -190,7 +190,8 @@ function FleetKitPage() {
   }
   const last = status.lastSync;
   const visible = (last?.steps ?? []).filter((step) => showAll || (step.outcome !== "ok" && step.outcome !== "skipped"));
-  const lockStuck = status.opencode?.lock && Date.now() - Date.parse(status.opencode.lock.since) > 120_000;
+  const lock = status.opencode?.lock;
+  const lockStuck = lock && Date.now() > (lock.resetAfter ? Date.parse(lock.resetAfter) : Date.parse(lock.since) + 120_000);
   return (
     <Frame>
       <div className="flex flex-wrap items-center gap-3">

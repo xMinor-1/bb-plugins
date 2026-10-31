@@ -75,14 +75,21 @@ export interface SourceChangeRecord {
   pending: boolean;
 }
 
+/** A first install whose wait timed out: bb may still be running it. */
+export interface PendingInstall {
+  source: string;
+  at: string;
+}
+
 export interface ManagedState {
   plugins: Record<string, { manifestSource: string; bbSource: string }>;
   opencode: { configFile: string; directory: string; owned: string[][] } | null;
   selfUpdate: SelfUpdateRecord | null;
   sourceChanges: Record<string, SourceChangeRecord>;
+  installs: Record<string, PendingInstall>;
 }
 
-export const emptyManaged = (): ManagedState => ({ plugins: {}, opencode: null, selfUpdate: null, sourceChanges: {} });
+export const emptyManaged = (): ManagedState => ({ plugins: {}, opencode: null, selfUpdate: null, sourceChanges: {}, installs: {} });
 
 export const SELF_UPDATE_LIMIT = 2;
 export const SOURCE_CHANGE_LIMIT = 2;
@@ -166,7 +173,13 @@ function overall(steps: Step[]): SyncReport["outcome"] {
 /** Older saved state: drop fields this version no longer keeps. */
 function loadManaged(saved: ManagedState): ManagedState {
   const copy = JSON.parse(JSON.stringify(saved)) as Partial<ManagedState> & Record<string, unknown>;
-  return { plugins: copy.plugins ?? {}, opencode: copy.opencode ?? null, selfUpdate: copy.selfUpdate ?? null, sourceChanges: copy.sourceChanges ?? {} };
+  return {
+    plugins: copy.plugins ?? {},
+    opencode: copy.opencode ?? null,
+    selfUpdate: copy.selfUpdate ?? null,
+    sourceChanges: copy.sourceChanges ?? {},
+    installs: copy.installs ?? {},
+  };
 }
 
 export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): Promise<SyncOutcome> {
@@ -415,6 +428,21 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
   // Removal is explicit only: a plugin missing from the manifest stays, so a
   // short or broken manifest cannot strip every machine of its plugins.
   const removals = new Set(manifest.removePlugins ?? []);
+
+  // A switch or first install left unfinished for a plugin the build no longer
+  // installs (dropped from plugins, or now planned) is finished here, so the
+  // plugin is not left removed.
+  const active = new Set(manifest.plugins.filter((entry) => entry.status !== "planned").map((entry) => entry.id));
+  for (const id of Object.keys(managed.installs)) if (!active.has(id)) delete managed.installs[id];
+  for (const [id, record] of Object.entries(managed.sourceChanges)) {
+    if (active.has(id)) continue;
+    try {
+      await settleAbandoned(deps, managed, id, record, removals.has(id), byId, steps, notices);
+    } catch (error) {
+      steps.add("plugin", id, "error", errorText(error));
+    }
+  }
+
   const listed = new Set(manifest.plugins.map((entry) => entry.id));
   for (const id of Object.keys(managed.plugins)) {
     if (listed.has(id)) continue;
@@ -634,6 +662,54 @@ async function startSwitch(ctx: PluginContext, current: Installed, record: Sourc
   return trySwitch(ctx, next);
 }
 
+/**
+ * Finish a source switch for a plugin the build no longer installs. A
+ * finished switch only drops its record; one that left the plugin removed
+ * gets the previous source back once no install of it runs, unless the build
+ * lists the plugin in removePlugins.
+ */
+async function settleAbandoned(
+  deps: SyncDeps,
+  managed: ManagedState,
+  id: string,
+  record: SourceChangeRecord,
+  removing: boolean,
+  byId: Map<string, Installed>,
+  steps: Steps,
+  notices: Notice[],
+) {
+  if (!record.pending || removing) {
+    delete managed.sourceChanges[id];
+    return;
+  }
+  const entry = { id, source: record.target, status: "required" } as ManifestPlugin;
+  const ctx: PluginContext = { deps, managed, entry, byId, steps, notices, now: (deps.now ?? Date.now)() };
+  const now = await listedNow(deps, id);
+  if (now === undefined) {
+    steps.add("plugin", id, "warning", "No longer in the build, and bb's plugin list could not be read to finish its source switch; the next sync checks again.");
+    return;
+  }
+  if (now !== null) {
+    await settled(ctx, record, `${id} was reinstalled during a source switch.`);
+    delete managed.sourceChanges[id];
+    steps.add("plugin", id, "skipped", `No longer in the build; its unfinished source switch left it installed from ${now.source}, and it is kept.`);
+    return;
+  }
+  const running = await installRunning(deps, [record.target, record.previous.source]);
+  if (running !== false) {
+    steps.add("plugin", id, "warning", running ? "No longer in the build; bb is still installing it, and the next sync checks the result." : "No longer in the build; could not see whether bb is still installing it, and the next sync checks again.");
+    return;
+  }
+  const back = await putPreviousBack(ctx, record);
+  if (back === "failed") throw new Error("No longer in the build, and its previous source, removed for a source switch, could not be put back.");
+  if (back === "running") {
+    steps.add("plugin", id, "warning", "No longer in the build; bb is still putting its previous source back, and the next sync checks the result.");
+    return;
+  }
+  delete managed.sourceChanges[id];
+  steps.add("plugin", id, "changed", "No longer in the build; put back on its previous source, which an unfinished source switch had removed.");
+}
+
 function installArgs(entry: ManifestPlugin): InstallArgs {
   const args: InstallArgs = { source: entry.source! };
   if (entry.plugin) args.plugin = entry.plugin;
@@ -707,24 +783,38 @@ async function syncOnePlugin(
     if (current === null) return;
   } else {
     if (record !== undefined) delete managed.sourceChanges[entry.id];
-    if ((await installRunning(deps, [entry.source!])) === true) {
-      steps.add("plugin", entry.id, "warning", "bb is still installing it; the next sync checks the result.");
+    // After an install that timed out, never start one over it: an unknown job list waits too.
+    const pending = managed.installs[entry.id];
+    const sources = pending !== undefined && pending.source !== entry.source ? [entry.source!, pending.source] : [entry.source!];
+    const running = await installRunning(deps, sources);
+    if (running === true || (running === null && pending !== undefined)) {
+      steps.add(
+        "plugin",
+        entry.id,
+        "warning",
+        running ? "bb is still installing it; the next sync checks the result." : "Could not see whether bb is still installing it; the next sync checks again.",
+      );
       return;
     }
     try {
       current = await installChecked(deps, entry.id, installArgs(entry), byId);
     } catch (error) {
       if (error instanceof TimedOut) {
+        managed.installs[entry.id] = { source: entry.source!, at: iso(ctx.now) };
         steps.add("plugin", entry.id, "warning", `${errorText(error)}; the next sync checks the result.`);
         return;
       }
+      delete managed.installs[entry.id];
       throw error;
     }
+    delete managed.installs[entry.id];
     managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: current.source };
     steps.add("plugin", entry.id, "changed", `Installed ${current.version}.`);
   }
 
   if (current === undefined || current === null) return;
+  // Installed, whichever way: a first install that timed out has a result.
+  delete managed.installs[entry.id];
   if (managed.plugins[entry.id] === undefined) managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: current.source };
   if (!current.enabled) {
     current = await within(sdk.plugins.enable({ pluginId: entry.id }), CALL_MS, "Enabling the plugin");

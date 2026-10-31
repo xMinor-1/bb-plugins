@@ -1,11 +1,11 @@
 // Lock tests. The first block started as a copy of qlik-sense's tests (commit
 // c0399a0); Qlik no longer writes opencode.json, so they evolve here.
-import { mkdtemp, readFile, writeFile, mkdir, lstat, rm, utimes } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile, mkdir, lstat, rm, utimes } from "node:fs/promises";
 import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { acquireConfigLock, owns, removeIfSame, withRecoveryGuard } from "../src/host/config-lock.js";
-import { resetStuckLock } from "../src/host/lock-state.js";
+import { lockState, resetStuckLock } from "../src/host/lock-state.js";
 
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
@@ -20,6 +20,8 @@ describe("shared config lock", () => {
     const path = await configPath();
     const release = await acquireConfigLock(path, "fleet-kit");
     const owner = JSON.parse(await readFile(`${path}.bb-config-lock/owner.json`, "utf8"));
+    // Written whole through a temporary file, which is gone afterwards.
+    expect(await readdir(`${path}.bb-config-lock`)).toEqual(["owner.json"]);
     expect(owner).toMatchObject({ plugin: "fleet-kit", pid: process.pid, host: hostname() });
     await expect(acquireConfigLock(path, "qlik-sense", { timeoutMs: 1 })).rejects.toThrow("fleet-kit since");
     const waiting = acquireConfigLock(path, "qlik-sense");
@@ -153,6 +155,40 @@ describe("manual lock reset", () => {
     expect(await resetStuckLock(path)).toBe(false);
     expect((await lstat(lock)).isDirectory()).toBe(true);
     expect((await lstat(`${lock}.recovery`)).isDirectory()).toBe(true);
+  });
+
+  it.each([["empty", ""], ["truncated", '{"plugin":"fleet-'], ["without a pid", '{"plugin":"fleet-kit","host":"h","createdAt":"2026-10-31T10:00:00Z"}']])(
+    "clears a lock whose owner.json is %s once the directory is over a minute old",
+    async (_, text) => {
+      const path = await configPath();
+      const lock = `${path}.bb-config-lock`;
+      await mkdir(lock);
+      await writeFile(`${lock}/owner.json`, text);
+      const recent = new Date(Date.now() - 30_000);
+      await utimes(lock, recent, recent);
+      expect(await resetStuckLock(path)).toBe(false);
+      expect((await lstat(lock)).isDirectory()).toBe(true);
+      expect(await lockState(path)).toMatchObject({ since: recent.toISOString(), resetAfter: new Date(recent.getTime() + 60_000).toISOString() });
+
+      const old = new Date(Date.now() - 61_000);
+      await utimes(lock, old, old);
+      expect(await resetStuckLock(path)).toBe(true);
+      expect(await lstat(lock).catch(() => null)).toBeNull();
+      expect(await lstat(`${lock}.recovery`).catch(() => null)).toBeNull();
+    },
+  );
+
+  it("clears a guard left with an empty owner.json, then the lock", async () => {
+    const path = await configPath();
+    const lock = `${path}.bb-config-lock`;
+    await stale(lock, 5);
+    await mkdir(`${lock}.recovery`);
+    await writeFile(`${lock}.recovery/owner.json`, "");
+    const old = new Date(Date.now() - 61_000);
+    await utimes(`${lock}.recovery`, old, old);
+    expect(await resetStuckLock(path)).toBe(true);
+    expect(await lstat(lock).catch(() => null)).toBeNull();
+    expect(await lstat(`${lock}.recovery`).catch(() => null)).toBeNull();
   });
 
   it("clears a guard stuck for minutes, then the lock under its own guard", async () => {

@@ -41,7 +41,7 @@ export const opencodeStatusSchema = z.object({
   models: z.object({ state: z.enum(["verified", "blocked", "unrestricted", "unchecked"]), message: z.string() }),
   allowedProviders: z.array(z.string()),
   defaultModel: z.string().nullable(),
-  lock: z.object({ owner: z.string(), since: z.string() }).nullable(),
+  lock: z.object({ owner: z.string(), since: z.string(), resetAfter: z.string().optional() }).nullable(),
 });
 export type OpenCodeStatus = z.infer<typeof opencodeStatusSchema>;
 

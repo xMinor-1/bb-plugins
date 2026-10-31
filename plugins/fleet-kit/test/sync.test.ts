@@ -36,6 +36,8 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
   /** Installs of a "slow" source wait here until a test finishes them. */
   const slow: Array<{ source: string; finish: () => void }> = [];
   const updateJobs: Array<{ id: string; pluginId: string; state: string }> = [];
+  /** Set to make bb's install job list fail. */
+  const jobs = { unavailable: false };
   const view = (plugin: FakePlugin) => ({ id: plugin.id, source: plugin.source, version: plugin.version, enabled: plugin.enabled, provenance: plugin.provenance ?? "direct" });
   const schemaFor = (id: string): FakePlugin["schema"] =>
     id === "notes" ? { greeting: { type: "string" }, token: { type: "string", secret: true }, allowedProviders: { type: "string" } } : {};
@@ -75,7 +77,10 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
         return land();
       },
       installJobs: {
-        list: async () => slow.map((job, index) => ({ id: `job_${index}`, displayName: job.source, state: "running", target: { kind: "source", source: job.source, selection: { kind: "root" } } })),
+        list: async () => {
+          if (jobs.unavailable) throw new Error("install jobs are unavailable");
+          return slow.map((job, index) => ({ id: `job_${index}`, displayName: job.source, state: "running", target: { kind: "source", source: job.source, selection: { kind: "root" } } }));
+        },
       },
       getSource: async ({ pluginId }: { pluginId: string }) => {
         const plugin = plugins.get(pluginId)!;
@@ -122,7 +127,7 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
       },
     },
   };
-  return { sdk, plugins, calls, general, installs, slow, updateJobs };
+  return { sdk, plugins, calls, general, installs, slow, updateJobs, jobs };
 }
 
 const dirs: string[] = [];
@@ -414,6 +419,83 @@ describe("switching a plugin's source", () => {
     expect(first.plugins.get("notes")!.source).toBe(PREVIOUS);
     expect(two.managed.sourceChanges.notes).toMatchObject({ attempts: 1, pending: false });
     expect(message(two)).toContain("Put back on its previous source");
+  });
+});
+
+describe("unfinished installs", () => {
+  const SLOW = "git:https://git.example.test/slow-notes.git@semver:notes/:^2.0.0";
+  const BROKEN = "git:https://git.example.test/broken-notes.git@semver:notes/:^2.0.0";
+  const PREVIOUS = "git:https://git.example.test/plugins.git@semver:notes/:^0.9.0";
+  const build = (edit: (notes: Record<string, any>, manifest: Record<string, any>) => void) => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    edit(manifest.plugins[1], manifest);
+    return manifest;
+  };
+  const notesSteps = (outcome: Awaited<ReturnType<typeof runSync>>) => outcome.report.steps.filter((step) => step.item === "notes").map((step) => step.message).join(" | ");
+
+  it.each([
+    ["dropped from the build", (manifest: Record<string, any>) => { manifest.plugins.splice(1, 1); }],
+    ["marked planned", (manifest: Record<string, any>) => { manifest.plugins[1].status = "planned"; }],
+  ])("puts the previous source back when a timed-out switch is %s", async (_, edit) => {
+    const first = await setup(build((notes) => { notes.source = SLOW; }), [self(), notes({ source: PREVIOUS, values: { greeting: "custom", token: "t" } })]);
+    const deps = { ...first.deps, installMs: 20 };
+    const one = await runSync(deps, "manual");
+    expect(one.managed.sourceChanges.notes?.pending).toBe(true);
+    await writeFile(first.path, JSON.stringify(build((_notes, manifest) => edit(manifest))));
+
+    // Still installing: nothing else is started.
+    first.calls.length = 0;
+    const two = await runSync({ ...deps, managed: one.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(notesSteps(two)).toContain("still installing");
+
+    // The job ends without a result: the previous source comes back, with the notice.
+    first.slow.splice(0);
+    const three = await runSync({ ...deps, managed: two.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual(["install notes", "config notes greeting"]);
+    expect(first.plugins.get("notes")!.source).toBe(PREVIOUS);
+    expect(three.managed.sourceChanges.notes).toBeUndefined();
+    expect(three.notices.map((notice) => notice.message).join(" ")).toContain("Enter its secret settings again");
+    expect(notesSteps(three)).toContain("put back on its previous source");
+  });
+
+  it("drops a finished switch's record when the plugin leaves the build", async () => {
+    const first = await setup(build((notes) => { notes.source = BROKEN; }), [self(), notes({ source: PREVIOUS })]);
+    const one = await runSync(first.deps, "manual");
+    expect(one.managed.sourceChanges.notes).toMatchObject({ pending: false });
+    await writeFile(first.path, JSON.stringify(build((_notes, manifest) => { manifest.plugins.splice(1, 1); })));
+    first.calls.length = 0;
+    const two = await runSync({ ...first.deps, managed: one.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(two.managed.sourceChanges.notes).toBeUndefined();
+    expect(first.plugins.get("notes")!.source).toBe(PREVIOUS);
+  });
+
+  it("waits after a timed-out first install, also when bb's job list cannot be read", async () => {
+    const first = await setup(build((notes) => { notes.source = SLOW; }), [self()]);
+    const deps = { ...first.deps, installMs: 20 };
+    const one = await runSync(deps, "start");
+    expect(pluginCalls(first.calls)).toEqual(["install-started notes"]);
+    expect(one.managed.installs.notes).toMatchObject({ source: SLOW });
+
+    first.calls.length = 0;
+    first.jobs.unavailable = true;
+    const two = await runSync({ ...deps, managed: one.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(notesSteps(two)).toContain("Could not see whether bb is still installing it");
+
+    // bb finishes the install it was given; the record goes.
+    first.slow[0]!.finish();
+    const three = await runSync({ ...deps, managed: two.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual(["config notes allowedProviders,greeting"]);
+    expect(three.managed.installs.notes).toBeUndefined();
+  });
+
+  it("installs when the job list cannot be read but nothing of its own is pending", async () => {
+    const first = await setup(sampleManifest(), [self()]);
+    first.jobs.unavailable = true;
+    await runSync(first.deps, "start");
+    expect(pluginCalls(first.calls)[0]).toBe("install notes");
   });
 });
 
