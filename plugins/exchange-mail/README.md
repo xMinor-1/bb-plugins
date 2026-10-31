@@ -181,7 +181,10 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
   `{ state: "done" | "todo" | "problem", summary, path }`: `done` once the saved
   connection passed its last check, `summary` is one line in `lang` with no
   address, login or password, `path` is the Mail page. It reads the saved
-  connection only and sends nothing to Exchange.
+  connection only and sends nothing to Exchange; a machine's answer serves for
+  5 seconds (on Windows each one starts PowerShell to look at the password), and
+  a change of the connection drops it. A machine that is not connected and one
+  that cannot read its state are told apart.
 - On the host, the plugin's data folder keeps the connection settings, short
   message refs (`m…` → Exchange ids), refused sign-ins per login (times only)
   and the list of drafts made in bb with the text you or the agent wrote, until
