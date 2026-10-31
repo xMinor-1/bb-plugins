@@ -6,13 +6,17 @@
 // answer sends.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBbNavigate, useRealtime } from "@get-bb/plugin-sdk/app";
-import type { BodyFormat, Draft, MailAddress } from "../../contract";
-import { whileConfirming } from "./draft-sync";
+import type { BodyFormat, Draft, MailAddress, SendResult } from "../../contract";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { intlLocale, useLang, useMessages } from "@/lib/i18n";
+import { messages } from "../messages";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { whileConfirming } from "./draft-sync";
 import { Notice, errorText } from "./ui";
 import type { Rpc } from "./rpc";
+
+type Texts = (typeof messages)["en"];
 
 export type DraftTarget = { hostId: string } | { threadId: string };
 
@@ -27,47 +31,63 @@ const splitList = (text: string) =>
 export const textareaClass =
   "block w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
-type Outcome = { tone: "ok" | "error" | "warn"; text: string } | null;
+/** Kept as a function of the texts, so a notice follows a language switch. */
+type Outcome = { tone: "ok" | "error" | "warn"; text: (t: Texts) => string } | null;
 
-const FORMAT: Record<BodyFormat, string> = {
-  text: "Plain text",
-  html: "HTML — goes out with the formatting Outlook shows",
-  rtf: "Rich text (RTF) — goes out with formatting",
-  unknown: "Unknown — Exchange did not say; it may go out as HTML",
+const FORMAT: Record<BodyFormat, "formatText" | "formatHtml" | "formatRtf" | "formatUnknown"> = {
+  text: "formatText",
+  html: "formatHtml",
+  rtf: "formatRtf",
+  unknown: "formatUnknown",
 };
 
-const size = (bytes: number | null) => (bytes === null ? "" : bytes < 1024 ? ` (${bytes} B)` : bytes < 1048576 ? ` (${Math.round(bytes / 1024)} KB)` : ` (${(bytes / 1048576).toFixed(1)} MB)`);
+function size(t: Texts, bytes: number | null): string {
+  if (bytes === null) return "";
+  if (bytes < 1024) return ` (${t.bytes(bytes)})`;
+  if (bytes < 1048576) return ` (${t.kilobytes(Math.round(bytes / 1024))})`;
+  return ` (${t.megabytes((bytes / 1048576).toFixed(1))})`;
+}
+
+/** Why nothing was sent, in the panel's language. The server's own message stays for agents and logs. */
+function notSent(t: Texts, result: Exclude<SendResult, { status: "sent" }>): string {
+  if (result.status === "changed") return t.outcomeChanged;
+  if (result.status === "gone") return t.outcomeGone;
+  return { cancelled: t.outcomeCancelled, timeout: t.outcomeTimeout, unavailable: t.outcomeUnavailable, busy: t.outcomeBusy }[result.reason];
+}
 
 /** Everything that goes: the card and the confirmation show the same list. */
 function Envelope({ draft }: { draft: Draft }) {
+  const t = useMessages(messages);
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-      <dt className="text-muted-foreground">To</dt>
-      <dd className="break-words">{formatList(draft.to) || <span className="text-destructive">nobody</span>}</dd>
+      <dt className="text-muted-foreground">{t.to}</dt>
+      <dd className="break-words">{formatList(draft.to) || <span className="text-destructive">{t.nobody}</span>}</dd>
       {draft.cc.length ? (
         <>
-          <dt className="text-muted-foreground">Cc</dt>
+          <dt className="text-muted-foreground">{t.cc}</dt>
           <dd className="break-words">{formatList(draft.cc)}</dd>
         </>
       ) : null}
       {draft.bcc.length ? (
         <>
-          <dt className="text-muted-foreground">Bcc</dt>
+          <dt className="text-muted-foreground">{t.bcc}</dt>
           <dd className="break-words font-medium">{formatList(draft.bcc)}</dd>
         </>
       ) : null}
-      <dt className="text-muted-foreground">Subject</dt>
-      <dd className="break-words">{draft.subject || "(no subject)"}</dd>
-      <dt className="text-muted-foreground">Attachments</dt>
-      <dd className="break-words">{draft.attachments.length ? draft.attachments.map((a) => `${a.name}${size(a.size)}`).join(", ") : "none"}</dd>
-      <dt className="text-muted-foreground">Format</dt>
-      <dd className="break-words">{FORMAT[draft.bodyFormat]}</dd>
+      <dt className="text-muted-foreground">{t.subject}</dt>
+      <dd className="break-words">{draft.subject || t.noSubject}</dd>
+      <dt className="text-muted-foreground">{t.attachments}</dt>
+      <dd className="break-words">{draft.attachments.length ? draft.attachments.map((a) => `${a.name}${size(t, a.size)}`).join(", ") : t.none}</dd>
+      <dt className="text-muted-foreground">{t.format}</dt>
+      <dd className="break-words">{t[FORMAT[draft.bodyFormat]]}</dd>
     </dl>
   );
 }
 
 export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; target: DraftTarget; id: string; initial?: Draft; onDone?: () => void }) {
   const navigate = useBbNavigate();
+  const t = useMessages(messages);
+  const lang = useLang();
   const [draft, setDraft] = useState<Draft | null | undefined>(initial);
   const [hostId, setHostId] = useState<string | null>("hostId" in target ? target.hostId : null);
   const [error, setError] = useState<string | null>(null);
@@ -115,30 +135,34 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
         setConfirming(null);
         setDraft(result.draft);
         setHostId(result.hostId);
-        setOutcome({ tone: "warn", text: next.message });
+        setOutcome({ tone: "warn", text: (tt) => (next.why === "changed" ? tt.changedWhileConfirming : tt.goneWhileConfirming) });
       },
       () => undefined,
     );
   });
 
-  const named = (text: string) => (draft?.subject ? `“${draft.subject}”: ${text}` : text);
+  const subject = draft?.subject ?? "";
+  const named = (tt: Texts, text: string) => (subject ? tt.named(subject, text) : text);
 
   const send = async () => {
     if (!draft) return;
     setBusy(true);
     acting.current = true;
     try {
-      const result = await rpc.call("sendDraft", { ...target, id, revision: draft.revision });
+      // The machine with the mailbox writes the system window in the panel's language.
+      const result = await rpc.call("sendDraft", { ...target, id, revision: draft.revision, lang });
       setConfirming(null);
       if (result.status === "sent") {
-        setOutcome({ tone: "ok", text: named(`sent at ${new Date(result.at).toLocaleTimeString()}.`) });
+        const at = result.at;
+        setOutcome({ tone: "ok", text: (tt) => named(tt, tt.sentAt(new Date(at).toLocaleTimeString(intlLocale(lang)))) });
         onDone?.();
       } else {
-        setOutcome({ tone: "warn", text: result.message });
+        setOutcome({ tone: "warn", text: (tt) => notSent(tt, result) });
         if (result.status !== "cancelled") load();
       }
     } catch (cause) {
-      setOutcome({ tone: "error", text: errorText(cause) });
+      const text = errorText(cause);
+      setOutcome({ tone: "error", text: () => text });
     } finally {
       acting.current = false;
       setBusy(false);
@@ -151,38 +175,39 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
     try {
       await rpc.call("discardDraft", { ...target, id });
       setConfirming(null);
-      setOutcome({ tone: "ok", text: named("discarded.") });
+      setOutcome({ tone: "ok", text: (tt) => named(tt, tt.discarded) });
       onDone?.();
     } catch (cause) {
-      setOutcome({ tone: "error", text: errorText(cause) });
+      const text = errorText(cause);
+      setOutcome({ tone: "error", text: () => text });
     } finally {
       acting.current = false;
       setBusy(false);
     }
   };
 
-  if (error) return <Notice tone="error">Draft {id}: {error}</Notice>;
-  if (outcome?.tone === "ok") return <Notice tone="ok">{outcome.text}</Notice>;
-  if (draft === undefined) return <Notice tone="info">Loading draft…</Notice>;
-  if (draft === null) return <Notice tone="info">Draft {id} is no longer waiting: it was sent, discarded or deleted in Outlook.</Notice>;
+  if (error) return <Notice tone="error">{t.draftError(id, error)}</Notice>;
+  if (outcome?.tone === "ok") return <Notice tone="ok">{outcome.text(t)}</Notice>;
+  if (draft === undefined) return <Notice tone="info">{t.loadingDraft}</Notice>;
+  if (draft === null) return <Notice tone="info">{t.draftGone(id)}</Notice>;
 
   const quote = draft.body.startsWith(draft.text) ? draft.body.slice(draft.text.length).trim() : "";
   const shown = quote ? draft.text : draft.body;
+  const kind = draft.kind === "new" ? t.kindNew : draft.kind === "replyAll" ? t.kindReplyAll : t.kindReply;
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card p-4 text-sm">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium">
-          {draft.kind === "new" ? "New message" : draft.kind === "replyAll" ? "Reply to all" : "Reply"} — draft, not sent
+          {kind} — {t.notSent}
         </p>
         <p className="text-xs text-muted-foreground">
-          {draft.source === "agent" ? "Prepared by an agent" : "Your draft"}
+          {draft.source === "agent" ? t.byAgent : t.byYou}
           {draft.threadId && "hostId" in target ? (
             <>
               {" "}
-              in{" "}
               <button type="button" className="underline underline-offset-2" onClick={() => navigate.toThread(draft.threadId!)}>
-                its thread
+                {t.inItsThread}
               </button>
             </>
           ) : null}
@@ -207,21 +232,21 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
           {quote ? (
             <div>
               <button type="button" className="text-xs text-muted-foreground underline underline-offset-2" onClick={() => setShowQuote((v) => !v)}>
-                {showQuote ? "Hide the quoted message" : "Show the quoted message, sent below the text"}
+                {showQuote ? t.hideQuote : t.showQuote}
               </button>
               {showQuote ? <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">{quote}</div> : null}
             </div>
           ) : null}
-          {outcome ? <Notice tone={outcome.tone}>{outcome.text}</Notice> : null}
+          {outcome ? <Notice tone={outcome.tone}>{outcome.text(t)}</Notice> : null}
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => setConfirming("send")} disabled={busy || draft.to.length === 0}>
-              Send…
+              {t.sendButton}
             </Button>
             <Button variant="outline" onClick={() => setEditing(true)} disabled={busy || !hostId}>
-              Edit
+              {t.edit}
             </Button>
             <Button variant="ghost" onClick={() => setConfirming("discard")} disabled={busy}>
-              Discard
+              {t.discard}
             </Button>
           </div>
         </>
@@ -229,27 +254,23 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
 
       <ConfirmDialog
         open={confirming === "send"}
-        title="Send this message?"
-        description="It goes out from your mailbox exactly as shown and cannot be called back. Your computer then asks once more in a system window: only Send there sends it."
-        confirmLabel="Continue"
-        busyLabel="Confirm in the system window…"
+        title={t.sendTitle}
+        description={t.sendDescription}
+        confirmLabel={t.continue}
+        busyLabel={t.confirmInWindow}
         busy={busy}
         onConfirm={() => void send()}
         onCancel={() => setConfirming(null)}
       >
         <Envelope draft={draft} />
-        <p className="text-xs text-muted-foreground">
-          {draft.to.length + draft.cc.length + draft.bcc.length} recipient{draft.to.length + draft.cc.length + draft.bcc.length === 1 ? "" : "s"},{" "}
-          {shown.trim().length} characters of text
-          {quote ? " plus the quoted message" : ""}.
-        </p>
+        <p className="text-xs text-muted-foreground">{t.sendSummary(draft.to.length + draft.cc.length + draft.bcc.length, shown.trim().length, Boolean(quote))}</p>
       </ConfirmDialog>
       <ConfirmDialog
         open={confirming === "discard"}
-        title="Discard this draft?"
-        description="It moves to Deleted Items in your mailbox and is not sent."
-        confirmLabel="Discard"
-        busyLabel="Discarding…"
+        title={t.discardTitle}
+        description={t.discardDescription}
+        confirmLabel={t.discard}
+        busyLabel={t.discarding}
         busy={busy}
         destructive
         onConfirm={() => void discard()}
@@ -260,6 +281,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
 }
 
 function DraftEditor({ rpc, hostId, draft, onSaved, onCancel }: { rpc: Rpc; hostId: string; draft: Draft; onSaved: (draft: Draft) => void; onCancel: () => void }) {
+  const t = useMessages(messages);
   const [to, setTo] = useState(formatList(draft.to));
   const [cc, setCc] = useState(formatList(draft.cc));
   const [subject, setSubject] = useState(draft.subject);
@@ -294,28 +316,28 @@ function DraftEditor({ rpc, hostId, draft, onSaved, onCancel }: { rpc: Rpc; host
   return (
     <div className="space-y-2">
       <label className="block space-y-1">
-        <span className="text-muted-foreground">To</span>
+        <span className="text-muted-foreground">{t.to}</span>
         <Input value={to} onChange={(event) => setTo(event.target.value)} spellCheck={false} />
       </label>
       <label className="block space-y-1">
-        <span className="text-muted-foreground">Cc</span>
+        <span className="text-muted-foreground">{t.cc}</span>
         <Input value={cc} onChange={(event) => setCc(event.target.value)} spellCheck={false} />
       </label>
       <label className="block space-y-1">
-        <span className="text-muted-foreground">Subject</span>
+        <span className="text-muted-foreground">{t.subject}</span>
         <Input value={subject} onChange={(event) => setSubject(event.target.value)} />
       </label>
       <label className="block space-y-1">
-        <span className="text-muted-foreground">{draft.kind === "new" ? "Text" : "Text above the quoted message"}</span>
+        <span className="text-muted-foreground">{draft.kind === "new" ? t.textNew : t.textAbove}</span>
         <textarea className={textareaClass} rows={10} value={text} onChange={(event) => setText(event.target.value)} />
       </label>
       {error ? <Notice tone="error">{error}</Notice> : null}
       <div className="flex gap-2">
         <Button onClick={() => void save()} disabled={saving || text.trim() === ""}>
-          {saving ? "Saving…" : "Save draft"}
+          {saving ? t.saving : t.saveDraft}
         </Button>
         <Button variant="ghost" onClick={onCancel} disabled={saving}>
-          Cancel
+          {t.cancel}
         </Button>
       </div>
     </div>

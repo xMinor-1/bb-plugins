@@ -300,7 +300,7 @@ describe("drafts and sending", () => {
       { ok: false, reason: "timeout", message: "Nobody answered" },
     ] as const) {
       answer = async () => outcome;
-      expect(await service.send(draft.id, draft.revision)).toEqual({ status: "cancelled", message: outcome.message });
+      expect(await service.send(draft.id, draft.revision)).toEqual({ status: "cancelled", reason: outcome.reason, message: outcome.message });
     }
     const after = await state();
     expect(after.sent).toHaveLength(0);
@@ -360,7 +360,7 @@ describe("drafts and sending", () => {
     const saved = await service.tool({ tool: "draft", threadId: "thr_1", replyTo: await firstRef(), body: "Mine" });
     const draft = (await service.draft(saved.draftId!))!;
     expect(await service.draft(draft.id, undefined, "thr_2")).toBeNull();
-    expect(await service.send(draft.id, draft.revision, undefined, "thr_2")).toMatchObject({ status: "gone" });
+    expect(await service.send(draft.id, draft.revision, undefined, { threadId: "thr_2" })).toMatchObject({ status: "gone" });
     expect(await service.discardDraft(draft.id, undefined, "thr_2")).toEqual({ ok: false });
     expect(asked).toHaveLength(0);
     expect(await service.draft(draft.id, undefined, "thr_1")).not.toBeNull();

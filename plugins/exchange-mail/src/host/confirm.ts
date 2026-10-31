@@ -13,7 +13,7 @@
 // lines): every script reads it from stdin, as ASCII-only source.
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import type { BodyFormat, DraftKind, MailAddress } from "../../contract.js";
+import type { BodyFormat, DraftKind, Lang, MailAddress } from "../../contract.js";
 
 export interface SendSummary {
   readonly kind: DraftKind;
@@ -33,62 +33,112 @@ export interface SendSummary {
 
 export type ConfirmOutcome =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: "cancelled" | "timeout" | "unavailable"; readonly message: string };
+  | { readonly ok: false; readonly reason: "cancelled" | "timeout" | "unavailable" | "busy"; readonly message: string };
 
 export interface SendConfirmer {
-  confirm(summary: SendSummary, signal?: AbortSignal): Promise<ConfirmOutcome>;
+  /** `lang` is the panel's language: the window speaks it. */
+  confirm(summary: SendSummary, signal?: AbortSignal, lang?: Lang): Promise<ConfirmOutcome>;
 }
 
 /** How long the window waits for the person before it counts as Cancel. */
 export const CONFIRM_TIMEOUT_S = 240;
 const TEXT_PREVIEW = 700;
 const MAX_LISTED = 25;
-const TITLE = "Exchange Mail: send this message?";
+
+/** The window's words. The host cannot use the panel's i18n module (it needs React), so they live here. */
+const WORDS = {
+  en: {
+    title: "Exchange Mail: send this message?",
+    send: "Send",
+    cancel: "Cancel",
+    kind: { new: "New message", reply: "Reply", replyAll: "Reply to all" } satisfies Record<DraftKind, string>,
+    from: (mailbox: string) => ` from ${mailbox}`,
+    noRecall: "It cannot be called back.",
+    to: "To",
+    cc: "Cc",
+    bcc: "Bcc",
+    nobody: "nobody",
+    more: (n: number) => `, and ${n} more`,
+    subject: "Subject",
+    noSubject: "(no subject)",
+    attachments: "Attachments",
+    none: "none",
+    format: "Format",
+    formats: {
+      text: "plain text",
+      html: "HTML: it goes out with formatting, and anything hidden in the HTML, as Outlook shows it",
+      rtf: "rich text (RTF): it goes out with formatting, as Outlook shows it",
+      unknown: "unknown: Exchange did not say; it may go out as HTML",
+    } satisfies Record<BodyFormat, string>,
+    text: "Text",
+    empty: "(empty)",
+    quoted: (n: number) => `…followed by the quoted message (${n} characters).`,
+    warning: "Send it only if you asked for this message. An agent cannot press this button.",
+  },
+  ru: {
+    title: "Exchange Mail: отправить письмо?",
+    send: "Отправить",
+    cancel: "Отмена",
+    kind: { new: "Новое письмо", reply: "Ответ", replyAll: "Ответ всем" } satisfies Record<DraftKind, string>,
+    from: (mailbox: string) => ` из ящика ${mailbox}`,
+    noRecall: "Отозвать его будет нельзя.",
+    to: "Кому",
+    cc: "Копия",
+    bcc: "Скрытая копия",
+    nobody: "никому",
+    more: (n: number) => ` и ещё ${n}`,
+    subject: "Тема",
+    noSubject: "(без темы)",
+    attachments: "Вложения",
+    none: "нет",
+    format: "Формат",
+    formats: {
+      text: "обычный текст",
+      html: "HTML: уйдёт с оформлением и всем, что скрыто в HTML, как это показывает Outlook",
+      rtf: "форматированный текст (RTF): уйдёт с оформлением, как в Outlook",
+      unknown: "неизвестен: Exchange не сообщил; может уйти как HTML",
+    } satisfies Record<BodyFormat, string>,
+    text: "Текст",
+    empty: "(пусто)",
+    quoted: (n: number) => `…и под ним цитата исходного письма (символов: ${n}).`,
+    warning: "Отправляйте, только если вы сами просили это письмо. Агент не может нажать эту кнопку.",
+  },
+};
 
 const address = (a: MailAddress) => (a.name && a.name !== a.email ? `${a.name} <${a.email}>` : a.email);
 
-function recipients(label: string, list: readonly MailAddress[]): string | null {
-  if (list.length === 0) return null;
-  const shown = list.slice(0, MAX_LISTED).map(address).join(", ");
-  const more = list.length > MAX_LISTED ? `, and ${list.length - MAX_LISTED} more` : "";
-  return `${label} (${list.length}): ${shown}${more}`;
-}
-
-const FORMAT_NOTE: Record<BodyFormat, string> = {
-  text: "plain text",
-  html: "HTML: it goes out with formatting, and anything hidden in the HTML, as Outlook shows it",
-  rtf: "rich text (RTF): it goes out with formatting, as Outlook shows it",
-  unknown: "unknown: Exchange did not say; it may go out as HTML",
-};
-
-/** The window's text. Exported for tests: what the person is asked must name everything that goes. */
-export function confirmationText(summary: SendSummary): { title: string; message: string } {
-  const kind = summary.kind === "new" ? "New message" : summary.kind === "replyAll" ? "Reply to all" : "Reply";
+/** The window's text and buttons. Exported for tests: what the person is asked must name everything that goes. */
+export function confirmationText(summary: SendSummary, lang: Lang = "en"): { title: string; message: string; send: string; cancel: string } {
+  const w = WORDS[lang];
+  const listed = (label: string, list: readonly MailAddress[]) =>
+    list.length === 0 ? null : `${label} (${list.length}): ${list.slice(0, MAX_LISTED).map(address).join(", ")}${list.length > MAX_LISTED ? w.more(list.length - MAX_LISTED) : ""}`;
   const text = summary.text.trim();
   const preview = text.length > TEXT_PREVIEW ? `${text.slice(0, TEXT_PREVIEW).trimEnd()}…` : text;
   const lines = [
-    `${kind}${summary.mailbox ? ` from ${summary.mailbox}` : ""}. It cannot be called back.`,
+    `${w.kind[summary.kind]}${summary.mailbox ? w.from(summary.mailbox) : ""}. ${w.noRecall}`,
     "",
-    recipients("To", summary.to) ?? "To: nobody",
-    recipients("Cc", summary.cc),
-    recipients("Bcc", summary.bcc),
-    `Subject: ${summary.subject || "(no subject)"}`,
+    listed(w.to, summary.to) ?? `${w.to}: ${w.nobody}`,
+    listed(w.cc, summary.cc),
+    listed(w.bcc, summary.bcc),
+    `${w.subject}: ${summary.subject || w.noSubject}`,
     summary.attachments.length
-      ? `Attachments (${summary.attachments.length}): ${summary.attachments
+      ? `${w.attachments} (${summary.attachments.length}): ${summary.attachments
           .slice(0, MAX_LISTED)
           .map((a) => a.name)
           .join(", ")}${summary.attachments.length > MAX_LISTED ? ", …" : ""}`
-      : "Attachments: none",
-    `Format: ${FORMAT_NOTE[summary.bodyFormat]}`,
+      : `${w.attachments}: ${w.none}`,
+    `${w.format}: ${w.formats[summary.bodyFormat]}`,
     "",
-    "Text:",
-    preview || "(empty)",
-    summary.quotedChars > 0 ? `\n…followed by the quoted message (${summary.quotedChars} characters).` : null,
+    `${w.text}:`,
+    preview || w.empty,
+    summary.quotedChars > 0 ? `\n${w.quoted(summary.quotedChars)}` : null,
     "",
-    "Send it only if you asked for this message. An agent cannot press this button.",
+    w.warning,
   ];
-  return { title: TITLE, message: lines.filter((line): line is string => line !== null).join("\n") };
+  return { title: w.title, message: lines.filter((line): line is string => line !== null).join("\n"), send: w.send, cancel: w.cancel };
 }
+
+type WindowText = ReturnType<typeof confirmationText>;
 
 /** JSON with everything outside printable ASCII escaped: safe inside any script source read from stdin. */
 function asciiJson(value: unknown): string {
@@ -154,7 +204,7 @@ const RUN_LIMIT_MS = (CONFIRM_TIMEOUT_S + 30) * 1000;
 // ---------------------------------------------------------------------- macOS
 
 /** JXA: Standard Additions `display dialog`, Cancel is the default and the Escape button. */
-export function macScript(text: { title: string; message: string }): string {
+export function macScript(text: WindowText): string {
   return [
     "var app = Application.currentApplication();",
     "app.includeStandardAdditions = true;",
@@ -162,8 +212,8 @@ export function macScript(text: { title: string; message: string }): string {
     "var answer;",
     "try { app.activate(); } catch (e) {}",
     "try {",
-    `  var r = app.displayDialog(data.message, { withTitle: data.title, buttons: ["Cancel", "Send"], defaultButton: "Cancel", cancelButton: "Cancel", withIcon: "caution", givingUpAfter: ${CONFIRM_TIMEOUT_S} });`,
-    '  answer = r.gaveUp ? "timeout" : r.buttonReturned === "Send" ? "send" : "cancel";',
+    `  var r = app.displayDialog(data.message, { withTitle: data.title, buttons: [data.cancel, data.send], defaultButton: data.cancel, cancelButton: data.cancel, withIcon: "caution", givingUpAfter: ${CONFIRM_TIMEOUT_S} });`,
+    '  answer = r.gaveUp ? "timeout" : r.buttonReturned === data.send ? "send" : "cancel";',
     "} catch (e) {",
     '  answer = e.errorNumber === -128 ? "cancel" : "error";',
     "}",
@@ -174,8 +224,8 @@ export function macScript(text: { title: string; message: string }): string {
 
 function macConfirmer(): SendConfirmer {
   return {
-    async confirm(summary, signal) {
-      const result = await run("/usr/bin/osascript", ["-l", "JavaScript", "-"], macScript(confirmationText(summary)), RUN_LIMIT_MS, signal);
+    async confirm(summary, signal, lang) {
+      const result = await run("/usr/bin/osascript", ["-l", "JavaScript", "-"], macScript(confirmationText(summary, lang)), RUN_LIMIT_MS, signal);
       const answer = answerOf(result.stdout);
       if (answer === "send" && result.code === 0) return { ok: true };
       if (answer === "cancel") return cancelled;
@@ -190,7 +240,7 @@ function macConfirmer(): SendConfirmer {
 // -------------------------------------------------------------------- Windows
 
 /** The WinForms window. Enter means Cancel: sending takes a deliberate click on Send. */
-export function windowsScript(text: { title: string; message: string }): string {
+export function windowsScript(text: WindowText): string {
   const data = Buffer.from(JSON.stringify(text), "utf8").toString("base64");
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -217,11 +267,11 @@ try {
   $box.Text = ($d.message -split "\r?\n") -join [Environment]::NewLine
   $box.SetBounds(12, 12, 576, 390)
   $send = New-Object System.Windows.Forms.Button
-  $send.Text = 'Send'
+  $send.Text = $d.send
   $send.SetBounds(412, 414, 85, 32)
   $send.DialogResult = [System.Windows.Forms.DialogResult]::Yes
   $cancel = New-Object System.Windows.Forms.Button
-  $cancel.Text = 'Cancel'
+  $cancel.Text = $d.cancel
   $cancel.SetBounds(503, 414, 85, 32)
   $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
   $form.Controls.AddRange(@($box, $send, $cancel))
@@ -250,8 +300,8 @@ try {
 function windowsConfirmer(): SendConfirmer {
   const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   return {
-    async confirm(summary, signal) {
-      const result = await run(powershell, ["-NoProfile", "-NonInteractive", "-STA", "-Command", "-"], windowsScript(confirmationText(summary)), RUN_LIMIT_MS, signal);
+    async confirm(summary, signal, lang) {
+      const result = await run(powershell, ["-NoProfile", "-NonInteractive", "-STA", "-Command", "-"], windowsScript(confirmationText(summary, lang)), RUN_LIMIT_MS, signal);
       const answer = answerOf(result.stdout);
       if (answer === "send") return { ok: true };
       if (answer === "cancel") return cancelled;
@@ -267,15 +317,15 @@ function windowsConfirmer(): SendConfirmer {
 
 function linuxConfirmer(env: NodeJS.ProcessEnv): SendConfirmer {
   return {
-    async confirm(summary, signal) {
+    async confirm(summary, signal, lang) {
       if (!env.DISPLAY && !env.WAYLAND_DISPLAY) {
         return unavailable("This machine has no desktop session to show the confirmation window, so nothing was sent. Send it from Outlook instead.");
       }
-      const text = confirmationText(summary);
-      // --text-info reads the text from stdin; only the fixed title is an argument.
+      const text = confirmationText(summary, lang);
+      // --text-info reads the text from stdin; only the fixed title and button labels are arguments.
       const result = await run(
         "zenity",
-        ["--text-info", `--title=${text.title}`, "--ok-label=Send", "--cancel-label=Cancel", "--width=600", "--height=480", `--timeout=${CONFIRM_TIMEOUT_S}`],
+        ["--text-info", `--title=${text.title}`, `--ok-label=${text.send}`, `--cancel-label=${text.cancel}`, "--width=600", "--height=480", `--timeout=${CONFIRM_TIMEOUT_S}`],
         `${text.message}\n`,
         RUN_LIMIT_MS,
         signal,
@@ -299,11 +349,11 @@ export function systemConfirmer(platform: NodeJS.Platform = process.platform, en
 export function oneAtATime(inner: SendConfirmer): SendConfirmer {
   let open = false;
   return {
-    async confirm(summary, signal) {
-      if (open) return { ok: false, reason: "cancelled", message: "Another send is waiting for confirmation in a system window. Answer it first." };
+    async confirm(summary, signal, lang) {
+      if (open) return { ok: false, reason: "busy", message: "Another send is waiting for confirmation in a system window. Answer it first." };
       open = true;
       try {
-        return await inner.confirm(summary, signal);
+        return await inner.confirm(summary, signal, lang);
       } finally {
         open = false;
       }

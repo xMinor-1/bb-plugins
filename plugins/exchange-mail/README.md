@@ -13,6 +13,9 @@ confirm in a system window on your computer.
 - Mail stays in Exchange. bb keeps no copy; drafts live in your Drafts folder,
   so you also see them in Outlook.
 
+Interface: English and Russian — switch with **EN | RU** at the top of the Mail
+page; the system window that confirms a send follows the same choice.
+
 ## Install
 
 ```sh

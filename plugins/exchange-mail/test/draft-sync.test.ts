@@ -28,10 +28,10 @@ describe("a draft changing while the dialog is open", () => {
   });
 
   it("closes the dialog and shows the new version when an agent or Outlook changed it", () => {
-    expect(whileConfirming(draft("CK1"), draft("CK2", "Version two"))).toMatchObject({ action: "reopen", message: expect.stringMatching(/changed while you were confirming/) });
+    expect(whileConfirming(draft("CK1"), draft("CK2", "Version two"))).toEqual({ action: "reopen", why: "changed" });
   });
 
   it("closes the dialog when the draft is gone", () => {
-    expect(whileConfirming(draft("CK1"), null)).toMatchObject({ action: "reopen", message: expect.stringMatching(/no longer waiting/) });
+    expect(whileConfirming(draft("CK1"), null)).toEqual({ action: "reopen", why: "gone" });
   });
 });

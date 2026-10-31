@@ -3,6 +3,8 @@
 // which agents on this machine it covers, and does not change it.
 import { useCallback, useEffect, useState } from "react";
 import type { AgentsView } from "../../server";
+import { useMessages } from "@/lib/i18n";
+import { messages } from "../messages";
 import { createPolicy } from "../shared/policy";
 import { Notice, Section, errorText } from "./ui";
 import type { Rpc } from "./rpc";
@@ -10,6 +12,7 @@ import type { Rpc } from "./rpc";
 type Rule = { provider: string; model: string };
 
 export function AgentsSection({ rpc, hostId }: { rpc: Rpc; hostId: string }) {
+  const t = useMessages(messages);
   const [rules, setRules] = useState<Rule[] | null>(null);
   const [policyError, setPolicyError] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentsView | null>(null);
@@ -36,15 +39,11 @@ export function AgentsSection({ rpc, hostId }: { rpc: Rpc; hostId: string }) {
   const policy = createPolicy(rules ?? []);
 
   return (
-    <Section step={2} title="Agents that may read mail">
-      <p className="text-sm text-muted-foreground">
-        Mail goes only to the models on this list. Other agents do not get the mail tools, and a thread that already holds mail cannot be continued
-        with a model outside it. Agents only save drafts; you send them. The list is part of how bb is set up for your company: ask whoever
-        configures bb to change it.
-      </p>
+    <Section step={2} title={t.agentsTitle}>
+      <p className="text-sm text-muted-foreground">{t.agentsIntro}</p>
 
-      {policyError ? <Notice tone="error">The list of allowed agents is broken, so no agent gets mail: {policyError}</Notice> : null}
-      {rules && rules.length === 0 && !policyError ? <Notice tone="info">No agent may read mail.</Notice> : null}
+      {policyError ? <Notice tone="error">{t.policyBroken(policyError)}</Notice> : null}
+      {rules && rules.length === 0 && !policyError ? <Notice tone="info">{t.noAgentAllowed}</Notice> : null}
       {rules && rules.length > 0 ? (
         <ul className="space-y-1 text-sm">
           {rules.map((rule) => (
@@ -56,16 +55,16 @@ export function AgentsSection({ rpc, hostId }: { rpc: Rpc; hostId: string }) {
       ) : null}
 
       {agentsError ? <Notice tone="error">{agentsError}</Notice> : null}
-      {agents === null && !agentsError ? <Notice tone="info">Loading agents on this machine…</Notice> : null}
+      {agents === null && !agentsError ? <Notice tone="info">{t.loadingAgents}</Notice> : null}
       {agents?.providers.length ? (
         <div className="space-y-2">
-          <p className="text-sm font-medium">On this machine</p>
+          <p className="text-sm font-medium">{t.onThisMachine}</p>
           {agents.providers.map((provider) => (
             <div key={provider.id} className="space-y-1">
               <p className="text-sm">
                 {provider.name} <span className="font-mono text-xs text-muted-foreground">{provider.id}</span>
               </p>
-              {provider.error ? <p className="text-xs text-muted-foreground">Models did not load: {provider.error}</p> : null}
+              {provider.error ? <p className="text-xs text-muted-foreground">{t.modelsFailed(provider.error)}</p> : null}
               <ul className="ml-1 space-y-0.5">
                 {provider.groups.map((group) => {
                   const allowed = group.models.filter((model) => policy.allows(provider.id, model));
@@ -73,7 +72,7 @@ export function AgentsSection({ rpc, hostId }: { rpc: Rpc; hostId: string }) {
                     <li key={group.pattern} className="flex flex-wrap items-baseline gap-x-2 text-sm">
                       <span>{group.label}</span>
                       <span className={allowed.length ? "text-foreground" : "text-muted-foreground"}>
-                        {allowed.length === 0 ? "no mail" : allowed.length === group.models.length ? "may read mail" : `${allowed.length} of ${group.models.length} models may read mail`}
+                        {allowed.length === 0 ? t.noMail : allowed.length === group.models.length ? t.mayRead : t.someMayRead(allowed.length, group.models.length)}
                       </span>
                     </li>
                   );

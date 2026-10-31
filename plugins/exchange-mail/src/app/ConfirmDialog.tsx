@@ -3,6 +3,8 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useMessages } from "@/lib/i18n";
+import { messages } from "../messages";
 
 export function ConfirmDialog({
   open,
@@ -27,6 +29,7 @@ export function ConfirmDialog({
   onCancel: () => void;
   children?: ReactNode;
 }) {
+  const t = useMessages(messages);
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && onCancel()}>
       <DialogContent>
@@ -37,7 +40,7 @@ export function ConfirmDialog({
         {children}
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={busy}>
-            Cancel
+            {t.cancel}
           </Button>
           <Button variant={destructive ? "destructive" : "default"} onClick={onConfirm} disabled={busy}>
             {busy ? busyLabel : confirmLabel}

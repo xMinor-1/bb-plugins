@@ -39,7 +39,7 @@ export default experimental_defineHostEntry({
     draft: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).draft(input.id, ctx.signal, input.threadId),
     saveDraft: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).saveDraft(input, ctx.signal),
     discardDraft: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).discardDraft(input.id, ctx.signal, input.threadId),
-    send: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).send(input.id, input.revision, ctx.signal, input.threadId),
+    send: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).send(input.id, input.revision, ctx.signal, { threadId: input.threadId, lang: input.lang }),
     tool: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).tool(input, ctx.signal),
   },
   dispose: async () => {

@@ -12,6 +12,10 @@ export const folderSchema = z.enum(FOLDERS);
 export type Folder = z.infer<typeof folderSchema>;
 
 export const authSchema = z.enum(["negotiate", "password"]);
+
+/** The panel's language, for text the machine with the mailbox writes itself: the system window that confirms a send. */
+export const langSchema = z.enum(["en", "ru"]);
+export type Lang = z.infer<typeof langSchema>;
 export type AuthMode = z.infer<typeof authSchema>;
 
 export const addressSchema = z.object({ name: z.string().nullable(), email: z.string() }).strict();
@@ -142,7 +146,7 @@ export const sendResultSchema = z
     z.object({ status: z.literal("changed"), message: z.string() }).strict(),
     z.object({ status: z.literal("gone"), message: z.string() }).strict(),
     /** The person did not confirm in the system window, or no window could be shown. Nothing was sent. */
-    z.object({ status: z.literal("cancelled"), message: z.string() }).strict(),
+    z.object({ status: z.literal("cancelled"), reason: z.enum(["cancelled", "timeout", "unavailable", "busy"]), message: z.string() }).strict(),
   ]);
 export type SendResult = z.infer<typeof sendResultSchema>;
 
@@ -194,6 +198,6 @@ export const hostContract = defineRpcContract({
   draft: { input: draftRef, output: draftSchema.nullable(), experimental_retryable: true },
   saveDraft: { input: draftInputSchema, output: draftSchema },
   discardDraft: { input: draftRef, output: z.object({ ok: z.boolean() }).strict() },
-  send: { input: draftRef.extend({ revision: z.string().min(1).max(512) }).strict(), output: sendResultSchema },
+  send: { input: draftRef.extend({ revision: z.string().min(1).max(512), lang: langSchema.optional() }).strict(), output: sendResultSchema },
   tool: { input: toolInputSchema, output: toolOutputSchema },
 });

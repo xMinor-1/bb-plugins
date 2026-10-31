@@ -268,6 +268,17 @@ describe("the system window that confirms a send", () => {
     expect(message).toContain("quoted message (120 characters)");
   });
 
+  it("speaks the panel's language, buttons included", () => {
+    const ru = confirmationText(summary, "ru");
+    expect(ru).toMatchObject({ title: "Exchange Mail: отправить письмо?", send: "Отправить", cancel: "Отмена" });
+    expect(ru.message).toContain("Скрытая копия (1): Hidden Watcher <watcher@example.test>");
+    expect(ru.message).toContain("Вложения (1): numbers.xlsx");
+    expect(confirmationText(summary).send).toBe("Send");
+    const mac = macScript(ru);
+    expect(/^[\x09\x0a\x20-\x7e]*$/.test(mac)).toBe(true);
+    expect(mac).toContain("buttons: [data.cancel, data.send]");
+  });
+
   it("counts long lists and cuts long text instead of hiding them", () => {
     const many = Array.from({ length: 40 }, (_, n) => ({ name: null, email: `p${n}@example.test` }));
     const { message } = confirmationText({ ...summary, bcc: many, text: "x".repeat(5000), attachments: [], bodyFormat: "text" });
@@ -284,7 +295,7 @@ describe("the system window that confirms a send", () => {
     expect(/^[\x09\x0a\x20-\x7e]*$/.test(mac)).toBe(true);
     expect(() => new Function(mac)).not.toThrow();
     expect(JSON.parse(/var data = (.*);\n/.exec(mac)![1]!)).toEqual(text);
-    expect(mac).toContain('defaultButton: "Cancel"');
+    expect(mac).toContain("defaultButton: data.cancel");
 
     const windows = windowsScript(text);
     expect(windows.split("\n").filter(Boolean)).toHaveLength(1);
@@ -318,7 +329,7 @@ describe("the system window that confirms a send", () => {
     };
     const confirmer = oneAtATime(slow);
     const first = confirmer.confirm(summary);
-    expect(await confirmer.confirm(summary)).toMatchObject({ ok: false, message: expect.stringMatching(/Another send/) });
+    expect(await confirmer.confirm(summary)).toMatchObject({ ok: false, reason: "busy" });
     finish();
     expect(await first).toEqual({ ok: true });
     expect(shown).toBe(1);

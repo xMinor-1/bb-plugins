@@ -26,7 +26,7 @@
 // panel only shows it.
 import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { connectionStatusSchema, draftInputSchema, draftSchema, folderSchema, hostContract, listInputSchema, listOutputSchema, messageSchema, saveConnectionInputSchema, sendResultSchema, type ToolInput } from "./contract";
+import { connectionStatusSchema, draftInputSchema, draftSchema, folderSchema, hostContract, langSchema, listInputSchema, listOutputSchema, messageSchema, saveConnectionInputSchema, sendResultSchema, type ToolInput } from "./contract";
 import { groupModels } from "./src/shared/models";
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
 
@@ -56,7 +56,7 @@ export const rpcContract = defineRpcContract({
   draft: { input: target.extend({ id: z.string().min(1).max(64) }).strict(), output: z.object({ draft: draftSchema.nullable(), hostId: z.string() }).strict() },
   saveDraft: { input: draftInputSchema.omit({ source: true, threadId: true }).extend({ hostId }).strict(), output: draftSchema },
   discardDraft: { input: target.extend({ id: z.string().min(1).max(64) }).strict(), output: z.object({ ok: z.boolean() }).strict() },
-  sendDraft: { input: target.extend({ id: z.string().min(1).max(64), revision: z.string().min(1).max(512) }).strict(), output: sendResultSchema },
+  sendDraft: { input: target.extend({ id: z.string().min(1).max(64), revision: z.string().min(1).max(512), lang: langSchema.optional() }).strict(), output: sendResultSchema },
   policy: { input: z.null(), output: policyOutput },
   agents: { input: z.object({ hostId }).strict(), output: agentsOutputSchema },
 });
@@ -372,9 +372,9 @@ export default async function plugin(bb: BbPluginApi) {
       changed(id);
       return result;
     },
-    sendDraft: async ({ id, revision, ...where }) => {
+    sendDraft: async ({ id, revision, lang, ...where }) => {
       // The host asks the person in a system window before anything leaves.
-      const result = await call("send", await resolve(where), { id, revision, threadId: where.threadId }, SEND_TIMEOUT_MS);
+      const result = await call("send", await resolve(where), { id, revision, lang, threadId: where.threadId }, SEND_TIMEOUT_MS);
       changed(id);
       bb.log.info(`draft ${id}: ${result.status}`);
       return result;

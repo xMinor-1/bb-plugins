@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type {
   AuthMode,
   ConnectionStatus,
+  Lang,
   Draft,
   DraftInput,
   Folder,
@@ -513,8 +514,8 @@ export class MailService {
    *      window was open is refused by Exchange instead of sent.
    * Nothing here trusts the caller: bb cannot tell the panel from an agent.
    */
-  async send(id: string, revision: string, signal?: AbortSignal, threadId?: string): Promise<SendResult> {
-    const entry = await this.entry(id, threadId);
+  async send(id: string, revision: string, signal?: AbortSignal, options: { threadId?: string; lang?: Lang } = {}): Promise<SendResult> {
+    const entry = await this.entry(id, options.threadId);
     if (!entry) return { status: "gone", message: "This draft is no longer waiting: it was sent, discarded or replaced." };
     const connection = await this.readConnection();
     const client = await this.client();
@@ -532,8 +533,8 @@ export class MailService {
     }
     if (item.item.changeKey !== revision) return changed;
 
-    const outcome = await this.confirmer.confirm(this.summaryOf(entry, item, connection?.auth === "password" ? connection.user : null), signal);
-    if (!outcome.ok) return { status: "cancelled", message: outcome.message };
+    const outcome = await this.confirmer.confirm(this.summaryOf(entry, item, connection?.auth === "password" ? connection.user : null), signal, options.lang ?? "en");
+    if (!outcome.ok) return { status: "cancelled", reason: outcome.reason, message: outcome.message };
 
     try {
       const current = await client.currentId({ id: entry.itemId }, signal);
