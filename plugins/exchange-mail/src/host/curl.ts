@@ -31,12 +31,14 @@ export interface HttpResponse {
   readonly body: string;
 }
 
-export type TransportErrorCode = "curl-missing" | "unreachable" | "tls" | "timeout" | "aborted" | "failed";
+export type TransportErrorCode = "curl-missing" | "unreachable" | "broke-off" | "tls" | "timeout" | "aborted" | "failed";
 
 export class TransportError extends Error {
   constructor(
     readonly code: TransportErrorCode,
     message: string,
+    /** curl's own words, untranslated, for the person to pass on to IT. */
+    readonly detail: string | null = null,
   ) {
     super(message);
   }
@@ -163,7 +165,7 @@ function curlFailure(code: number | null, stderr: string): TransportError {
     case 5:
     case 6:
     case 7:
-      return new TransportError("unreachable", `Exchange is not reachable from this machine (${detail || `curl exit ${code}`}). Check the corporate network or VPN.`);
+      return new TransportError("unreachable", `Exchange is not reachable from this machine (${detail || `curl exit ${code}`}). Check the corporate network or VPN.`, detail || `curl exit ${code}`);
     case 28:
       return new TransportError("timeout", "Exchange did not answer in time. Check the corporate network or VPN.");
     case 35:
@@ -178,11 +180,11 @@ function curlFailure(code: number | null, stderr: string): TransportError {
     case 83:
     case 90:
     case 91:
-      return new TransportError("tls", `The secure connection to Exchange failed: ${detail || `curl exit ${code}`}`);
+      return new TransportError("tls", `The secure connection to Exchange failed: ${detail || `curl exit ${code}`}`, detail || `curl exit ${code}`);
     case 52:
     case 55:
     case 56:
-      return new TransportError("unreachable", `The connection to Exchange broke off (${detail || `curl exit ${code}`}).`);
+      return new TransportError("broke-off", `The connection to Exchange broke off (${detail || `curl exit ${code}`}).`, detail || `curl exit ${code}`);
     default:
       return new TransportError("failed", `curl failed: ${detail || `exit ${code}`}`);
   }
@@ -208,11 +210,11 @@ export function curlTransport(options: { path?: string; platform?: NodeJS.Platfo
   const info = (): Promise<CurlInfo> => {
     infoPromise ??= run(path, ["-q", "--version"], "", 10_000).then(
       (out) => {
-        if (out.code !== 0) throw new TransportError("curl-missing", `curl at ${path} did not start (exit ${out.code})`);
+        if (out.code !== 0) throw new TransportError("curl-missing", `curl at ${path} did not start (exit ${out.code})`, path);
         return { path, ...parseCurlVersion(out.stdout.toString("utf8")) };
       },
       (error: NodeJS.ErrnoException) => {
-        throw new TransportError("curl-missing", error.code === "ENOENT" ? `curl is not installed at ${path}` : `curl did not start: ${error.message}`);
+        throw new TransportError("curl-missing", error.code === "ENOENT" ? `curl is not installed at ${path}` : `curl did not start: ${error.message}`, path);
       },
     );
     infoPromise.catch(() => {
@@ -233,7 +235,7 @@ export function curlTransport(options: { path?: string; platform?: NodeJS.Platfo
       });
       if (request.signal?.aborted) throw new TransportError("aborted", "The request was cancelled");
       const out = await run(path, ["-q", "-K", "-"], config, timeoutMs, request.signal).catch((error: Error) => {
-        throw new TransportError("curl-missing", `curl did not start: ${error.message}`);
+        throw new TransportError("curl-missing", `curl did not start: ${error.message}`, path);
       });
       if (request.signal?.aborted) throw new TransportError("aborted", "The request was cancelled");
       if (out.code !== 0) throw curlFailure(out.code, out.stderr);

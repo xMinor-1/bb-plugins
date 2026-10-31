@@ -1,12 +1,20 @@
 // The last word before a draft leaves: a window drawn by the operating system
 // on this machine, not by bb. bb cannot tell whether a call to send came from
 // the panel, the CLI or an agent with a shell, so the panel's own dialog is not
-// proof that a person decided. A system window is: an agent can call the RPC,
-// but it cannot press the button in a window on the person's screen.
+// proof that a person decided. A system window moves the decision out of bb:
+// calling the RPC is no longer enough, the button in a window on the person's
+// desktop has to be pressed too. That raises the bar; it is not a wall. On
+// Windows and under X11 any program of the same user can press buttons in
+// other windows, and on macOS one with the Accessibility permission can. So
+// the window promises nothing about who presses: it asks the person to check
+// what goes.
 //
-//   macOS    osascript (JavaScript for Automation) `display dialog`
-//   Windows  a WinForms window from Windows PowerShell
-//   Linux    zenity, when a desktop session is present
+//   macOS    /usr/bin/osascript (JavaScript for Automation) `display dialog`
+//   Windows  a WinForms window from Windows PowerShell in System32
+//   Linux    /usr/bin/zenity, when a desktop session is present
+//
+// Every tool is called by its absolute path, never looked up in PATH: a PATH
+// the agent's shell can change must not choose the program that answers "Send".
 //
 // The window's text is mail — recipients, subject, the start of the message —
 // so it never travels in process arguments (endpoint security tools log command
@@ -42,7 +50,8 @@ export interface SendConfirmer {
 
 /** How long the window waits for the person before it counts as Cancel. */
 export const CONFIRM_TIMEOUT_S = 240;
-const TEXT_PREVIEW = 700;
+export const TEXT_PREVIEW = 700;
+export const ZENITY = "/usr/bin/zenity";
 const MAX_LISTED = 25;
 
 /** The window's words. The host cannot use the panel's i18n module (it needs React), so they live here. */
@@ -70,10 +79,11 @@ const WORDS = {
       rtf: "rich text (RTF): it goes out with formatting, as Outlook shows it",
       unknown: "unknown: Exchange did not say; it may go out as HTML",
     } satisfies Record<BodyFormat, string>,
-    text: "Text",
+    text: (n: number) => `Text (${n} characters)`,
+    onlyStart: (shown: number, n: number) => `[Only the start is shown here: ${shown} of ${n} characters. The whole text is in the draft card in bb.]`,
     empty: "(empty)",
     quoted: (n: number) => `…followed by the quoted message (${n} characters).`,
-    warning: "Send it only if you asked for this message. An agent cannot press this button.",
+    warning: "Check the recipients and the text. Send this message?",
   },
   ru: {
     title: "Exchange Mail: отправить письмо?",
@@ -98,10 +108,11 @@ const WORDS = {
       rtf: "форматированный текст (RTF): уйдёт с оформлением, как в Outlook",
       unknown: "неизвестен: Exchange не сообщил; может уйти как HTML",
     } satisfies Record<BodyFormat, string>,
-    text: "Текст",
+    text: (n: number) => `Текст (символов: ${n})`,
+    onlyStart: (shown: number, n: number) => `[Здесь только начало: ${shown} из ${n} символов. Весь текст — в карточке черновика в bb.]`,
     empty: "(пусто)",
     quoted: (n: number) => `…и под ним цитата исходного письма (символов: ${n}).`,
-    warning: "Отправляйте, только если вы сами просили это письмо. Агент не может нажать эту кнопку.",
+    warning: "Проверьте получателей и текст. Отправить письмо?",
   },
 };
 
@@ -113,7 +124,9 @@ export function confirmationText(summary: SendSummary, lang: Lang = "en"): { tit
   const listed = (label: string, list: readonly MailAddress[]) =>
     list.length === 0 ? null : `${label} (${list.length}): ${list.slice(0, MAX_LISTED).map(address).join(", ")}${list.length > MAX_LISTED ? w.more(list.length - MAX_LISTED) : ""}`;
   const text = summary.text.trim();
-  const preview = text.length > TEXT_PREVIEW ? `${text.slice(0, TEXT_PREVIEW).trimEnd()}…` : text;
+  const cut = text.length > TEXT_PREVIEW;
+  const start = cut ? text.slice(0, TEXT_PREVIEW).trimEnd() : text;
+  const preview = cut ? `${start}…` : text;
   const lines = [
     `${w.kind[summary.kind]}${summary.mailbox ? w.from(summary.mailbox) : ""}. ${w.noRecall}`,
     "",
@@ -129,8 +142,9 @@ export function confirmationText(summary: SendSummary, lang: Lang = "en"): { tit
       : `${w.attachments}: ${w.none}`,
     `${w.format}: ${w.formats[summary.bodyFormat]}`,
     "",
-    `${w.text}:`,
+    `${w.text(text.length)}:`,
     preview || w.empty,
+    cut ? w.onlyStart(start.length, text.length) : null,
     summary.quotedChars > 0 ? `\n${w.quoted(summary.quotedChars)}` : null,
     "",
     w.warning,
@@ -324,13 +338,14 @@ function linuxConfirmer(env: NodeJS.ProcessEnv): SendConfirmer {
       const text = confirmationText(summary, lang);
       // --text-info reads the text from stdin; only the fixed title and button labels are arguments.
       const result = await run(
-        "zenity",
+        ZENITY,
         ["--text-info", `--title=${text.title}`, `--ok-label=${text.send}`, `--cancel-label=${text.cancel}`, "--width=600", "--height=480", `--timeout=${CONFIRM_TIMEOUT_S}`],
         `${text.message}\n`,
         RUN_LIMIT_MS,
         signal,
+        env,
       );
-      if (result.error) return unavailable("zenity is not installed, so bb cannot ask in a system window and nothing was sent. Send it from Outlook instead.");
+      if (result.error) return unavailable(`${ZENITY} is not installed, so bb cannot ask in a system window and nothing was sent. Send it from Outlook instead.`);
       if (result.code === 0) return { ok: true };
       if (result.code === 1) return cancelled;
       if (result.code === 5) return timedOut;

@@ -15,9 +15,11 @@ with agents that help answer mail but never send it on their own.
 
 Agents on the models you approve can list, search and read mail and save
 drafts. There is no agent tool that sends. Send is confirmed in a system
-window on your computer — an agent cannot press it — and names the exact
-version you were shown; if an agent or Outlook changed the draft meanwhile,
-nothing goes out and you see the new version.
+window on your computer that lists every recipient, Bcc included, and the
+text, and it names the exact version you were shown; if an agent or Outlook
+changed the draft meanwhile, nothing goes out and you see the new version.
+The window is a second step outside bb, not a guarantee: on Windows and X11
+other programs running as you can press buttons, so read it before you send.
 
 Mail reaches only the provider/model pairs on the allow-list your bb setup
 provides. A thread that has read mail, and every fork of it, cannot be

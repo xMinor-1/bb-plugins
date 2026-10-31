@@ -3,7 +3,24 @@ import { TransportError, type HttpAuth, type Transport } from "../curl.js";
 import { EwsError, parseCreateItem, parseFindItems, parseGetFolder, parseGetItem, parseGetItemId, parseSimple } from "./parse.js";
 import * as soap from "./soap.js";
 
-export class AuthError extends Error {}
+export class AuthError extends Error {
+  constructor(
+    message: string,
+    readonly code: "auth-refused" | "auth-negotiate",
+  ) {
+    super(message);
+  }
+}
+
+/** The address typed for Exchange is not one bb will use. */
+export class UrlError extends Error {
+  constructor(
+    message: string,
+    readonly code: "bad-address" | "https-required" | "login-in-address",
+  ) {
+    super(message);
+  }
+}
 
 export interface EwsClientOptions {
   readonly url: string;
@@ -26,14 +43,14 @@ export function normalizeEwsUrl(input: string, options: { allowLocalHttp?: boole
   try {
     url = new URL(input.trim().includes("://") ? input.trim() : `https://${input.trim()}`);
   } catch {
-    throw new Error("Enter the Exchange address, for example https://mail.example.com/EWS/Exchange.asmx");
+    throw new UrlError("Enter the Exchange address, for example https://mail.example.com/EWS/Exchange.asmx", "bad-address");
   }
   const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
   // Plain http would hand the sign-in to anyone on the network; only a test server on this machine, under the dev flag, may use it.
   if (url.protocol !== "https:" && !(url.protocol === "http:" && local && options.allowLocalHttp === true)) {
-    throw new Error("The Exchange address must start with https://");
+    throw new UrlError("The Exchange address must start with https://", "https-required");
   }
-  if (url.username || url.password) throw new Error("Do not put a login into the address");
+  if (url.username || url.password) throw new UrlError("Do not put a login into the address", "login-in-address");
   if (url.pathname === "/" || url.pathname === "") url.pathname = "/EWS/Exchange.asmx";
   url.hash = "";
   return url.toString();
@@ -50,7 +67,7 @@ export class EwsClient {
           ? "Exchange did not accept the automatic sign-in. On Windows this works on a domain laptop signed in with the work account; otherwise sign in with a password."
           : "Exchange did not accept the login and password.";
       await this.options.onAuthFailure?.(message);
-      throw new AuthError(message);
+      throw new AuthError(message, this.options.auth.kind === "negotiate" ? "auth-negotiate" : "auth-refused");
     }
     if (response.status === 200 || response.status === 500) {
       if (/<(?:\w+:)?Envelope[\s>]/.test(response.body)) return response.body;

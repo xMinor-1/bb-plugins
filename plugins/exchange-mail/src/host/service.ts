@@ -18,14 +18,16 @@ import type {
   ToolInput,
 } from "../../contract.js";
 import { oneAtATime, systemConfirmer, type SendConfirmer, type SendSummary } from "./confirm.js";
-import { curlTransport, TransportError, type HttpAuth, type Transport } from "./curl.js";
-import { AuthError, EwsClient, EwsError, normalizeEwsUrl } from "./ews/client.js";
+import { curlTransport, type HttpAuth, type Transport } from "./curl.js";
+import { EwsClient, normalizeEwsUrl } from "./ews/client.js";
+import { EwsError } from "./ews/parse.js";
 import type { ParsedMessage, ParsedSummary } from "./ews/parse.js";
 import type { Address, FolderName, ItemRef } from "./ews/soap.js";
 import { readJson, removeFile, serial, writeJson } from "./files.js";
 import { formatDraft, formatList, formatMessage } from "./format.js";
 import { openSecretStore, type SecretStore } from "./secret-store.js";
-import { accountName, SignInGate, SignInPaused, type Refusal, type RefusalStore } from "./signin.js";
+import { describe, forPanel, UserError } from "./errors.js";
+import { accountName, SignInGate, type Refusal, type RefusalStore } from "./signin.js";
 
 const EWS_FOLDER: Record<Folder, FolderName> = { inbox: "inbox", sent: "sentitems", drafts: "drafts", deleted: "deleteditems" };
 const FOLDER_TITLE: Record<Folder, string> = { inbox: "Inbox", sent: "Sent Items", drafts: "Drafts", deleted: "Deleted Items" };
@@ -57,7 +59,6 @@ interface DraftEntry {
   replyTo: { ref: string; itemId: string; subject: string; from: MailAddress | null } | null;
 }
 
-export class UserError extends Error {}
 
 export interface MailServiceOptions {
   readonly dataDir: string;
@@ -92,13 +93,6 @@ export function parseRecipient(input: string): Address {
 }
 
 const toAddress = (a: Address): MailAddress => ({ name: a.name, email: a.email });
-
-function describe(error: unknown): string {
-  if (error instanceof UserError || error instanceof SignInPaused || error instanceof AuthError || error instanceof TransportError || error instanceof EwsError) {
-    return error.message;
-  }
-  return error instanceof Error ? error.message : String(error);
-}
 
 export class MailService {
   private readonly dataDir: string;
@@ -163,11 +157,7 @@ export class MailService {
   }
 
   private normalizeUrl(input: string): string {
-    try {
-      return normalizeEwsUrl(input, { allowLocalHttp: this.allowLocalHttp });
-    } catch (error) {
-      throw new UserError(describe(error));
-    }
+    return normalizeEwsUrl(input, { allowLocalHttp: this.allowLocalHttp });
   }
 
   async status(): Promise<ConnectionStatus> {
@@ -179,7 +169,7 @@ export class MailService {
       const has = (name: string) => info.features.some((feature) => feature.toLowerCase() === name.toLowerCase());
       curl = { path: info.path, version: info.version, negotiate: has("SPNEGO") || has("GSS-API") || has("Kerberos"), ntlm: has("NTLM") };
     } catch (error) {
-      curlError = describe(error);
+      curlError = forPanel(error);
     }
     const password = connection?.auth === "password" && connection.user;
     const hasPassword = password
@@ -209,7 +199,7 @@ export class MailService {
     let passwordFor: string | null = null;
     if (input.auth === "password") {
       user = (input.user ?? "").trim();
-      if (!user) throw new UserError("Enter the login, for example DOMAIN\\name or name@company.com");
+      if (!user) throw new UserError("Enter the login, for example DOMAIN\\name or name@company.com", "login-required");
       passwordFor = bindingOf(url, user);
       if (input.password) {
         await this.secrets.set(PASSWORD, Buffer.from(input.password, "utf8").toString("base64"));
@@ -220,11 +210,9 @@ export class MailService {
         if (!kept) {
           const hadOne = previous?.auth === "password";
           await this.secrets.delete(PASSWORD).catch(() => false);
-          throw new UserError(
-            hadOne
-              ? "The saved password was for the previous address or login, so bb removed it. Enter the password for this one."
-              : "Enter the password",
-          );
+          throw hadOne
+            ? new UserError("The saved password was for the previous address or login, so bb removed it. Enter the password for this one.", "password-other-account")
+            : new UserError("Enter the password", "password-required");
         }
         passwordVersion = previous.passwordVersion ?? null;
       }
@@ -245,7 +233,6 @@ export class MailService {
 
   async forget(): Promise<ConnectionStatus> {
     await this.secrets.delete(PASSWORD).catch(() => false);
-    this.gate.reset();
     await removeFile(this.connectionFile());
     await this.writeDrafts(() => removeFile(this.draftsFile()));
     await this.writeRefs(async () => {
@@ -257,32 +244,33 @@ export class MailService {
 
   private async client(options: { retry?: boolean } = {}): Promise<EwsClient> {
     const connection = await this.readConnection();
-    if (!connection) throw new UserError("Mail is not connected on this machine yet. Connect it in Mail → Settings in the bb sidebar.");
+    if (!connection) throw new UserError("Mail is not connected on this machine yet. Connect it in Mail → Settings in the bb sidebar.", "not-connected");
     const url = this.normalizeUrl(connection.url);
     if (connection.auth === "negotiate") return new EwsClient({ url, auth: { kind: "negotiate" }, transport: this.transport });
     if (!connection.user || connection.passwordFor !== bindingOf(connection.url, connection.user)) {
       await this.secrets.delete(PASSWORD).catch(() => false);
-      throw new UserError("The mail password is missing on this machine. Enter it again in Mail → Settings in the bb sidebar.");
+      throw new UserError("The mail password is missing on this machine. Enter it again in Mail → Settings in the bb sidebar.", "password-missing");
     }
     const account = { login: accountName(connection.user), version: connection.passwordVersion ?? null, url, retry: options.retry === true };
     // Fail before reading the password; the gate checks again at the moment it would sign in.
     const paused = await this.gate.check(account);
-    if (paused) throw new UserError(paused);
+    if (paused) throw paused;
     const stored = await this.secrets.get(PASSWORD);
-    if (!stored) throw new UserError("The mail password is missing on this machine. Enter it again in Mail → Settings in the bb sidebar.");
+    if (!stored) throw new UserError("The mail password is missing on this machine. Enter it again in Mail → Settings in the bb sidebar.", "password-missing");
     const auth: HttpAuth = { kind: "ntlm", user: connection.user, password: Buffer.from(stored, "base64").toString("utf8") };
     return new EwsClient({ url, auth, transport: this.gate.transport(this.transport, account) });
   }
 
   async check(retry = false, signal?: AbortSignal): Promise<{ ok: boolean; message: string; unread: number | null }> {
     const connection = await this.readConnection();
-    if (!connection) return { ok: false, message: "Mail is not connected yet.", unread: null };
+    if (!connection) return { ok: false, message: forPanel(new UserError("Mail is not connected yet.", "not-connected")), unread: null };
     let result: { ok: boolean; message: string; unread: number | null };
     try {
       const counts = await (await this.client({ retry })).folderCounts("inbox", signal);
       result = { ok: true, message: `Connected. Inbox: ${counts.total} messages, ${counts.unread} unread.`, unread: counts.unread };
     } catch (error) {
-      result = { ok: false, message: describe(error), unread: null };
+      // Only the panel reads this, now and as the saved last check.
+      result = { ok: false, message: forPanel(error), unread: null };
     }
     const latest = await this.readConnection();
     if (latest && latest.url === connection.url && latest.auth === connection.auth && latest.user === connection.user) {

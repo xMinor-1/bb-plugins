@@ -9,6 +9,7 @@ import { intlLocale, useLang, useMessages } from "@/lib/i18n";
 import { messages } from "../messages";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Field, Notice, Section, errorText } from "./ui";
+import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
 
 export function ConnectionSection({
@@ -25,6 +26,7 @@ export function ConnectionSection({
   onStatus: (status: ConnectionStatus) => void;
 }) {
   const t = useMessages(messages);
+  const explain = useExplain();
   const lang = useLang();
   const [url, setUrl] = useState(status.url ?? suggestedUrl);
   const [auth, setAuth] = useState<AuthMode>(status.auth ?? (status.platform === "win32" ? "negotiate" : "password"));
@@ -93,7 +95,7 @@ export function ConnectionSection({
     <Section step={1} title={t.connectTitle}>
       <p className="text-sm text-muted-foreground">{t.connectIntro}</p>
 
-      {curlMissing ? <Notice tone="error">{status.curlError}</Notice> : null}
+      {curlMissing ? <Notice tone="error">{explain(status.curlError ?? "")}</Notice> : null}
       {auth === "negotiate" && status.curl && !status.curl.negotiate ? <Notice tone="warn">{t.noNegotiate}</Notice> : null}
 
       <Field label={t.address} hint={t.addressHint}>
@@ -126,11 +128,11 @@ export function ConnectionSection({
         </div>
       ) : null}
 
-      {error ? <Notice tone="error">{error}</Notice> : null}
+      {error ? <Notice tone="error">{explain(error)}</Notice> : null}
       {status.blocked && !changed ? (
         <Notice tone="error">{t.paused(retryClock, waiting)}</Notice>
       ) : status.lastCheck && !changed ? (
-        <Notice tone={status.lastCheck.ok ? "ok" : "error"}>{status.lastCheck.ok ? t.connected : t.checkFailed(status.lastCheck.message)}</Notice>
+        <Notice tone={status.lastCheck.ok ? "ok" : "error"}>{status.lastCheck.ok ? t.connected : t.checkFailed(explain(status.lastCheck.message))}</Notice>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">

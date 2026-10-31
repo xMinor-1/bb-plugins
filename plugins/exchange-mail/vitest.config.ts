@@ -8,8 +8,9 @@ const rootDir = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   resolve: { alias: { "@": rootDir } },
   test: {
-    include: ["test/**/*.test.ts"],
+    include: ["test/**/*.test.{ts,tsx}"],
     exclude: ["test/**/*.e2e.test.ts", "node_modules/**", "dist/**"],
+    setupFiles: ["./vitest.setup.ts"],
     testTimeout: 20_000,
   },
 });

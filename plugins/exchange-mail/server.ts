@@ -314,7 +314,8 @@ export default async function plugin(bb: BbPluginApi) {
     if (where.threadId) {
       const found = await hostOfThread(where.threadId);
       if (found) return found;
-      throw new Error("This thread has no machine to reach Exchange from.");
+      // Tagged for the panel, the only caller of these methods (src/host/errors.ts has the scheme).
+      throw new Error("[mail:no-machine] This thread has no machine to reach Exchange from.");
     }
     throw new Error("Name a machine or a thread.");
   }
