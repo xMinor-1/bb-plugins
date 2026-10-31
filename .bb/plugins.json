@@ -16,6 +16,10 @@
       "source": "./plugins/doc-review"
     },
     {
+      "name": "exchange-mail",
+      "source": "./plugins/exchange-mail"
+    },
+    {
       "name": "file-manager",
       "source": "./plugins/file-manager"
     },
