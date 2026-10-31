@@ -41,7 +41,7 @@ const RE_AFTER_TOMORROW = word("послезавтра|day after tomorrow");
 const RE_IN_DAYS = word("через\\s+(\\d{1,2})\\s+(?:дн\\p{L}*|день)|in\\s+(\\d{1,2})\\s+days?");
 const RE_IN_WEEK = word("через\\s+неделю|in\\s+a\\s+week|next\\s+week|на\\s+следующей\\s+неделе");
 const RE_RU_WEEKDAY = word(
-  "(?:(?:в|во|до|к|на|по)\\s+)?(?:(?:эту|этот|это|следующ\\p{L}*)\\s+)?(понедельник\\p{L}*|вторник\\p{L}*|сред[ауы]|четверг\\p{L}*|пятниц[аеуы]|суббот[аеуы]|воскресень[еяю])",
+  "(?:(?:в|во|до|к|на|по)\\s+)?(?:(?:эту|этот|это|следующ\\p{L}*|будущ\\p{L}*|ближайш\\p{L}*)\\s+)?(понедельник\\p{L}*|вторник\\p{L}*|сред[ауы]|четверг\\p{L}*|пятниц[аеуы]|суббот[аеуы]|воскресень[еяю])",
 );
 const RE_EN_WEEKDAY = word(`(?:(?:on|by|next|this|until)\\s+)?(${EN_WEEKDAYS.join("|")})`);
 const RE_RU_DATE = word(`(?:(?:до|к|на)\\s+)?(\\d{1,2})\\s+(${RU_MONTHS.join("|")})\\p{L}*`);
@@ -50,6 +50,17 @@ const RE_NUM_DATE = word("(?:(?:до|к|на|on|by)\\s+)?(\\d{1,2})[./](\\d{1,2}
 const RE_SOMEDAY = word("когда-нибудь|когда нибудь|потом|без срока|someday|some day|eventually|no rush");
 
 const RE_CLOCK = word("(?:(?:в|к|на|до|at|by)\\s+)?(\\d{1,2})[:.](\\d{2})(?:\\s*(am|pm))?");
+const PREP = "в|к|на|до|после|около|at|by";
+/** "в 16 часов 15 минут", "к 9 ч 30 мин". */
+const RE_CLOCK_WORDS = word(
+  `(?:(?:${PREP})\\s+)?(\\d{1,2})\\s*(?:час(?:а|ов)?|ч\\.?)\\s*(\\d{1,2})\\s*(?:минут\\p{L}*|мин\\.?)(?:\\s+(утра|дня|вечера|ночи))?`,
+);
+/** "в 16 15", "к 9 30 утра": a clock time said with a pause instead of a colon. Needs the preposition. */
+const RE_CLOCK_SPACED = new RegExp(
+  `(?<![${L}])(?:${PREP})\\s+(\\d{1,2})\\s+(\\d{2})(?:\\s+минут\\p{L}*)?(?:\\s+(утра|дня|вечера|ночи|am|pm))?(?![${L}\\d])` +
+    `(?!\\s*(?:${MONTH_WORD}|[./:]\\d|час|дн|недел|раз|штук|человек|руб))`,
+  "giu",
+);
 const RE_HOUR = new RegExp(
   `(?<![${L}])(?:в|к|на|до|at|by)\\s+(\\d{1,2})(?:\\s*(утра|дня|вечера|ночи|час\\p{L}*|am|pm|o'clock))?(?![${L}:.\\d])(?!\\s*(?:${MONTH_WORD}|[./]\\d))`,
   "giu",
@@ -62,11 +73,37 @@ const RU_ORDINALS = [
 ];
 /** "в полвосьмого", "в половине восьмого": 7:30. */
 const RE_HALF = word(`(?:(?:в|к|до)\\s+)?(?:пол\\s*|половин[еуа]\\s+)(${RU_ORDINALS.join("|")})`);
-const RU_HOUR_WORDS = [
-  "час", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять", "десять", "одиннадцать", "двенадцать",
+/** Spelled-out hours: "в час", "до часа дня", "к пяти", "до двух часов", "в семь вечера". */
+const RU_HOURS: { nominative: string; oblique: string }[] = [
+  { nominative: "час", oblique: "часа|часу" },
+  { nominative: "два", oblique: "двух|двум" },
+  { nominative: "три", oblique: "тр[её]х|тр[её]м" },
+  { nominative: "четыре", oblique: "четыр[её]х|четыр[её]м" },
+  { nominative: "пять", oblique: "пяти" },
+  { nominative: "шесть", oblique: "шести" },
+  { nominative: "семь", oblique: "семи" },
+  { nominative: "восемь", oblique: "восьми" },
+  { nominative: "девять", oblique: "девяти" },
+  { nominative: "десять", oblique: "десяти" },
+  { nominative: "одиннадцать", oblique: "одиннадцати" },
+  { nominative: "двенадцать", oblique: "двенадцати" },
 ];
-/** "в семь вечера", "в десять утра": a spelled-out hour needs a part of the day after it. */
-const RE_HOUR_WORD = word(`(?:в|к|на|до)\\s+(${RU_HOUR_WORDS.join("|")})\\s+(утра|дня|вечера|ночи)`);
+const RE_HOUR_WORD = word(
+  `(?:в|к|на|до|после|около)\\s+(${RU_HOURS.map((h) => `${h.nominative}|${h.oblique}`).join("|")})` +
+    `(?:\\s+(час\\p{L}*))?(?:\\s+(утра|дня|вечера|ночи))?` +
+    // "в два раза", "до трёх дней" count things, they are not times.
+    `(?!\\s+(?:раз|дн|недел|месяц|минут|штук|человек|задач|страниц|лет|год|процент|тысяч|рубл))`,
+);
+function hourOfWord(token: string): number {
+  const lower = token.toLowerCase();
+  return RU_HOURS.findIndex((h) => new RegExp(`^(?:${h.nominative}|${h.oblique})$`, "u").test(lower)) + 1;
+}
+/** Times of day people say instead of a clock: lunch is 13:00, the end of the day 18:00. */
+const DAY_MARKS: [RegExp, number, number][] = [
+  [word("после\\s+обеда|after\\s+lunch"), 14, 0],
+  [word("(?:до|к|перед|в)\\s+обед\\p{L}*|(?:by|before|at)\\s+lunch(?:time)?"), 13, 0],
+  [word("(?:до|к)\\s+концу?\\s+(?:рабочего\\s+)?дня|(?:до|к)\\s+вечер[ау]|by\\s+(?:the\\s+)?end\\s+of\\s+(?:the\\s+)?day|by\\s+eod"), 18, 0],
+];
 /** "утром", "вечером": today if nothing else names the day, and a hint for bare hours. */
 const RE_DAYPART = word("утром|с\\s+утра|дн[её]м|вечером|ночью|in\\s+the\\s+(?:morning|afternoon|evening)|this\\s+(?:morning|afternoon|evening)");
 
@@ -160,13 +197,22 @@ export function parseWhen(text: string, now: LocalNow): WhenResult {
     const h = Number(m[1]);
     setTime(m, m[3] ? ampm(h, m[3]) : evening && h < 12 ? h + 12 : h, Number(m[2]));
   }
+  for (const re of [RE_CLOCK_WORDS, RE_CLOCK_SPACED]) {
+    for (const m of matches(text, re)) {
+      const h = Number(m[1]);
+      setTime(m, m[3] ? ampm(h, m[3]) : bareHour(h), Number(m[2]));
+    }
+  }
   for (const m of matches(text, RE_HALF)) {
     const n = RU_ORDINALS.findIndex((o) => new RegExp(`^${o}$`, "u").test(m[1]!.toLowerCase())) + 1;
     setTime(m, bareHour(n === 1 ? 12 : n - 1), 30);
   }
   for (const m of matches(text, RE_HOUR_WORD)) {
-    const h = RU_HOUR_WORDS.indexOf(m[1]!.toLowerCase()) + 1;
-    setTime(m, ampm(h, m[2]), 0);
+    const h = hourOfWord(m[1]!);
+    const nominative = RU_HOURS[h - 1]!.nominative === m[1]!.toLowerCase();
+    // "в два" alone is too often "в два раза"; "в час" and "до двух" are times.
+    if (nominative && h !== 1 && !m[2] && !m[3]) continue;
+    setTime(m, m[3] ? ampm(h, m[3]) : bareHour(h), 0);
   }
   for (const m of matches(text, RE_NOON)) setTime(m, 12, 0);
   for (const m of matches(text, RE_HOUR_AMPM)) setTime(m, ampm(Number(m[1]), m[2]), 0);
@@ -177,6 +223,7 @@ export function parseWhen(text: string, now: LocalNow): WhenResult {
     else h = bareHour(h);
     setTime(m, h, 0);
   }
+  for (const [re, h, min] of DAY_MARKS) for (const m of matches(text, re)) setTime(m, h, min);
   if (dayPartMatch && !someday) {
     hits.push(hitOf(dayPartMatch, "when"));
     if (date === null && time === null) date = now.date;
@@ -225,10 +272,48 @@ function linksOf(text: string): { links: string[]; hits: Hit[] } {
 const COMMANDS: { action: Action; re: RegExp }[] = [
   { action: "importance", re: word("(сделай|пометь|поставь|отметь\\s+как|make|mark\\s+as|mark)\\s+((?:[\\p{L}\\p{N}]+\\s+){0,4}?)(важн\\p{L}*|срочн\\p{L}*|неважн\\p{L}*|несрочн\\p{L}*|important|urgent|low\\s+priority)") },
   { action: "undone", re: word("верни\\p{L}*|вернуть|не\\s+готово|undo|reopen|not\\s+done") },
-  { action: "done", re: word("отметь|отметить|отмечай|готово|сделал[аио]?|сделано|выполнил[аио]?|выполнено|закрой|закрыл[аио]?|вычеркни|mark\\s+(?:as\\s+)?done|done|completed?|finished") },
-  { action: "move", re: word("перенеси|перенести|переложи|сдвинь|отложи|move|postpone|reschedule|push") },
+  { action: "done", re: word("отметь|отметить|отмечай|готово|сделал[аио]?|сделано|выполнил[аио]?|выполнено|закрой|закрыл[аио]?|закрыт\\p{L}*|вычеркни|mark\\s+(?:as\\s+)?done|done|completed?|finished|closed?") },
+  { action: "move", re: word("перенеси|перенести|переложи|сдвинь|подвинь|передвинь|перемести|отложи|move|postpone|reschedule|push") },
   { action: "delete", re: word("удали|удалить|убери|убрать|сотри|delete|remove") },
 ];
+/** "6", "6 и 1", "3, 5 и 8", "#6 and #1". */
+const NUM_LIST = "\\d{1,5}(?:\\s*(?:,|и|and|&|а\\s+также)\\s*(?:[#№]\\s?)?\\d{1,5})*";
+/** "Стикер 112", "задачи 6 и 1", "#112", "№ 112": cards by their numbers. */
+const RE_CARD_NUM = word(
+  `(?:стикер\\p{L}*|номер\\p{L}*|задач\\p{L}*|карточк\\p{L}*|sticker\\p{L}*|card\\p{L}*|task\\p{L}*|note\\p{L}*|number\\p{L}*)\\s*(?:№|#|номер\\p{L}*\\s+)?(${NUM_LIST})|[#№]\\s?(${NUM_LIST})`,
+);
+/**
+ * "Закрой 6 и 1", "перенеси 3 на завтра", "закрыть аздачи 6 и 1": numbers right
+ * after the verb, maybe behind a misspelled "задачи". They must end the phrase
+ * or be followed by a preposition, so "убери 3 книги" stays a task.
+ */
+const RE_BARE_REF = new RegExp(
+  `^\\s*([\\p{L}]+)\\s+(?:([\\p{L}]{4,})\\s+)?(?:[#№]\\s?)?(${NUM_LIST})` +
+    `(?=\\s*$|\\s*[,.!?;]|\\s+(?:в|во|на|к|до|из|to|in|on|into|as)(?![${L}]))`,
+  "iu",
+);
+const RE_COMMAND_VERB = /^(?:сделай|пометь|поставь|make|mark|открой|покажи|open|show)$/iu;
+const CARD_NOUNS = ["задача", "задачи", "задачу", "стикер", "стикеры", "стикера", "карточка", "карточки", "карточку", "tasks", "cards", "stickers"];
+
+/** Levenshtein distance, small words only. */
+function distance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row.push(Math.min(prev[j]! + 1, row[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)));
+    }
+    prev = row;
+  }
+  return prev[b.length]!;
+}
+const isCardNoun = (w: string) => CARD_NOUNS.some((noun) => distance(w.toLowerCase(), noun) <= 2);
+const isCommandVerb = (w: string) =>
+  RE_COMMAND_VERB.test(w) || COMMANDS.some(({ action, re }) => action !== "importance" && matches(w, re).some((m) => m[0] === w));
+const RE_OPEN = /^\s*(?:открой|открыть|покажи|open|show)(?![\p{L}])/iu;
+/** "Закрой задачу…", "перенеси её…", "close the task…": the verb points at "the task" in context. */
+const RE_GENERIC_OBJECT =
+  /^\s*[\p{L}]+\s+(?:(?:эту|это|последн\p{L}*|текущ\p{L}*|мою|this|the|that|my)\s+)?(?:задач\p{L}*|стикер\p{L}*|карточк\p{L}*|е[её]|это|task|card|sticker|it|this)(?![\p{L}])/iu;
 /** Phrases that start a new task even if a command word follows ("напомни отметить часы"). */
 const RE_CREATE_LEAD = /^\s*(?:напомни\p{L}*|надо|нужно|не\s+забыть|не\s+забудь|добавь\s+задачу|запиши|remind\s+me|remember\s+to|i\s+need\s+to|todo)(?![\p{L}])/iu;
 
@@ -240,7 +325,7 @@ const STOP = new Set(
       "сегодня завтра послезавтра понедельник вторник среду среда четверг пятницу пятница субботу воскресенье " +
       "через неделю следующей утра вечера часов " +
       "mark done move delete remove make important urgent today tomorrow monday tuesday wednesday thursday friday saturday sunday " +
-      "next week task please",
+      "next week task please пожалуйста последнюю последняя текущую задачку this that",
   ),
 );
 
@@ -251,6 +336,8 @@ function stems(s: string): string[] {
 interface Target {
   ids: string[];
   hits: Hit[];
+  /** The phrase had words that could name a card; false for "закрой задачу". */
+  named: boolean;
 }
 
 /** Everyday short words: in lowercase they never stand for an acronym ("что-то" is not "ТО"). */
@@ -287,7 +374,7 @@ function findTarget(text: string, cards: Pick<Card, "id" | "title" | "done">[], 
       return { key, start: m.index!, end: m.index! + m[0].length };
     })
     .filter((w): w is { key: string; start: number; end: number } => w.key !== null && !STOP.has(w.key));
-  if (words.length === 0) return { ids: [], hits: [] };
+  if (words.length === 0) return { ids: [], hits: [], named: false };
   let best = 0;
   let ids: string[] = [];
   let bestHits: Hit[] = [];
@@ -301,7 +388,7 @@ function findTarget(text: string, cards: Pick<Card, "id" | "title" | "done">[], 
       bestHits = hit.map((w) => ({ start: w.start, end: w.end, kind: "target" as const }));
     } else if (hit.length === best) ids.push(card.id);
   }
-  return { ids, hits: bestHits };
+  return { ids, hits: bestHits, named: true };
 }
 
 // ---------- titles ----------
@@ -338,10 +425,67 @@ function sortHits(hits: Hit[]): Span[] {
 export interface ParseInput {
   text: string;
   now: LocalNow;
-  cards: Pick<Card, "id" | "title" | "done">[];
+  cards: (Pick<Card, "id" | "title" | "done"> & { num?: number })[];
+  /** The card the user is dealing with: the open one, or the last one touched. */
+  contextId?: string | null;
 }
 
-export function parsePhrase({ text, now, cards }: ParseInput): ParseResult {
+/** Cards named by number: "стикер 112", "задачи 6 и 1", "закрой 6 и 1". */
+function numberRef(said: string, cards: ParseInput["cards"]): { ids: string[]; hit: Hit } | null {
+  const resolve = (list: string) => {
+    const ids = (list.match(/\d{1,5}/g) ?? [])
+      .map((n) => cards.find((c) => c.num === Number(n))?.id)
+      .filter((id): id is string => id !== undefined);
+    return [...new Set(ids)];
+  };
+  for (const m of matches(said, RE_CARD_NUM)) {
+    const ids = resolve((m[1] ?? m[2])!);
+    if (ids.length) return { ids, hit: hitOf(m, "target") };
+  }
+  const bare = RE_BARE_REF.exec(said);
+  if (bare && isCommandVerb(bare[1]!) && (bare[2] === undefined || isCardNoun(bare[2]))) {
+    const ids = resolve(bare[3]!);
+    const end = bare.index + bare[0].length;
+    const verbEnd = bare[0].indexOf(bare[1]!) + bare[1]!.length;
+    const start = bare[2] ? bare.index + bare[0].indexOf(bare[2], verbEnd) : end - bare[3]!.length;
+    if (ids.length) return { ids, hit: { start, end, kind: "target" } };
+  }
+  return null;
+}
+
+/**
+ * "Закрой презентацию и посылку": each part of a list names its own card. Null
+ * unless every part that names something points at exactly one card and there
+ * are at least two of them.
+ */
+function listTargets(text: string, cards: ParseInput["cards"], includeDone: boolean, skip: Hit[]): Target | null {
+  const cuts = [...text.matchAll(/\s*(?:,|(?<![\p{L}])(?:и|and|а\s+также)(?![\p{L}]))\s*/giu)];
+  if (cuts.length === 0) return null;
+  const bounds = [0, ...cuts.flatMap((c) => [c.index!, c.index! + c[0].length]), text.length];
+  const ids: string[] = [];
+  const hits: Hit[] = [];
+  for (let i = 0; i < bounds.length; i += 2) {
+    const [from, to] = [bounds[i]!, bounds[i + 1]!];
+    const part = " ".repeat(from) + text.slice(from, to) + " ".repeat(text.length - to);
+    const found = findTarget(part, cards, includeDone, skip);
+    if (!found.named) continue;
+    if (found.ids.length !== 1) return null;
+    if (!ids.includes(found.ids[0]!)) ids.push(found.ids[0]!);
+    hits.push(...found.hits);
+  }
+  return ids.length >= 2 ? { ids, hits, named: true } : null;
+}
+
+export function parsePhrase({ text: said, now, cards, contextId = null }: ParseInput): ParseResult {
+  // Cards named by number. The numbers are blanked out (offsets kept) so
+  // "стикер 12 на завтра" never reads 12 as a time.
+  const ref = numberRef(said, cards);
+  const refHit = ref?.hit ?? null;
+  const text = refHit ? said.slice(0, refHit.start) + " ".repeat(refHit.end - refHit.start) + said.slice(refHit.end) : said;
+  if (ref && RE_OPEN.test(said)) {
+    const id = ref.ids[0]!;
+    return { type: "command", action: "open", targetId: id, targetIds: [id], spans: sortHits([hitOf(RE_OPEN.exec(said)!, "action"), refHit!]) };
+  }
   const when = parseWhen(text, now);
   const imp = importanceOf(text);
   const kind = kindOf(text);
@@ -360,10 +504,30 @@ export function parsePhrase({ text, now, cards }: ParseInput): ParseResult {
               { start: m.index! + m[0].length - m[3]!.length, end: m.index! + m[0].length, kind: "importance" },
             ]
           : [hitOf(m, "action")];
-      const target = findTarget(text, cards, action === "undone", [...actionHits, ...when.hits, ...imp.hits]);
+      const skip = [...actionHits, ...when.hits, ...imp.hits];
+      const listed = ref ? null : listTargets(text, cards, action === "undone", skip);
+      const target: Target = ref
+        ? { ids: ref.ids, hits: [refHit!], named: true }
+        : (listed ?? findTarget(text, cards, action === "undone", skip));
+      // Several cards named on purpose ("задачи 6 и 1", "презентацию и посылку")
+      // are all meant; a tie between titles is a question instead.
+      const several = target.ids.length > 1 && (ref !== null || listed !== null);
+      // A Russian imperative opening the phrase ("Закрой…", not "Закрыть…") is
+      // always a command, never a new task.
+      const leading = text.slice(0, actionHits[0]!.start).trim() === "";
+      const verb = text.slice(actionHits[0]!.start, actionHits[0]!.end).split(/\s+/)[0] ?? "";
+      const imperative = leading && /\p{Script=Cyrillic}/u.test(verb) && !/(?:ть|ти)$/iu.test(verb);
+      const generic = leading && RE_GENERIC_OBJECT.test(text);
+      // "Закрой задачу" points at the card in context, or the only candidate:
+      // also when the rest of the phrase is an explanation that names nothing on the board.
+      if (!target.named || (generic && target.ids.length === 0)) {
+        const pool = cards.filter((c) => c.done === (action === "undone"));
+        const implied = contextId && cards.some((c) => c.id === contextId) ? contextId : pool.length === 1 ? pool[0]!.id : null;
+        if (implied) target.ids = [implied];
+      }
       const spans = sortHits([...actionHits, ...target.hits, ...(action === "move" ? when.hits : [])]);
-      if (target.ids.length === 1) {
-        const base = { type: "command" as const, action, targetId: target.ids[0]!, spans };
+      if (target.ids.length === 1 || several) {
+        const base = { type: "command" as const, action, targetId: target.ids[0]!, targetIds: target.ids, spans };
         if (action === "move") return { ...base, due: when.someday ? null : toDue(when) ?? { date: addDays(now.date, 1), time: null } };
         if (action === "importance") return { ...base, importance: /неважн|несрочн|low/iu.test(m[3] ?? "") ? "low" : "high" };
         return base;
@@ -371,13 +535,14 @@ export function parsePhrase({ text, now, cards }: ParseInput): ParseResult {
       if (target.ids.length > 1) return { type: "ambiguous", action, candidateIds: target.ids.slice(0, 3), spans };
       // A command word with no task to point at: short phrases are failed
       // commands, longer ones are probably a new task ("отменить подписку").
-      if (text.trim().split(/\s+/).length <= 4) return { type: "notFound", action, spans };
+      if (!target.named || generic) return { type: "notFound", action, named: false, spans };
+      if (imperative || text.trim().split(/\s+/).length <= 4) return { type: "notFound", action, named: true, spans };
       break;
     }
   }
 
   const draft: Draft = {
-    title: titleFrom(text, [...when.hits, ...imp.hits, ...links.hits]) || text.trim(),
+    title: titleFrom(said, [...when.hits, ...imp.hits, ...links.hits]) || said.trim(),
     due: toDue(when),
     importance: when.someday && imp.importance === "normal" ? "low" : imp.importance,
     kind: kind.kind,
