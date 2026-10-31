@@ -1,19 +1,18 @@
-// Fleet Kit panel: build version, the last sync, OpenCode model protection,
-// build secrets, and a "Sync now" button. Data comes from the backend over
-// RPC; the backend's "status-changed" signal triggers a refetch.
+// Fleet Kit panels. The status page: build version, the last sync, OpenCode
+// model protection, build secrets, and a "Sync now" button. The First run page
+// (src/app/setup-page.tsx): the build's setup steps. Data comes from the
+// backend over RPC; the backend's "status-changed" signal triggers a refetch.
 import { useCallback, useEffect, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
 import { definePluginApp, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
 import type { Status, Step } from "./contract";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { defineMessages, intlLocale, LanguageSwitch, useLang, useMessages, type Lang } from "@/lib/i18n";
-import { render, storeName } from "./src/shared/texts";
-
-const STATUS_CHANNEL = "status-changed";
+import { defineMessages, getLang, intlLocale, LanguageSwitch, useLang, useMessages, type Lang } from "@/lib/i18n";
+import { render } from "./src/shared/texts";
+import { Frame, Section, SecretRow, STATUS_CHANNEL } from "./src/app/parts";
+import { markSetupEntryRegistered, SETUP_PANEL, SetupBanner, SetupPage, setupEntryWanted, setupTitle, useSetupBadge } from "./src/app/setup-page";
 type Outcome = NonNullable<Status["lastSync"]>["outcome"];
 
 const messages = defineMessages(
@@ -26,13 +25,6 @@ const messages = defineMessages(
     ago: (text: string) => `${text} ago`,
     outcome: (outcome: Outcome | "none") =>
       ({ ok: "Up to date", changed: "Changes applied", warning: "Applied with warnings", error: "Errors", none: "Not synced yet" })[outcome],
-    savedIn: (store: string) => `Saved in ${store}`,
-    notSet: "Not set",
-    replace: "Replace",
-    remove: "Remove",
-    pasteValue: "Paste the value",
-    save: "Save",
-    cancel: "Cancel",
     notInstalled: "OpenCode is not installed.",
     tooOld: (version: string) => `OpenCode ${version} is too old. Update OpenCode to 2.x.`,
     systemPolicy: "system policy",
@@ -73,13 +65,6 @@ const messages = defineMessages(
     ago: (text) => `${text} назад`,
     outcome: (outcome) =>
       ({ ok: "Всё совпадает", changed: "Изменения применены", warning: "Применено с предупреждениями", error: "Ошибки", none: "Ещё не сверялся" })[outcome],
-    savedIn: (store) => `Сохранён: ${store}`,
-    notSet: "Не задан",
-    replace: "Заменить",
-    remove: "Удалить",
-    pasteValue: "Вставьте значение",
-    save: "Сохранить",
-    cancel: "Отмена",
     notInstalled: "OpenCode не установлен.",
     tooOld: (version) => `OpenCode ${version} устарел. Обновите OpenCode до 2.x.`,
     systemPolicy: "системная политика",
@@ -155,19 +140,6 @@ function relative(t: Texts, iso: string | null): string {
   return delta >= 0 ? t.inTime(text) : t.ago(text);
 }
 
-function Section({ title, icon, children, aside }: { title: string; icon: string; children: ReactNode; aside?: ReactNode }) {
-  return (
-    <section className="rounded-lg border border-border bg-card">
-      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <Icon name={icon} className="size-4 text-muted-foreground" />
-        <h2 className="flex-1 text-sm font-medium">{title}</h2>
-        {aside}
-      </header>
-      <div className="px-4 py-3 text-sm">{children}</div>
-    </section>
-  );
-}
-
 function OutcomeBadge({ outcome }: { outcome: Outcome | "none" }) {
   const t = useMessages(messages);
   const tone =
@@ -200,73 +172,6 @@ function StepRow({ step }: { step: Step }) {
         <span className="font-medium">{t.item(step.item)}</span>
         <span className="text-muted-foreground"> {render(lang, step)}</span>
       </div>
-    </li>
-  );
-}
-
-function SecretRow({ secret, store, onSave, onClear }: {
-  secret: Status["secrets"][number];
-  store: string;
-  onSave: (value: string) => Promise<void>;
-  onClear: () => Promise<void>;
-}) {
-  const t = useMessages(messages);
-  const lang = useLang();
-  const [editing, setEditing] = useState(!secret.set);
-  const [value, setValue] = useState("");
-  const [pending, setPending] = useState(false);
-  useEffect(() => setEditing(!secret.set), [secret.set]);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (value.trim() === "" || pending) return;
-    setPending(true);
-    try {
-      await onSave(value);
-      setValue("");
-    } finally {
-      setPending(false);
-    }
-  };
-  return (
-    <li className="py-2.5">
-      {/* Wraps on a narrow panel: the buttons move to their own line instead of past the card's edge. */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <Icon name={secret.set ? "Lock" : "SquareUnlock02"} className={cn("size-4", secret.set ? "text-muted-foreground" : "text-amber-600 dark:text-amber-400")} />
-        <span className="min-w-0 flex-1 font-medium">{secret.title}</span>
-        <span className="min-w-0 break-words text-xs text-muted-foreground">{secret.set ? t.savedIn(storeName(store, lang)) : t.notSet}</span>
-        {secret.set && !editing ? (
-          <div className="ml-auto flex shrink-0 gap-1">
-            <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
-              {t.replace}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => void onClear()}>
-              {t.remove}
-            </Button>
-          </div>
-        ) : null}
-      </div>
-      {secret.hint ? <p className="mt-1 pl-6 text-xs text-muted-foreground">{secret.hint}</p> : null}
-      {editing ? (
-        <form onSubmit={submit} className="mt-2 flex items-center gap-2 pl-6">
-          <Input
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            placeholder={t.pasteValue}
-            aria-label={secret.title}
-          />
-          <Button type="submit" size="sm" disabled={pending || value.trim() === ""}>
-            {t.save}
-          </Button>
-          {secret.set ? (
-            <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(false)}>
-              {t.cancel}
-            </Button>
-          ) : null}
-        </form>
-      ) : null}
     </li>
   );
 }
@@ -349,6 +254,7 @@ function FleetKitPage() {
       ) : null}
 
       <div className="mt-4 flex flex-col gap-4">
+        <SetupBanner />
         {last?.fleetKitOutdated ? (
           <div role="alert" className="flex items-center gap-2 rounded-lg border border-amber-500/40 px-4 py-2.5 text-sm">
             <Icon name="AlertTriangle" className="size-4 text-amber-600 dark:text-amber-400" />
@@ -373,7 +279,13 @@ function FleetKitPage() {
                   key={secret.name}
                   secret={secret}
                   store={status.secretStore}
-                  onSave={(value) => rpc.call("secret_set", { name: secret.name, value }).then(refetch, report)}
+                  onSave={(value) =>
+                    rpc.call("secret_set", { name: secret.name, value }).then(refetch, (cause) => {
+                      // Shown above; the rejection keeps the typed key in the field.
+                      report(cause);
+                      throw cause;
+                    })
+                  }
                   onClear={() => rpc.call("secret_clear", { name: secret.name }).then(refetch, report)}
                 />
               ))}
@@ -434,20 +346,26 @@ function FleetKitPage() {
   );
 }
 
-function Frame({ children }: { children: ReactNode }) {
-  return (
-    <div className="h-full min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto box-border w-full max-w-3xl px-4 pb-6 pt-3 md:px-5 md:pt-4">{children}</div>
-    </div>
-  );
-}
-
 export default definePluginApp((app) => {
+  const withSetup = setupEntryWanted();
   app.slots.navPanel({
     id: "fleet-kit",
     title: "Fleet Kit",
     icon: "PackageReceive",
     path: "status",
     component: FleetKitPage,
+    // Without the First run entry, steps that appear later are counted here.
+    ...(withSetup ? {} : { experimental_useBadge: useSetupBadge }),
   });
+  if (!withSetup) return;
+  // The installer opens bb on this page: /plugins/fleet-kit/setup.
+  app.slots.navPanel({
+    id: "fleet-kit-setup",
+    title: setupTitle(getLang()),
+    icon: "Target",
+    path: SETUP_PANEL,
+    component: SetupPage,
+    experimental_useBadge: useSetupBadge,
+  });
+  markSetupEntryRegistered();
 });
