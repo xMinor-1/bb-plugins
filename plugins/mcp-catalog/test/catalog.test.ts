@@ -1,10 +1,9 @@
-// The catalog: shapes it accepts, how it is read, and how the page matches it to your servers.
+// The catalog: shapes it accepts and how it is read; the page's link to the platform.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
-import type { ServerView } from "../contract";
 import { CatalogError, fetchCatalog, normalizeCatalog } from "../src/host/catalog";
-import { isConnected, platformLink } from "../src/app/McpPage";
+import { platformLink } from "../src/app/McpPage";
 
 describe("normalizeCatalog", () => {
   it("takes a list at the root or under a common key", () => {
@@ -45,20 +44,10 @@ describe("fetchCatalog", () => {
   });
 });
 
-describe("the page's catalog helpers", () => {
-  const mine = (name: string) => ({ name }) as ServerView;
-
-  it("marks an item connected when a server's name carries its id or name", () => {
-    const wiki = { id: "wiki", name: "Wiki search", description: null, category: null };
-    expect(isConnected(wiki, [mine("corp_wiki_ab12cd34")])).toBe(true);
-    expect(isConnected(wiki, [mine("tracker")])).toBe(false);
-    expect(isConnected({ id: "f3a1-uuid", name: "Tracker AI", description: null, category: null }, [mine("trackerai")])).toBe(true);
-  });
-
-  it("builds the platform link, with the item's id where the address asks for it", () => {
-    const item = { id: "wiki pages", name: "Wiki", description: null, category: null };
-    expect(platformLink("https://mcp.example.com/dashboard", item)).toBe("https://mcp.example.com/dashboard");
-    expect(platformLink("https://mcp.example.com/new?template={id}", item)).toBe("https://mcp.example.com/new?template=wiki%20pages");
-    expect(platformLink("javascript:alert(1)", item)).toBeNull();
+describe("the page's platform link", () => {
+  it("links only to a web address", () => {
+    expect(platformLink(" https://mcp.example.com/dashboard ")).toBe("https://mcp.example.com/dashboard");
+    expect(platformLink("javascript:alert(1)")).toBeNull();
+    expect(platformLink("")).toBeNull();
   });
 });

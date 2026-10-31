@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-sticker-note",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "test": "vitest run",
@@ -12,12 +12,15 @@
   },
   "bb": {
     "name": "Sticker Note",
-    "description": "A personal sticky-note board in bb: dictate tasks and commands by voice, sorted by time and importance, with agent chats from a card.",
+    "description": "A personal sticky-note board in bb: dictate tasks and commands by voice, hand jobs to agents from a card and follow their answers, and turn chat messages into stickers.",
     "branding": {
       "icon": "./icon.svg"
     },
     "server": "./server.ts",
-    "app": "./app.tsx"
+    "app": "./app.tsx",
+    "skills": [
+      "skills"
+    ]
   },
   "dependencies": {
     "@radix-ui/react-checkbox": "^1.3.7",

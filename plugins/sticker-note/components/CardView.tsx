@@ -4,11 +4,12 @@ import type { DragEvent, KeyboardEvent, MouseEvent } from "react";
 import { useLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
+import { agentView } from "../src/agent-state";
 import { overdueMinutes } from "../src/board";
 import { addDays, type LocalNow } from "../src/dates";
 import { messages } from "../src/messages";
 import type { Card, Column } from "../src/model";
-import { doneText, linkLabel, shortWhen } from "./format";
+import { agentLabel, doneText, linkLabel, shortWhen } from "./format";
 import { Icon, type IconName } from "./icons";
 
 export const DRAG_TYPE = "application/x-sticker-note-card";
@@ -29,6 +30,7 @@ export function CardView({ card, column, now, flash, onOpen, onToggleDone, onQui
   const m = useMessages(messages);
   const lang = useLang();
   const late = overdueMinutes(card, now);
+  const agent = agentView(card);
   const hasTime = column === "today" && card.due?.time != null;
 
   let when = null;
@@ -75,11 +77,10 @@ export function CardView({ card, column, now, flash, onOpen, onToggleDone, onQui
             {m.workTag}
           </span>
         ) : null}
-        {card.chats.length ? (
-          <span className="sn-chip chat">
-            <Icon name="chat" size={12} />
-            {m.chatTag}
-            {card.chats.length > 1 ? ` ${card.chats.length}` : ""}
+        {agent ? (
+          <span className={cn("sn-chip chat", `ag-${agent.state}`)}>
+            {agent.state === "working" ? <span className="sn-pulse" aria-hidden="true" /> : <Icon name="chat" size={12} />}
+            {agentLabel(m, agent.state)}
           </span>
         ) : null}
         {card.notes.length ? (

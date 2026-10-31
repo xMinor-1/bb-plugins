@@ -7,22 +7,26 @@
 // would send it to another address. Error details are short technical words
 // ("HTTP 502", "timeout") and never include headers or bodies.
 import type { HealthStatus } from "../../contract.js";
+import { serverInfoFrom, type ServerInfo } from "./names.js";
 
 export const PROBE_TIMEOUT_MS = 10_000;
 const MAX_BODY = 512 * 1024;
 const PROTOCOL = "2025-06-18";
-const CLIENT = { name: "bb-mcp-catalog", version: "0.1.0" };
+const CLIENT = { name: "bb-mcp-catalog", version: "0.2.0" };
 
 export interface ProbeResult {
   status: Exclude<HealthStatus, "unknown">;
   detail: string | null;
   tools: number | null;
+  /** What the server said about itself in `initialize`, when it answered. */
+  info?: ServerInfo | null;
 }
 
 class ProbeFailure extends Error {
   constructor(
     readonly status: "down" | "unauthorized",
     detail: string,
+    readonly info: ServerInfo | null = null,
   ) {
     super(detail);
   }
@@ -158,9 +162,10 @@ export async function probeServer(
     const init = await answerFor(first, 1);
     const initError = rpcError(init);
     if (initError) throw initError;
-    const result = init.result as { protocolVersion?: unknown } | undefined;
+    const result = init.result as Record<string, unknown> | undefined;
     if (!result || typeof result !== "object") throw new ProbeFailure("down", "not an MCP answer");
     if (typeof result.protocolVersion === "string" && /^[\w.-]{1,32}$/.test(result.protocolVersion)) protocol = result.protocolVersion;
+    const info = serverInfoFrom(result);
 
     let tools: number | null = null;
     try {
@@ -175,11 +180,11 @@ export async function probeServer(
       if (Array.isArray(found)) tools = found.length;
     } catch (error) {
       // The handshake worked; a refused token on the next call still counts.
-      if (error instanceof ProbeFailure && error.status === "unauthorized") throw error;
+      if (error instanceof ProbeFailure && error.status === "unauthorized") throw new ProbeFailure("unauthorized", error.message, info);
     }
-    return { status: "ok", detail: null, tools };
+    return { status: "ok", detail: null, tools, ...(info ? { info } : {}) };
   } catch (error) {
-    if (error instanceof ProbeFailure) return { status: error.status, detail: error.message, tools: null };
+    if (error instanceof ProbeFailure) return { status: error.status, detail: error.message, tools: null, ...(error.info ? { info: error.info } : {}) };
     return { status: "down", detail: networkDetail(error, timeout.aborted), tools: null };
   } finally {
     if (session) {

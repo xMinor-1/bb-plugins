@@ -16,6 +16,10 @@ export interface StubOptions {
   /** Answer 302 to this address. */
   redirectTo?: string;
   tools?: number;
+  /** What `initialize` says about the server. */
+  serverName?: string;
+  title?: string;
+  instructions?: string;
 }
 
 export interface StubRequest {
@@ -89,7 +93,12 @@ export async function startStubMcp(options: StubOptions, port = 0, host = "127.0
     }
     const result =
       message.method === "initialize"
-        ? { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "stub", version: "1.0.0" } }
+        ? {
+            protocolVersion: "2025-06-18",
+            capabilities: { tools: {} },
+            serverInfo: { name: options.serverName ?? "stub", version: "1.0.0", ...(options.title ? { title: options.title } : {}) },
+            ...(options.instructions ? { instructions: options.instructions } : {}),
+          }
         : message.method === "tools/list"
           ? { tools: Array.from({ length: options.tools ?? 2 }, (_, index) => ({ name: `stub_tool_${index}`, description: "A stub tool", inputSchema: { type: "object", properties: {} } })) }
           : {};

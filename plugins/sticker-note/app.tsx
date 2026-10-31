@@ -4,24 +4,37 @@
 // sticker icon, and a sidebar footer button that opens the board. The footer
 // button cannot carry a badge through the SDK, so a content script adds one.
 import { useEffect } from "react";
-import { definePluginApp, useBbNavigate, useSettings, type ExperimentalBadge } from "@get-bb/plugin-sdk/app";
+import { toast } from "sonner";
+import { definePluginApp, useBbNavigate, useRpc, useSettings, type ExperimentalBadge } from "@get-bb/plugin-sdk/app";
 
-import { getLang, useMessages } from "@/lib/i18n";
+import { getLang, messagesNow, useMessages } from "@/lib/i18n";
 
 import { BoardHeader, BoardPage } from "./components/Board";
 import { StickerMark } from "./components/icons";
 import { DEFAULT_HOTKEY, matchesHotkey, parseHotkey, startDictationOnNextBar, toggleDictation } from "./hooks/dictation";
-import { useCards } from "./hooks/useCards";
+import { errorText, useCards } from "./hooks/useCards";
 import { useNow } from "./hooks/useNow";
-import { todayStore } from "./hooks/stores";
+import { openCardStore, todayStore } from "./hooks/stores";
+import { needsUser } from "./src/agent-state";
 import { todayStats } from "./src/board";
+import { localNow } from "./src/dates";
 import { messages } from "./src/messages";
+import { cardRef } from "./components/log";
+import type { rpcContract } from "./server";
 import "./app.css";
 
 const PANEL_PATH = "board";
 const ICON = "sticker-note.mark";
 const FOOTER_ID = "open";
 const OPEN_EVENT = "sticker-note:open";
+/** "To sticker" on a chat message: the slot's run has no hooks, the bridge does the call. */
+const FROM_MESSAGE_EVENT = "sticker-note:from-message";
+
+interface FromMessage {
+  threadId: string;
+  text: string;
+  selected: boolean;
+}
 
 /** Today's open cards: the navigation badge, and the feed for the footer badge. */
 function useTodayBadge(): ExperimentalBadge | null {
@@ -29,14 +42,15 @@ function useTodayBadge(): ExperimentalBadge | null {
   const { cards } = useCards();
   const now = useNow();
   const stats = cards ? todayStats(cards, now) : { count: 0, overdue: 0 };
+  const waiting = cards ? cards.filter(needsUser).length : 0;
   useEffect(() => {
     todayStore.set(stats);
   }, [stats.count, stats.overdue]);
-  if (!stats.count) return null;
+  if (!stats.count && !waiting) return null;
   return {
-    count: stats.count,
-    tone: stats.overdue ? "critical" : "neutral",
-    label: m.todayBadge(stats.count, stats.overdue),
+    count: stats.count + waiting,
+    tone: stats.overdue ? "critical" : waiting ? "warning" : "neutral",
+    label: `${m.todayBadge(stats.count, stats.overdue)}${waiting ? `. ${m.agentAnswered}: ${waiting}` : ""}`,
   };
 }
 
@@ -48,7 +62,30 @@ function useTodayBadge(): ExperimentalBadge | null {
  */
 function OpenBridge() {
   const navigate = useBbNavigate();
+  const rpc = useRpc<typeof rpcContract>();
   const { values } = useSettings();
+  useEffect(() => {
+    const make = (event: Event) => {
+      const { threadId, text, selected } = (event as CustomEvent<FromMessage>).detail;
+      const t = messagesNow(messages);
+      const lang = getLang();
+      rpc.call("chat_to_card", { threadId, text: text.slice(0, 50_000), selected, now: localNow() }).then(
+        ({ card }) =>
+          toast.success(t.stickerMade(cardRef(card, lang)), {
+            action: {
+              label: t.openSticker,
+              onClick: () => {
+                openCardStore.set({ id: card.id, at: Date.now() });
+                navigate.toPluginPanel(PANEL_PATH);
+              },
+            },
+          }),
+        (cause: unknown) => toast.error(t.stickerFailed(errorText(cause))),
+      );
+    };
+    document.addEventListener(FROM_MESSAGE_EVENT, make);
+    return () => document.removeEventListener(FROM_MESSAGE_EVENT, make);
+  }, [rpc, navigate]);
   const raw = values?.hotkey;
   const spec = typeof raw === "string" ? raw : DEFAULT_HOTKEY;
   useEffect(() => {
@@ -98,6 +135,19 @@ export default definePluginApp((app) => {
   });
 
   app.slots.experimental_appOverlay({ id: "open-bridge", component: OpenBridge });
+
+  // Chat → board: any message, or the text selected in an answer, becomes a sticker linked to its chat.
+  app.slots.messageAction({
+    id: "to-sticker",
+    title: getLang() === "ru" ? messages.ru.toSticker : messages.en.toSticker,
+    run: ({ threadId, message, selectedText }) => {
+      const text = selectedText?.trim() || message.text;
+      if (!text.trim()) return;
+      document.dispatchEvent(
+        new CustomEvent<FromMessage>(FROM_MESSAGE_EVENT, { detail: { threadId, text, selected: Boolean(selectedText?.trim()) } }),
+      );
+    },
+  });
 
   app.experimental_sidebarFooter.register({
     kind: "action",

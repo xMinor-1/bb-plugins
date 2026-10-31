@@ -51,18 +51,22 @@ const RE_SOMEDAY = word("когда-нибудь|когда нибудь|пот�
 
 const RE_CLOCK = word("(?:(?:в|к|на|до|at|by)\\s+)?(\\d{1,2})[:.](\\d{2})(?:\\s*(am|pm))?");
 const PREP = "в|к|на|до|после|около|at|by";
+/** "На 15 процентов", "на 10 минут", "в 2 раза": amounts, not times. */
+const NOT_TIME_AFTER = `(?:процент|раз(?![${L}])|раза|штук|шт|человек|руб|тыс|доллар|евро|минут|мин(?![${L}])|секунд|дн|день|недел|месяц|лет|год|кг|км|percent|times|minutes?|days?|weeks?|people|pieces?)`;
+/** "Умножить на 23", "увеличить на 15": arithmetic, not a time. */
+const NOT_TIME_BEFORE = "(?<!(?:умнож|помнож|раздел|подел|увелич|уменьш|сократ|multipl|divid|increas|decreas|reduc)\\p{L}*\\s+)";
 /** "в 16 часов 15 минут", "к 9 ч 30 мин". */
 const RE_CLOCK_WORDS = word(
   `(?:(?:${PREP})\\s+)?(\\d{1,2})\\s*(?:час(?:а|ов)?|ч\\.?)\\s*(\\d{1,2})\\s*(?:минут\\p{L}*|мин\\.?)(?:\\s+(утра|дня|вечера|ночи))?`,
 );
 /** "в 16 15", "к 9 30 утра": a clock time said with a pause instead of a colon. Needs the preposition. */
 const RE_CLOCK_SPACED = new RegExp(
-  `(?<![${L}])(?:${PREP})\\s+(\\d{1,2})\\s+(\\d{2})(?:\\s+минут\\p{L}*)?(?:\\s+(утра|дня|вечера|ночи|am|pm))?(?![${L}\\d])` +
+  `(?<![${L}])${NOT_TIME_BEFORE}(?:${PREP})\\s+(\\d{1,2})\\s+(\\d{2})(?:\\s+минут\\p{L}*)?(?:\\s+(утра|дня|вечера|ночи|am|pm))?(?![${L}\\d])` +
     `(?!\\s*(?:${MONTH_WORD}|[./:]\\d|час|дн|недел|раз|штук|человек|руб))`,
   "giu",
 );
 const RE_HOUR = new RegExp(
-  `(?<![${L}])(?:в|к|на|до|at|by)\\s+(\\d{1,2})(?:\\s*(утра|дня|вечера|ночи|час\\p{L}*|am|pm|o'clock))?(?![${L}:.\\d])(?!\\s*(?:${MONTH_WORD}|[./]\\d))`,
+  `(?<![${L}])${NOT_TIME_BEFORE}(?:в|к|на|до|at|by)\\s+(\\d{1,2})(?:\\s*(утра|дня|вечера|ночи|час\\p{L}*|am|pm|o'clock))?(?![${L}:.\\d])(?!\\s*(?:${MONTH_WORD}|[./]\\d|%|${NOT_TIME_AFTER}))`,
   "giu",
 );
 const RE_HOUR_AMPM = word("(\\d{1,2})\\s*(am|pm)");
@@ -541,6 +545,16 @@ export function parsePhrase({ text: said, now, cards, contextId = null }: ParseI
     }
   }
 
+  return { type: "create", ...draftFrom(said, when, imp, kind, links) };
+}
+
+function draftFrom(
+  said: string,
+  when: WhenResult,
+  imp: ReturnType<typeof importanceOf>,
+  kind: ReturnType<typeof kindOf>,
+  links: ReturnType<typeof linksOf>,
+): { draft: Draft; spans: Span[] } {
   const draft: Draft = {
     title: titleFrom(said, [...when.hits, ...imp.hits, ...links.hits]) || said.trim(),
     due: toDue(when),
@@ -548,5 +562,15 @@ export function parsePhrase({ text: said, now, cards, contextId = null }: ParseI
     kind: kind.kind,
     links: links.links,
   };
-  return { type: "create", draft, spans: sortHits([...when.hits, ...imp.hits, ...kind.hits, ...links.hits]) };
+  return { draft, spans: sortHits([...when.hits, ...imp.hits, ...kind.hits, ...links.hits]) };
+}
+
+/** A new card from a phrase, never a command: "сделай стикер: …" from an agent. */
+export function draftOf(text: string, now: LocalNow): Draft {
+  return draftFrom(text, parseWhen(text, now), importanceOf(text), kindOf(text), linksOf(text)).draft;
+}
+
+/** Links anywhere in a longer text, such as an agent's message. */
+export function linksIn(text: string): string[] {
+  return [...new Set(linksOf(text).links)];
 }

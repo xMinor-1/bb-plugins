@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { DEFAULT_HOTKEY, hotkeyLabel, parseHotkey } from "../hooks/dictation";
 import { errorText, useCards, type CardsRpc } from "../hooks/useCards";
 import { useNow } from "../hooks/useNow";
-import { filterStore, useStore, type Filter } from "../hooks/stores";
+import { filterStore, openCardStore, useStore, type Filter } from "../hooks/stores";
 import { COLUMNS, columnOf, layoutToday, sortColumn } from "../src/board";
 import { addDays, fullDay, localNow, type LocalNow } from "../src/dates";
 import { messages } from "../src/messages";
@@ -20,7 +20,7 @@ import { CardView, DRAG_TYPE, type QuickAction } from "./CardView";
 import { Detail } from "./Detail";
 import { columnName, type Messages } from "./format";
 import { Icon } from "./icons";
-import { addedText, commandText, whichText, type LogLine } from "./log";
+import { addedText, cardRef, commandText, whichText, type LogLine } from "./log";
 
 /** Finished cards shown at most; older ones stay stored until pruned. */
 const DONE_SHOWN = 40;
@@ -135,6 +135,18 @@ export function BoardPage(_props: PluginNavPanelProps) {
   const cardsRef = useRef(cards);
   cardsRef.current = cards;
 
+  // "To sticker" in a chat asks for its new card to open once the board has it.
+  const openRequest = useStore(openCardStore);
+  useEffect(() => {
+    if (!openRequest || !cards) return;
+    const card = cards.find((c) => c.id === openRequest.id);
+    if (!card) return;
+    openCardStore.set(null);
+    if (!passes(filterStore.get(), card)) filterStore.set("all");
+    highlight([card.id]);
+    openCardById(card.id);
+  }, [openRequest, cards, highlight, openCardById]);
+
   const reveal = (card: Card) => {
     if (!passes(filterStore.get(), card)) filterStore.set("all");
     highlight([card.id]);
@@ -144,12 +156,12 @@ export function BoardPage(_props: PluginNavPanelProps) {
   const capture = async (text: string, spoken: boolean) => {
     const at = localNow();
     const recent = context.current && Date.now() - context.current.at < CONTEXT_MS ? context.current.id : null;
-    const { parse, card, cards: touched, undoToken } = await rpc.call("capture", { text, now: at, spoken, contextId: recent });
+    const { parse, card, cards: touched, agent, undoToken } = await rpc.call("capture", { text, now: at, spoken, contextId: recent });
     const t = messagesNow(messages);
     const list = cardsRef.current ?? [];
     switch (parse.type) {
       case "create":
-        say(addedText(t, card!, at.date, lang), undoToken);
+        say(agent ? t.logAgentJob(cardRef(card!, lang)) : addedText(t, card!, at.date, lang), undoToken);
         reveal(card!);
         break;
       case "command":

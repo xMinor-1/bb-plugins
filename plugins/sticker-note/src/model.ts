@@ -11,12 +11,26 @@ export const dueSchema = z.object({
   time: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
 });
 
+/** Where an agent chat stands, as the card shows it. */
+export const chatStatusSchema = z.enum(["starting", "working", "answered", "waiting", "failed"]);
+
 export const chatSchema = z.object({
   id: z.string(),
+  /** The request that started the chat, or the message the card was made from. */
   text: z.string(),
   threadId: z.string().nullable(),
   error: z.string().nullable(),
   createdAt: z.string(),
+  /** "card": started from the card; "chat": the card was made from this chat. */
+  origin: z.enum(["card", "chat"]).default("card"),
+  /** The card mirrors this chat: status and the agent's last answer. Chats a card was made from start unfollowed. */
+  follow: z.boolean().default(true),
+  status: chatStatusSchema.default("working"),
+  /** The agent's last answer, clipped. */
+  reply: z.string().nullable().default(null),
+  replyAt: z.string().nullable().default(null),
+  /** An answer the user has not opened the card to see yet. */
+  unread: z.boolean().default(false),
 });
 
 export const cardSchema = z.object({
@@ -43,6 +57,7 @@ export type Kind = z.infer<typeof kindSchema>;
 export type Column = z.infer<typeof columnSchema>;
 export type Due = z.infer<typeof dueSchema>;
 export type Chat = z.infer<typeof chatSchema>;
+export type ChatStatus = z.infer<typeof chatStatusSchema>;
 export type Card = z.infer<typeof cardSchema>;
 
 /** What a phrase was understood as. Offsets point into the original text. */

@@ -21,6 +21,7 @@ import type { CatalogItem, Health, ImportResult, ServerView, Status, WriteConfig
 import { ConfigTextError, isCredential, maskAddress, parseClientConfig, splitScheme, urlProblem } from "../shared/parse-config.js";
 import { CatalogError, fetchCatalog } from "./catalog.js";
 import { findOpenCode } from "./find-opencode.js";
+import { summaryOf, templateFor, titleOf, type ServerInfo, type Template } from "./names.js";
 import { ConfigFileError, writeMcpServers, type McpEntry } from "./opencode-mcp.js";
 import { resolveOpenCodeLocation } from "./opencode-location.js";
 import { probeServer, type ProbeResult } from "./probe.js";
@@ -48,6 +49,10 @@ interface StoredServer {
   timeoutSec: number | null;
   addedAt: number;
   health: Health;
+  /** The catalog template this server was made from, as last matched. */
+  template?: Template | null;
+  /** What the server said about itself on its last answer. */
+  info?: ServerInfo | null;
 }
 
 interface State {
@@ -93,6 +98,13 @@ export function fileReference(path: string): string {
 const serverOf = (state: State, name: string): StoredServer | undefined => (Object.hasOwn(state.servers, name) ? state.servers[name] : undefined);
 const secretsOf = (server: StoredServer | undefined) => (server?.headers ?? []).map((header) => header.secret).filter((key): key is string => Boolean(key));
 
+/** An OpenCode executable and its version. */
+export interface OpenCodeFound {
+  major: number | null;
+  version: string;
+  path: string;
+}
+
 export interface ServiceOptions {
   dataDir: string;
   store?: SecretStore;
@@ -100,8 +112,8 @@ export interface ServiceOptions {
   /** The home directory OpenCode falls back to; tests point it elsewhere. Default: os.homedir(). */
   userHome?: string;
   fetchImpl?: typeof fetch;
-  /** The OpenCode major version on this machine, or null when unknown. Default: ask `opencode --version`. */
-  openCodeMajor?: () => Promise<number | null>;
+  /** The OpenCode on the given PATH, or null when none is found. Default: `opencode --version`. */
+  openCode?: (environment: NodeJS.ProcessEnv) => Promise<OpenCodeFound | null>;
   now?: () => number;
 }
 
@@ -111,7 +123,7 @@ export class McpService {
   private readonly tokens = new Map<string, string>();
   private readonly inflight = new Map<string, Promise<void>>();
   private catalogCache: { url: string; at: number; items: CatalogItem[] } | null = null;
-  private major: { value: number | null; at: number } | null = null;
+  private openCodeSeen: { path: string; at: number; found: OpenCodeFound | null } | null = null;
   private readonly store: SecretStore;
   private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => number;
@@ -180,6 +192,8 @@ export class McpService {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, server]) => ({
         name,
+        title: titleOf(name, server.template, server.info),
+        summary: summaryOf(server.template, server.info),
         address: maskAddress(server.url),
         enabled: server.enabled,
         timeoutSec: server.timeoutSec,
@@ -266,6 +280,8 @@ export class McpService {
               timeoutSec: previous?.timeoutSec ?? null,
               addedAt: previous?.addedAt ?? this.now(),
               health: { ...EMPTY_HEALTH },
+              template: previous?.template ?? null,
+              info: previous?.info ?? null,
             },
           });
         }
@@ -284,6 +300,8 @@ export class McpService {
         state.servers[name] = server;
         (previous ? updated : added).push(name);
       }
+      const cached = this.catalogCache;
+      if (cached && cached.url === (config.catalogUrl ?? "").trim()) this.applyTemplates(state, cached.items);
       await this.save();
       await this.syncLocked(config, new Set());
       return { added, updated, skipped: parsed.skipped, status: this.view(state) };
@@ -349,14 +367,25 @@ export class McpService {
     await rm(join(this.tokenDir, key), { force: true });
   }
 
-  private async openCodeMajor(): Promise<number | null> {
-    if (this.options.openCodeMajor) return this.options.openCodeMajor();
-    const known = this.major;
-    if (known && ((known.value ?? 0) >= 2 || this.now() - known.at < VERSION_RECHECK_MS)) return known.value;
-    const binary = await findOpenCode(this.env).catch(() => null);
-    const value = binary ? Number(/^(\d+)\./.exec(binary.version)?.[1] ?? NaN) || null : null;
-    this.major = { value, at: this.now() };
-    return value;
+  /**
+   * The OpenCode to judge: the first `opencode` on bb's own PATH, which the
+   * server sends for its own machine; elsewhere the worker's PATH. bb gives
+   * its daemon and workers a rebuilt PATH with the login shell's entries
+   * first, where a personal OpenCode may come before the one a build put
+   * first on bb's PATH.
+   */
+  private async openCode(environment: NodeJS.ProcessEnv): Promise<OpenCodeFound | null> {
+    const path = environment.PATH ?? environment.Path ?? "";
+    const known = this.openCodeSeen;
+    if (known && known.path === path && ((known.found?.major ?? 0) >= 2 || this.now() - known.at < VERSION_RECHECK_MS)) return known.found;
+    const found = this.options.openCode
+      ? await this.options.openCode(environment)
+      : await findOpenCode(environment).then(
+          (binary) => (binary ? { major: Number(/^(\d+)\./.exec(binary.version)?.[1] ?? NaN) || null, version: binary.version, path: binary.command[0] } : null),
+          () => null,
+        );
+    this.openCodeSeen = { path, at: this.now(), found };
+    return found;
   }
 
   private async writeTokenFile(name: string, value: string): Promise<string> {
@@ -379,15 +408,16 @@ export class McpService {
   private async syncLocked(config: WriteConfig, replace: ReadonlySet<string>): Promise<void> {
     const state = await this.load();
     try {
-      const location = resolveOpenCodeLocation({
-        opencodeConfigDir: config.opencodeConfigDir,
-        environment: { ...this.env, ...config.serverEnvironment },
-        userHome: this.options.userHome,
-      });
+      const environment = { ...this.env, ...config.serverEnvironment };
+      const location = resolveOpenCodeLocation({ opencodeConfigDir: config.opencodeConfigDir, environment, userHome: this.options.userHome });
       state.configFile = location.configFile;
       const enabled = Object.entries(state.servers).filter(([, server]) => server.enabled);
-      if (enabled.length > 0 && (await this.openCodeMajor()) === 1) {
-        throw new TaggedError("opencode-1", "OpenCode 1 is installed on this machine; MCP Catalog writes the OpenCode 2 configuration. Update OpenCode to 2.");
+      const openCode = enabled.length > 0 ? await this.openCode(environment) : null;
+      if (openCode?.major === 1) {
+        throw new TaggedError(
+          "opencode-1",
+          `The OpenCode on bb's PATH on this machine is ${openCode.version} (${openCode.path}); MCP Catalog writes the OpenCode 2 configuration. Update OpenCode to 2.`,
+        );
       }
 
       // The configuration moved (a setting changed): take this plugin's entries out of the old file first,
@@ -458,12 +488,15 @@ export class McpService {
       detail: result.detail,
       tools: result.status === "ok" ? result.tools : null,
     };
+    if (result.info) server.info = result.info;
   }
 
   /** Check servers whose last check is older than maxAgeMs, a few at a time. A failed write of opencode.json is retried first. */
   async check(names: string[] | undefined, maxAgeMs: number, config: WriteConfig, signal?: AbortSignal): Promise<Status> {
     const state = await this.load();
     if (state.configError !== null) await this.sync(config);
+    // Names come from the catalog; an unreachable catalog keeps the names matched before.
+    await this.refreshTemplates(config).catch(() => undefined);
     const now = this.now();
     const due = Object.entries(state.servers)
       .filter(([name]) => names === undefined || names.includes(name))
@@ -507,6 +540,31 @@ export class McpService {
   }
 
   // ---------------------------------------------------------------- catalog
+
+  /** Match every server to its catalog template, from the catalog read at most every few minutes. */
+  private async refreshTemplates(config: WriteConfig): Promise<void> {
+    const url = (config.catalogUrl ?? "").trim();
+    const catalog = url === "" ? { items: [], error: null } : await this.catalog(url, false, config.allowHttp === true);
+    if (catalog.error !== null && catalog.items.length === 0) return;
+    await this.serial(async () => {
+      const state = await this.load();
+      if (this.applyTemplates(state, catalog.items)) await this.save();
+    });
+  }
+
+  /** Whether any server's template changed. */
+  private applyTemplates(state: State, items: readonly CatalogItem[]): boolean {
+    let changed = false;
+    for (const [name, server] of Object.entries(state.servers)) {
+      const item = templateFor(name, items);
+      const next: Template | null = item ? { id: item.id, name: item.name, description: item.description } : null;
+      if (JSON.stringify(next) !== JSON.stringify(server.template ?? null)) {
+        server.template = next;
+        changed = true;
+      }
+    }
+    return changed;
+  }
 
   async catalog(url: string, refresh: boolean, allowHttp = false) {
     const address = url.trim();
