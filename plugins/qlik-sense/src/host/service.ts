@@ -40,7 +40,7 @@ export class QlikService {
 
   async status(): Promise<ConnectionStatus> {
     const state = await this.state.load();
-    const hasPassword = state.passwordStore !== null && (await storeOfKind(state.passwordStore, this.options.dataDir).read()) !== null;
+    const hasPassword = state.passwordStore !== null && (await storeOfKind(state.passwordStore, this.options.dataDir).has());
     return {
       platform: process.platform,
       url: state.url,
