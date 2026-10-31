@@ -13,6 +13,7 @@
     "opencode-config.test.ts",
     "provider-policy.test.ts",
     "available-models.test.ts",
-    "check-models.test.ts"
+    "check-models.test.ts",
+    "opencode-location.test.ts"
   ]
 }

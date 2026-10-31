@@ -4,6 +4,7 @@ import { dirname, isAbsolute } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { applyEdits, modify, parseTree, type ParseError, findNodeAtLocation } from "jsonc-parser";
 import { acquireConfigLock, type LockOptions } from "./config-lock.js";
+import { resolveOpenCodeLocation, type OpenCodeLocationOptions } from "./opencode-location.js";
 
 export const MCP_NAME = "qlik-sense";
 export type OpenCodeMajor = 1 | 2;
@@ -12,6 +13,12 @@ export type LocalMcpEntry = {
   command: string[];
   enabled: boolean;
 };
+
+/** High-level writer: use the same directory resolution as the model check. */
+export async function writeQlikMcpConfig(options: OpenCodeLocationOptions & LockOptions & { major: OpenCodeMajor; entry: LocalMcpEntry }) {
+  const location = resolveOpenCodeLocation(options);
+  return await writeMcpConfig(location.configFile, options.major, options.entry, options);
+}
 
 export function openCodeMajor(versionOutput: string): OpenCodeMajor {
   const match = /^(?:opencode\s+)?v?([12])\.\d+\.\d+(?:[-+][\w.-]+)?$/.exec(versionOutput.trim());

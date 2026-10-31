@@ -5,12 +5,14 @@ import { openCodeMajor } from "./opencode-config.js";
 import { parseAllowedProviders } from "../shared/settings.js";
 import { verifyAvailableModels } from "../shared/available-models.js";
 import type { ProviderPolicyDecision } from "../shared/provider-policy.js";
+import { resolveOpenCodeLocation } from "./opencode-location.js";
 
 export interface ModelCheckOptions {
   allowedProviders: string;
   projectDirectory: string;
   /** Exact environment used to launch acp-opencode; do not reconstruct it here. */
   environment: NodeJS.ProcessEnv;
+  opencodeConfigDir?: string;
   /** Native executable, or [node, absolute CLI JS entry] for npm on Windows.
    * Shell/cmd wrappers are deliberately not interpreted. */
   command?: readonly [string, ...string[]];
@@ -96,6 +98,8 @@ export async function checkOpenCodeConfiguration(options: ModelCheckOptions): Pr
   };
   const command = options.command ?? ["opencode"];
   try {
+    const location = resolveOpenCodeLocation(options);
+    options = { ...options, environment: location.environment };
     const version = await run(command, ["--version"], options);
     if (version.failed || version.exitCode !== 0) throw new Error();
     if (openCodeMajor(version.stdout) === 1) return {

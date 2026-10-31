@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 const args = process.argv.slice(2);
 if (args.includes('--version')) { console.log(process.env.TEST_VERSION || '2.2.5'); }
 else {
-  writeFileSync('observed.json', JSON.stringify({pid:process.pid, args, cwd:process.cwd(), marker:process.env.OPENCODE_TEST_MARKER, xdg:process.env.XDG_CONFIG_HOME, leaked:process.env.QLIK_TEST_PARENT_ONLY}));
+  writeFileSync('observed.json', JSON.stringify({pid:process.pid, args, cwd:process.cwd(), configDir:process.env.OPENCODE_CONFIG_DIR, marker:process.env.OPENCODE_TEST_MARKER, xdg:process.env.XDG_CONFIG_HOME, leaked:process.env.QLIK_TEST_PARENT_ONLY}));
   if (!args.includes('--standalone') || !args.includes('models')) process.exit(3);
   if (process.env.TEST_MODE === 'hang' || process.env.TEST_MODE === 'orphan') {
     if (process.env.TEST_MODE === 'hang') process.on('SIGTERM', () => {});
@@ -63,6 +63,15 @@ describe("OpenCode configuration runner", () => {
     const result = await checkOpenCodeConfiguration(options);
     expect(result).toMatchObject({ state: "blocked", reason: expect.stringContaining("Update OpenCode to 2.x") });
     await expect(readFile(join(options.projectDirectory, "observed.json"))).rejects.toThrow();
+  });
+
+  it("passes the explicit config directory to the child instead of the prior ACP override", async () => {
+    const options = await fixture({ OPENCODE_CONFIG_DIR: join(tmpdir(), "prior-acp-config") });
+    options.opencodeConfigDir = join(options.projectDirectory, "isolated-config");
+    expect((await checkOpenCodeConfiguration(options)).state).toBe("verified");
+    const observed = JSON.parse(await readFile(join(options.projectDirectory, "observed.json"), "utf8"));
+    expect(observed.configDir).toBe(options.opencodeConfigDir);
+    expect(options.environment.OPENCODE_CONFIG_DIR).toBe(join(tmpdir(), "prior-acp-config"));
   });
 
   it.each(["external", "fail", "oversize"])("fails closed for %s without exposing stderr", async (mode) => {

@@ -17,6 +17,7 @@ The plugin declares these settings, writable through `bb plugin config`:
 | --- | --- | --- |
 | `url` | empty | HTTPS Qlik base URL, including a virtual-proxy prefix if needed. No embedded credentials, query or fragment. |
 | `allowedProviders` | empty | Explicit OpenCode provider IDs separated by commas or whitespace. No wildcards. Empty means provider restrictions are disabled; setup must visibly warn before connecting. |
+| `opencodeConfigDir` | empty | Absolute OpenCode config directory set by the fleet. Overrides ACP's `OPENCODE_CONFIG_DIR` for both writes and model checks. Empty follows ACP's configured directory, then the standard XDG/home directory. |
 
 Example for a fleet's private manifest (the public repository contains no company addresses):
 
@@ -26,6 +27,10 @@ bb plugin config qlik-sense set url https://qlik.example/proxy
 
 ```sh
 bb plugin config qlik-sense set allowedProviders x5
+```
+
+```sh
+bb plugin config qlik-sense set opencodeConfigDir /absolute/isolated/opencode
 ```
 
 Passwords must never be passed through these settings or written into
@@ -45,6 +50,17 @@ unknown versions instead of guessing the configuration format.
   so setup can explain the potential duplicate and let the person handle it.
 - Providers, default models, remote MCP servers and policy belong to the fleet
   manager and are never modified by this plugin.
+
+The high-level `writeQlikMcpConfig` wrapper and configuration runner share
+`src/host/opencode-location.ts`. Resolution order is the explicit
+`opencodeConfigDir` setting, ACP's `OPENCODE_CONFIG_DIR`,
+`XDG_CONFIG_HOME/opencode`, then `os.homedir()/.config/opencode`. This convention
+also applies on Windows; APPDATA is not used. Relative paths and control
+characters are refused; Windows paths must include a drive or UNC share.
+Only `opencode.json` in that directory is written;
+the directory's `plugins/fleet-kit-*` files are never read, changed or removed.
+The gateway key is supplied by fleet-kit's provider hook and is not part of
+this plugin's configuration or MCP entry.
 
 The writer accepts JSON and JSONC, preserves unrelated text and comments,
 refuses invalid/duplicate keys, and copies an existing file once to
@@ -108,8 +124,9 @@ it does not merge in the plugin server's environment. A caller must resolve
 that host environment before invoking the check.
 
 This is a **configuration check**, not a proof about an already running agent.
-The system policy enforced by OpenCode itself is the control that prevents use
-of external providers. Standalone mode avoids leaving a shared background
+OpenCode's provider restrictions prevent use of external providers: the fleet
+sets `enabled_providers`, and installs system policy where admin rights permit.
+The model-list check observes the result in either case. Standalone mode avoids leaving a shared background
 server behind. OpenCode additionally applies its saved service environment to
 the standalone server; this check does not attest an existing ACP process.
 The runner waits for process close, bounds stdout, discards stderr, and kills
@@ -143,7 +160,7 @@ tests use Vitest, TypeScript and Node types. Keep `config-lock.ts` synchronized
 between both plugins. The focused tests use temporary local fixtures only:
 
 ```sh
-npx vitest run test/opencode-config.test.ts test/provider-policy.test.ts test/available-models.test.ts test/check-models.test.ts
+npx vitest run test/opencode-config.test.ts test/provider-policy.test.ts test/available-models.test.ts test/check-models.test.ts test/opencode-location.test.ts
 ```
 
 ```sh
