@@ -113,11 +113,11 @@ export class QlikService {
       }
       const apps = await this.#app(client, q.ENGINE_DATA).run((c) => q.listApps(c));
       const message = `Signed in. ${apps.length} app${apps.length === 1 ? "" : "s"} available to this account.`;
-      await this.#recordCheck(true, message);
+      await this.#recordCheck(true, message, apps.length);
       return { ok: true, message, apps: apps.length };
     } catch (error) {
       const message = errorMessage(error);
-      await this.#recordCheck(false, message);
+      await this.#recordCheck(false, message, null);
       return { ok: false, message, apps: null };
     }
   }
@@ -153,45 +153,30 @@ export class QlikService {
 
   async checkLink(link: string): Promise<CheckLinkResult> {
     const parsed = parseQlikLink(link);
-    if (!parsed) {
-      return { status: "invalid", message: "Paste a link to a Qlik Sense app or sheet, such as https://…/sense/app/<app id>/sheet/<sheet id>." };
-    }
+    if (!parsed) return { status: "invalid", reason: "not-a-link" };
     const base = await this.#base();
     if (base && new URL(base).origin !== parsed.origin) {
-      return { status: "invalid", message: `This link points to ${parsed.origin}, but Qlik Sense is set up for ${new URL(base).origin}.` };
+      return { status: "invalid", reason: "other-site", linkOrigin: parsed.origin, setupOrigin: new URL(base).origin };
     }
     const client = await this.#ensureClient();
     const visible = await this.#app(client, q.ENGINE_DATA).run((c) => q.listApps(c));
     const app = visible.find((candidate) => candidate.id === parsed.appId);
-    if (!app) return this.#noAccess(parsed.appId, link, "This account cannot see the app.");
+    if (!app) return this.#noAccess(parsed.appId, null);
     try {
       const sheets = await this.#app(client, app.id).run((c, doc) => q.listSheets(c, doc!));
       const sheet = parsed.sheetId ? sheets.find((candidate) => candidate.id === parsed.sheetId) : undefined;
       if (parsed.sheetId && !sheet) {
-        return { status: "invalid", message: `The app opens, but it has no sheet ${parsed.sheetId} that this account can see.` };
+        return { status: "invalid", reason: "no-sheet", sheetId: parsed.sheetId };
       }
       return { status: "ok", app: { id: app.id, name: app.name, stream: app.stream }, sheet: sheet ? { id: sheet.id, title: sheet.title } : null };
     } catch (error) {
-      if (error instanceof q.NoAccessError) return this.#noAccess(app.id, link, error.message);
+      if (error instanceof q.NoAccessError) return this.#noAccess(app.id, error.message);
       throw error;
     }
   }
 
-  async #noAccess(appId: string, link: string, reason: string): Promise<CheckLinkResult> {
-    const user = (await this.state.load()).user ?? "";
-    const request = [
-      "Hello! Could you give me access to this Qlik Sense app?",
-      `Link: ${link.trim()}`,
-      `App id: ${appId}`,
-      `My Qlik login: ${user}`,
-      "Thank you!",
-    ].join("\n");
-    return {
-      status: "no-access",
-      appId,
-      message: `${reason} Access is granted by the app's owner or the Qlik administrator of its stream.`,
-      request,
-    };
+  async #noAccess(appId: string, detail: string | null): Promise<CheckLinkResult> {
+    return { status: "no-access", appId, user: (await this.state.load()).user ?? "", detail };
   }
 
   // ---------- Agent tools ----------
@@ -326,8 +311,8 @@ export class QlikService {
     return (await this.state.load()).url;
   }
 
-  async #recordCheck(ok: boolean, message: string): Promise<void> {
-    await this.state.update((state) => ({ ...state, lastCheck: { ok, at: Date.now(), message } }));
+  async #recordCheck(ok: boolean, message: string, apps: number | null): Promise<void> {
+    await this.state.update((state) => ({ ...state, lastCheck: { ok, at: Date.now(), message, apps } }));
   }
 
   async #ensureClient(): Promise<Client> {

@@ -336,7 +336,8 @@ export default async function plugin(bb: BbPluginApi) {
             }
           }),
       );
-      return { providers: out };
+      // Agents not installed on that machine have nothing to tick.
+      return { providers: out.filter((provider) => provider.groups.length > 0) };
     },
   });
 }

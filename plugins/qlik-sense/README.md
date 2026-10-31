@@ -17,6 +17,8 @@ Setup is one page in the bb sidebar:
 3. **Agents that may read Qlik data.** Tick the provider/model pairs your
    company approved for its data. Nothing is ticked at first.
 
+Interface: English and Russian — the EN | RU switch is at the top of the page.
+
 ## Install
 
 ```sh

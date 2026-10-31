@@ -6,6 +6,8 @@ import type { rpcContract } from "../../server";
 import { AgentsSection } from "./AgentsSection";
 import { ConnectionSection } from "./ConnectionSection";
 import { ReportsSection } from "./ReportsSection";
+import { LanguageSwitch, useMessages } from "@/lib/i18n";
+import { messages } from "./messages";
 import { Notice, errorText } from "./ui";
 
 type Machine = { id: string; name: string; connected: boolean };
@@ -17,6 +19,7 @@ export function QlikPage() {
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [suggestedUrl, setSuggestedUrl] = useState("");
+  const t = useMessages(messages);
 
   useEffect(() => {
     rpc.call("machines").then(
@@ -46,17 +49,17 @@ export function QlikPage() {
   return (
     <div className="h-full min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto box-border w-full max-w-3xl space-y-4 px-4 pb-6 pt-3 md:px-5 md:pt-4">
-        <p className="text-sm text-muted-foreground">
-          Agents read the Qlik Sense reports you tick here, and only with the models you allow. Qlik is reached from the machine below; the
-          password stays on it.
-        </p>
+        <div className="flex items-start gap-3">
+          <p className="flex-1 text-sm text-muted-foreground">{t.intro}</p>
+          <LanguageSwitch />
+        </div>
 
-        {machines === null && !error ? <Notice tone="info">Loading…</Notice> : null}
-        {machines !== null && connected.length === 0 ? <Notice tone="error">No machine is connected to bb right now.</Notice> : null}
+        {machines === null && !error ? <Notice tone="info">{t.loading}</Notice> : null}
+        {machines !== null && connected.length === 0 ? <Notice tone="error">{t.noMachine}</Notice> : null}
 
         {connected.length > 1 ? (
           <label className="block space-y-1 text-sm">
-            <span className="text-muted-foreground">Machine where agents reach Qlik</span>
+            <span className="text-muted-foreground">{t.machine}</span>
             <select
               className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
               value={hostId ?? ""}
@@ -80,7 +83,7 @@ export function QlikPage() {
             <AgentsSection rpc={rpc} hostId={hostId} />
           </>
         ) : hostId && !error ? (
-          <Notice tone="info">Asking the machine…</Notice>
+          <Notice tone="info">{t.askingMachine}</Notice>
         ) : null}
       </div>
     </div>

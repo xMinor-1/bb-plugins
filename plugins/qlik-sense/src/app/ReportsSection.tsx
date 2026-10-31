@@ -6,6 +6,8 @@ import type { Catalog, CatalogApp, CheckLinkResult, QlikAppSummary, QlikSheetSum
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { useMessages } from "@/lib/i18n";
+import { messages } from "./messages";
 import { Notice, Section, errorText } from "./ui";
 import type { Rpc } from "./rpc";
 
@@ -22,6 +24,7 @@ export function ReportsSection({ rpc, hostId, signedIn }: { rpc: Rpc; hostId: st
   const [sheets, setSheets] = useState<Record<string, SheetsState>>({});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const t = useMessages(messages);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,34 +112,29 @@ export function ReportsSection({ rpc, hostId, signedIn }: { rpc: Rpc; hostId: st
 
   if (!signedIn) {
     return (
-      <Section step={2} title="Reports agents may use" muted>
-        <p className="text-sm text-muted-foreground">Sign in first. Then tick the apps agents may read and the sheets to start from.</p>
+      <Section step={2} title={t.reportsTitle} muted>
+        <p className="text-sm text-muted-foreground">{t.signInFirst}</p>
       </Section>
     );
   }
 
   return (
-    <Section step={2} title="Reports agents may use">
-      <p className="text-sm text-muted-foreground">
-        Agents read only the apps ticked here. Inside an app, tick the sheets to start from and say what each one answers — the agent gets these
-        notes and links.
-      </p>
+    <Section step={2} title={t.reportsTitle}>
+      <p className="text-sm text-muted-foreground">{t.reportsIntro}</p>
 
       <div className="flex items-center gap-2">
-        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find an app or stream" aria-label="Find an app" />
+        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t.findApp} aria-label={t.findAppLabel} />
         <Button variant="outline" onClick={loadApps} disabled={apps === null && appsError === null}>
-          Reload
+          {t.reload}
         </Button>
       </div>
 
       {appsError ? <Notice tone="error">{appsError}</Notice> : null}
-      {apps === null && !appsError ? <Notice tone="info">Loading apps…</Notice> : null}
-      {apps !== null && apps.length === 0 ? <Notice tone="info">This account sees no apps.</Notice> : null}
+      {apps === null && !appsError ? <Notice tone="info">{t.loadingApps}</Notice> : null}
+      {apps !== null && apps.length === 0 ? <Notice tone="info">{t.noApps}</Notice> : null}
 
       {missing.length ? (
-        <Notice tone="warn">
-          This account no longer sees: {missing.map((app) => app.name).join(", ")}. Agents will get an access error for them.
-        </Notice>
+        <Notice tone="warn">{t.lostApps(missing.map((app) => app.name).join(", "))}</Notice>
       ) : null}
 
       {apps !== null && visible.length ? (
@@ -173,15 +171,16 @@ export function ReportsSection({ rpc, hostId, signedIn }: { rpc: Rpc; hostId: st
         </ul>
       ) : null}
       {visible.length > SHOWN_APPS ? (
-        <p className="text-xs text-muted-foreground">Showing {SHOWN_APPS} of {visible.length}. Narrow the search to see the rest.</p>
+        <p className="text-xs text-muted-foreground">{t.showing(SHOWN_APPS, visible.length)}</p>
       ) : null}
 
       <div className="flex items-center gap-3">
         <Button onClick={() => void save()} disabled={!dirty || saving}>
-          {saving ? "Saving…" : "Save reports"}
+          {saving ? t.saving : t.saveReports}
         </Button>
         <span className="text-xs text-muted-foreground">
-          {draft.apps.length} app{draft.apps.length === 1 ? "" : "s"} enabled{dirty ? ", not saved yet" : ""}
+          {t.enabledApps(draft.apps.length)}
+          {dirty ? t.notSaved : ""}
         </span>
       </div>
       {saveError ? <Notice tone="error">{saveError}</Notice> : null}
@@ -223,15 +222,16 @@ function AppDetails({
   onRetry: () => void;
 }) {
   const recommended = new Map(app.sheets.map((sheet) => [sheet.id, sheet]));
+  const t = useMessages(messages);
   return (
     <div className="ml-7 mt-2 space-y-2">
-      <Input value={app.note} onChange={(event) => onNote(event.target.value)} placeholder="What is this app for? (optional)" maxLength={500} />
-      {sheets === undefined || sheets.kind === "loading" ? <p className="text-xs text-muted-foreground">Loading sheets…</p> : null}
+      <Input value={app.note} onChange={(event) => onNote(event.target.value)} placeholder={t.appNote} maxLength={500} />
+      {sheets === undefined || sheets.kind === "loading" ? <p className="text-xs text-muted-foreground">{t.loadingSheets}</p> : null}
       {sheets?.kind === "error" ? (
         <Notice tone="error">
           {sheets.message}{" "}
           <Button size="sm" variant="link" onClick={onRetry}>
-            Retry
+            {t.retry}
           </Button>
         </Notice>
       ) : null}
@@ -243,14 +243,14 @@ function AppDetails({
               return (
                 <li key={sheet.id} className="text-sm">
                   <div className="flex items-center gap-3">
-                    <Checkbox checked={Boolean(entry)} onCheckedChange={(checked) => onToggleSheet(sheet, checked === true)} aria-label={`Recommend ${sheet.title}`} />
+                    <Checkbox checked={Boolean(entry)} onCheckedChange={(checked) => onToggleSheet(sheet, checked === true)} aria-label={t.recommend(sheet.title)} />
                     <span className="min-w-0 flex-1 truncate">
                       {sheet.title}
-                      {sheet.published === false ? <span className="text-muted-foreground"> (private)</span> : null}
+                      {sheet.published === false ? <span className="text-muted-foreground">{t.privateSheet}</span> : null}
                     </span>
                     {sheet.link ? (
                       <UrlLink href={sheet.link} className="shrink-0 text-xs text-muted-foreground hover:text-foreground">
-                        Open in Qlik
+                        {t.openInQlik}
                       </UrlLink>
                     ) : null}
                   </div>
@@ -259,7 +259,7 @@ function AppDetails({
                       className="ml-7 mt-1 h-8 w-[calc(100%-1.75rem)] text-xs"
                       value={entry.note}
                       onChange={(event) => onSheetNote(sheet.id, event.target.value)}
-                      placeholder="Which questions does this sheet answer?"
+                      placeholder={t.sheetNote}
                       maxLength={500}
                     />
                   ) : null}
@@ -268,7 +268,7 @@ function AppDetails({
             })}
           </ul>
         ) : (
-          <p className="text-xs text-muted-foreground">This app has no sheets.</p>
+          <p className="text-xs text-muted-foreground">{t.noSheets}</p>
         )
       ) : null}
     </div>
@@ -281,6 +281,8 @@ function LinkCheck({ rpc, hostId, onAdd }: { rpc: Rpc; hostId: string; onAdd: (r
   const [result, setResult] = useState<CheckLinkResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [checkedLink, setCheckedLink] = useState("");
+  const t = useMessages(messages);
 
   const check = async () => {
     setBusy(true);
@@ -288,6 +290,7 @@ function LinkCheck({ rpc, hostId, onAdd }: { rpc: Rpc; hostId: string; onAdd: (r
     setResult(null);
     setCopied(false);
     try {
+      setCheckedLink(link.trim());
       setResult(await rpc.call("checkLink", { hostId, link }));
     } catch (cause) {
       setError(errorText(cause));
@@ -296,22 +299,32 @@ function LinkCheck({ rpc, hostId, onAdd }: { rpc: Rpc; hostId: string; onAdd: (r
     }
   };
 
+  const request = result?.status === "no-access" ? t.request(checkedLink, result.appId, result.user) : "";
+
   return (
     <div className="space-y-2 border-t border-border pt-3">
-      <p className="text-sm font-medium">Can't find a report?</p>
-      <p className="text-xs text-muted-foreground">Paste its link from the browser. The plugin checks whether this account can open it.</p>
+      <p className="text-sm font-medium">{t.cantFind}</p>
+      <p className="text-xs text-muted-foreground">{t.cantFindHint}</p>
       <div className="flex items-center gap-2">
-        <Input value={link} onChange={(event) => setLink(event.target.value)} placeholder="https://…/sense/app/…/sheet/…" aria-label="Report link" />
+        <Input value={link} onChange={(event) => setLink(event.target.value)} placeholder="https://…/sense/app/…/sheet/…" aria-label={t.reportLink} />
         <Button variant="outline" onClick={() => void check()} disabled={busy || link.trim() === ""}>
-          {busy ? "Checking…" : "Check"}
+          {busy ? t.checking : t.check}
         </Button>
       </div>
       {error ? <Notice tone="error">{error}</Notice> : null}
-      {result?.status === "invalid" ? <Notice tone="error">{result.message}</Notice> : null}
+      {result?.status === "invalid" ? (
+        <Notice tone="error">
+          {result.reason === "other-site"
+            ? t.otherSite(result.linkOrigin ?? "", result.setupOrigin ?? "")
+            : result.reason === "no-sheet"
+              ? t.noSheet(result.sheetId ?? "")
+              : t.notALink}
+        </Notice>
+      ) : null}
       {result?.status === "ok" ? (
         <Notice tone="ok">
           <p>
-            Found: {result.app.name}
+            {t.found} {result.app.name}
             {result.sheet ? ` → ${result.sheet.title}` : ""}.
           </p>
           <Button
@@ -323,22 +336,23 @@ function LinkCheck({ rpc, hostId, onAdd }: { rpc: Rpc; hostId: string; onAdd: (r
               setLink("");
             }}
           >
-            Add to reports
+            {t.addToReports}
           </Button>
         </Notice>
       ) : null}
       {result?.status === "no-access" ? (
         <Notice tone="warn">
-          <p>{result.message}</p>
-          <p className="mt-2 text-xs text-muted-foreground">Send this to the app owner:</p>
-          <pre className="mt-1 whitespace-pre-wrap rounded border border-border bg-background p-2 text-xs">{result.request}</pre>
+          <p>{t.noAccess}</p>
+          {result.detail ? <p className="mt-1 text-xs opacity-80">{result.detail}</p> : null}
+          <p className="mt-2 text-xs text-muted-foreground">{t.sendToOwner}</p>
+          <pre className="mt-1 whitespace-pre-wrap rounded border border-border bg-background p-2 text-xs">{request}</pre>
           <Button
             className="mt-2"
             size="sm"
             variant="outline"
-            onClick={() => void experimental_copyToClipboard({ text: result.request }).then((ok) => setCopied(ok))}
+            onClick={() => void experimental_copyToClipboard({ text: request }).then((ok) => setCopied(ok))}
           >
-            {copied ? "Copied" : "Copy request"}
+            {copied ? t.copied : t.copyRequest}
           </Button>
         </Notice>
       ) : null}

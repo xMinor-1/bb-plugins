@@ -225,7 +225,7 @@ describe("through a proxy with forms sign-in", () => {
     const check = await service.checkSignIn(false);
     expect(check.ok, check.message).toBe(true);
     expect(check.message).toMatch(/^Signed in\. \d+ apps? available/);
-    expect((await service.status()).lastCheck?.ok).toBe(true);
+    expect((await service.status()).lastCheck).toMatchObject({ ok: true, apps: check.apps });
   });
 
   it("signs in by itself and reads data", async () => {
@@ -258,11 +258,10 @@ describe("through a proxy with forms sign-in", () => {
     const denied = await service.checkLink(`${proxy.url}/sense/app/00000000-0000-0000-0000-000000000000/overview`);
     expect(denied.status).toBe("no-access");
     if (denied.status === "no-access") {
-      expect(denied.request).toContain("My Qlik login: CORP\\tester");
-      expect(denied.request).toContain("00000000-0000-0000-0000-000000000000");
+      expect(denied).toMatchObject({ user: "CORP\\tester", appId: "00000000-0000-0000-0000-000000000000" });
     }
 
-    expect((await service.checkLink("https://elsewhere.example/sense/app/x/overview")).status).toBe("invalid");
-    expect((await service.checkLink("hello")).status).toBe("invalid");
+    expect(await service.checkLink("https://elsewhere.example/sense/app/x/overview")).toMatchObject({ status: "invalid", reason: "other-site" });
+    expect(await service.checkLink("hello")).toEqual({ status: "invalid", reason: "not-a-link" });
   });
 });

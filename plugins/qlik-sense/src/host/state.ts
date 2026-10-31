@@ -13,7 +13,10 @@ const stateSchema = z.object({
   passwordStore: passwordStoreKindSchema.nullable().default(null),
   passwordWarning: z.string().nullable().default(null),
   blocked: z.string().nullable().default(null),
-  lastCheck: z.object({ ok: z.boolean(), at: z.number(), message: z.string() }).nullable().default(null),
+  lastCheck: z
+    .object({ ok: z.boolean(), at: z.number(), message: z.string(), apps: z.number().int().nullable().default(null) })
+    .nullable()
+    .default(null),
   /** One engine identity per machine, so the agent never shares selections with a person's browser tab. */
   identity: z.string().default(() => `bb-agent-${randomBytes(4).toString("hex")}`),
   catalog: catalogSchema.default({ apps: [] }),

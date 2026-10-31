@@ -38,7 +38,8 @@ export const connectionStatusSchema = z
     passwordStore: passwordStoreKindSchema.nullable(),
     /** Why the last sign-in was refused. While set, nothing signs in again. */
     blocked: z.string().nullable(),
-    lastCheck: z.object({ ok: z.boolean(), at: z.number(), message: z.string() }).strict().nullable(),
+    /** The last sign-in check. `apps` is set when it succeeded; `message` is the technical detail. */
+    lastCheck: z.object({ ok: z.boolean(), at: z.number(), message: z.string(), apps: z.number().int().nullable() }).strict().nullable(),
     catalogApps: z.number().int(),
   })
   .strict();
@@ -115,12 +116,21 @@ export const checkLinkResultSchema = z.discriminatedUnion("status", [
     .object({
       status: z.literal("no-access"),
       appId: z.string(),
-      message: z.string(),
-      /** A ready-to-send access request for the app owner. */
-      request: z.string(),
+      /** The Qlik login, for the access request the panel writes. */
+      user: z.string(),
+      /** Qlik's own explanation, when it gave one. */
+      detail: z.string().nullable(),
     })
     .strict(),
-  z.object({ status: z.literal("invalid"), message: z.string() }).strict(),
+  z
+    .object({
+      status: z.literal("invalid"),
+      reason: z.enum(["not-a-link", "other-site", "no-sheet"]),
+      linkOrigin: z.string().optional(),
+      setupOrigin: z.string().optional(),
+      sheetId: z.string().optional(),
+    })
+    .strict(),
 ]);
 export type CheckLinkResult = z.infer<typeof checkLinkResultSchema>;
 
