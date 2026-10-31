@@ -1,6 +1,6 @@
 // Exchange Web Services operations over a Transport.
 import { TransportError, type HttpAuth, type Transport } from "../curl.js";
-import { EwsError, parseCreateItem, parseFindItems, parseGetFolder, parseGetItem, parseGetItemId, parseSimple } from "./parse.js";
+import { EwsError, parseCreateItem, parseFindItems, parseGetAttachment, parseGetFolder, parseGetItem, parseGetItemId, parseSimple } from "./parse.js";
 import * as soap from "./soap.js";
 
 export class AuthError extends Error {
@@ -89,8 +89,12 @@ export class EwsClient {
     return parseFindItems(await this.call(soap.findItems(options), signal));
   }
 
-  async get(ref: soap.ItemRef, signal?: AbortSignal) {
-    return parseGetItem(await this.call(soap.getItem(ref), signal));
+  async get(ref: soap.ItemRef, signal?: AbortSignal, options: { html?: boolean } = {}) {
+    return parseGetItem(await this.call(soap.getItem(ref, options), signal));
+  }
+
+  async attachment(attachmentId: string, signal?: AbortSignal) {
+    return parseGetAttachment(await this.call(soap.getAttachment(attachmentId), signal));
   }
 
   async currentId(ref: soap.ItemRef, signal?: AbortSignal) {

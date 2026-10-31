@@ -7,8 +7,8 @@ agent saves a draft, you see who it goes to and what it says, press Send, and
 confirm in a system window on your computer.
 
 - **Mail** page in the bb sidebar: Inbox and Sent with search, the open
-  message, Reply / Reply all, and *To send* — every draft prepared in bb that
-  waits for you.
+  message with its whole conversation, Reply / Reply all / Forward, and
+  *To send* — every draft prepared in bb that waits for you.
 - In a thread, an agent's reply shows the draft as a card with its Send button.
 - Mail stays in Exchange. bb keeps no copy; drafts live in your Drafts folder,
   so you also see them in Outlook.
@@ -42,6 +42,27 @@ Open **Mail** in the sidebar → **Settings**.
    may read mail and which agents on this machine they cover. The list comes
    from the plugin's `allowedModels` setting, set by whoever configures bb for
    the company; the panel does not change it. Empty means no agent gets mail.
+
+## Reading
+
+- People are shown by name; a long copy list folds to the first three and
+  "and N more". Click a person to write to them or copy their address.
+- Plain-text mail shows its links as links, and the `name<mailto:address>`
+  pairs Exchange writes for signatures are shown once.
+- HTML mail is shown formatted, the safe way: sanitized (DOMPurify) in a frame
+  where no script runs and no form submits, under a policy that loads nothing
+  from the internet. Pictures from the internet wait for **Show pictures** —
+  loading them tells the sender you opened the message. Pictures the message
+  carries itself (`cid:`) appear inside the text. **Show as plain text**
+  switches to Exchange's text version.
+- Attachments: **Save** any file up to 10 MB; **Open** in a new tab only PDF,
+  pictures and plain text — formats a browser shows without running anything.
+  HTML, SVG and Office files are only saved. Attached messages and links to
+  files elsewhere open in Outlook.
+- The conversation the message belongs to, Inbox and Sent Items together,
+  oldest first; a row opens that message.
+- **Forward** prepares a draft with the original and its attachments; it is
+  sent like any draft — your click and the system window.
 
 ## Sending is always a person's click
 
@@ -139,8 +160,10 @@ carefully:
 | --- | --- |
 | `mail_list` | newest messages of Inbox, Sent, Drafts or Deleted, optionally unread only |
 | `mail_search` | Outlook-style search (`from:`, `subject:`, `received:` …) in Inbox and Sent |
-| `mail_read` | one message: sender, recipients, date, subject, attachment names, text |
-| `mail_draft` | save a reply, reply-all or new message as a draft, or revise one |
+| `mail_read` | one message: sender, recipients, date, subject, numbered attachments, text |
+| `mail_attachment` | the text of an attachment: text files (txt, csv, json, xml, html…) and PDF; other formats are refused |
+| `mail_conversation` | all messages of a message's conversation in Inbox and Sent, oldest first |
+| `mail_draft` | save a reply, reply-all, forward or new message as a draft, or revise one |
 
 ## Settings
 
@@ -170,8 +193,10 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
   stores no mail.
 - Send is decided on the host: `src/host/confirm.ts` draws the system window,
   `src/host/service.ts` checks the change key before and after it.
-- EWS operations used: `GetFolder`, `FindItem`, `GetItem` (body as plain text),
-  `CreateItem` with `SaveOnly` (drafts only), `SendItem` with the change key,
+- EWS operations used: `GetFolder`, `FindItem` (also by `ConversationId`),
+  `GetItem` (plain text, or HTML with `TextBody` for the panel), `GetAttachment`,
+  `CreateItem` with `SaveOnly` (drafts only: message, reply, reply all,
+  forward), `SendItem` with the change key,
   `DeleteItem` (to Deleted Items), `UpdateItem` (marks a message read when you
   open it in the panel; agents' reads do not).
 - **Setup status for other plugins.** `setupStatus` is the one RPC method other
@@ -182,6 +207,9 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
   connection passed its last check, `summary` is one line in `lang` with no
   address, login or password, `path` is the Mail page. It reads the saved
   connection only and sends nothing to Exchange.
+- Attachment text is extracted on the host — PDF with pdf.js (`unpdf`, no
+  fonts loaded), text as UTF-8, UTF-16 or Windows-1251 — and only the text
+  goes to the agent. Files go to the panel only when you open or save them.
 - On the host, the plugin's data folder keeps the connection settings, short
   message refs (`m…` → Exchange ids), refused sign-ins per login (times only)
   and the list of drafts made in bb with the text you or the agent wrote, until
@@ -189,8 +217,8 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
 
 ## Not yet
 
-- Attachments are listed but not opened; HTML mail is shown as plain text.
-- No shared mailboxes, forwarding, calendar or Exchange Online (OAuth).
+- Agents read text files and PDF only; Word, Excel and pictures stay for people.
+- No shared mailboxes, address book, calendar or Exchange Online (OAuth).
 
 ## Develop
 

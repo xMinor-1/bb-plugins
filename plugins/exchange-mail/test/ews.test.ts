@@ -81,9 +81,9 @@ describe("answers", () => {
       { name: null, email: "one@x.test" },
       { name: "Two", email: "two@x.test" },
     ]);
-    expect(message.attachments).toEqual([
-      { name: "a.pdf", size: 10 },
-      { name: "fwd", size: null },
+    expect(message.attachments).toMatchObject([
+      { name: "a.pdf", size: 10, kind: "file" },
+      { name: "fwd", size: null, kind: "item" },
     ]);
   });
 

@@ -13,18 +13,22 @@ import type {
   ListOutput,
   MailAddress,
   MailMessage,
+  MessageAttachment,
   MessageSummary,
   SendResult,
   ToolInput,
 } from "../../contract.js";
+import { ATTACHMENT_MAX_BYTES } from "../shared/limits.js";
+import { normalizeText } from "../shared/mail-text.js";
 import { oneAtATime, systemConfirmer, type SendConfirmer, type SendSummary } from "./confirm.js";
 import { curlTransport, type HttpAuth, type Transport } from "./curl.js";
 import { EwsClient, normalizeEwsUrl } from "./ews/client.js";
 import { EwsError } from "./ews/parse.js";
-import type { ParsedMessage, ParsedSummary } from "./ews/parse.js";
+import type { ParsedAttachment, ParsedMessage, ParsedSummary } from "./ews/parse.js";
+import { attachmentText } from "./extract.js";
 import type { Address, FolderName, ItemRef } from "./ews/soap.js";
 import { readJson, removeFile, serial, writeJson } from "./files.js";
-import { formatDraft, formatList, formatMessage } from "./format.js";
+import { formatAttachment, formatConversation, formatDraft, formatList, formatMessage } from "./format.js";
 import { openSecretStore, type SecretStore } from "./secret-store.js";
 import { describe, forPanel, UserError } from "./errors.js";
 import { accountName, SignInGate, type Refusal, type RefusalStore } from "./signin.js";
@@ -34,6 +38,15 @@ const FOLDER_TITLE: Record<Folder, string> = { inbox: "Inbox", sent: "Sent Items
 const PASSWORD = "password";
 const MAX_REFS = 5000;
 const MAX_DRAFTS = 100;
+/** Pictures inside an HTML message: each and all together, so a message cannot make the panel fetch megabytes. */
+const INLINE_IMAGE_MAX_BYTES = 1_500_000;
+const INLINE_IMAGES_MAX_BYTES = 6_000_000;
+const INLINE_IMAGES_MAX = 30;
+const CONVERSATION_MAX = 50;
+
+const plainAttachment = (a: ParsedAttachment) => ({ name: a.name, size: a.size });
+const numbered = (list: readonly ParsedAttachment[]): MessageAttachment[] =>
+  list.map((a, n) => ({ index: n + 1, name: a.name, size: a.size, contentType: a.contentType, kind: a.kind, inline: a.isInline, contentId: a.contentId }));
 
 interface Connection {
   url: string;
@@ -336,8 +349,10 @@ export class MailService {
       to: item.to.map(toAddress),
       cc: item.cc.map(toAddress),
       sent: item.sent,
-      body: item.body,
-      attachments: item.attachments,
+      body: normalizeText(item.body),
+      html: item.html,
+      bodyFormat: item.bodyFormat,
+      attachments: numbered(item.attachments),
     };
   }
 
@@ -357,15 +372,83 @@ export class MailService {
     return { messages, total: found.total, more: !found.last, unread: counts?.unread ?? null };
   }
 
-  async read(ref: string, markRead: boolean, signal?: AbortSignal): Promise<MailMessage> {
+  /** `html` for the panel: the HTML body too, for its sanitized view. Agents get text only. */
+  async read(ref: string, markRead: boolean, signal?: AbortSignal, options: { html?: boolean } = {}): Promise<MailMessage> {
     const client = await this.client();
     const id = await this.itemIdOf(ref);
-    const item = await client.get({ id }, signal);
+    const item = await client.get({ id }, signal, { html: options.html === true });
     if (markRead && !item.isRead) {
       await client.markRead({ id }, true, signal).catch(() => undefined);
       return this.message({ ...item, isRead: true });
     }
     return this.message(item);
+  }
+
+  /** The messages of the conversation `ref` belongs to, in Inbox and Sent Items, oldest first. */
+  async conversation(ref: string, signal?: AbortSignal): Promise<{ messages: MessageSummary[] }> {
+    const client = await this.client();
+    const item = await client.get({ id: await this.itemIdOf(ref) }, signal);
+    if (!item.conversationId) return { messages: [await this.summary(item)] };
+    const seen = new Set<string>();
+    const found: ParsedSummary[] = [];
+    for (const folder of ["inbox", "sentitems"] as const) {
+      const page = await client.find({ folder, offset: 0, limit: CONVERSATION_MAX, conversationId: item.conversationId }, signal);
+      for (const summary of page.items) {
+        if (seen.has(summary.item.id)) continue;
+        seen.add(summary.item.id);
+        found.push(summary);
+      }
+    }
+    if (!seen.has(item.item.id)) found.push(item);
+    found.sort((a, b) => (a.received ?? "").localeCompare(b.received ?? ""));
+    const messages: MessageSummary[] = [];
+    for (const summary of found.slice(-CONVERSATION_MAX)) messages.push(await this.summary(summary));
+    return { messages };
+  }
+
+  private async fileAttachment(ref: string, index: number, signal?: AbortSignal) {
+    const client = await this.client();
+    const item = await client.get({ id: await this.itemIdOf(ref) }, signal);
+    const attachment = item.attachments[index - 1];
+    if (!attachment) throw new UserError(`Message ${ref} has no attachment ${index}. mail_read lists them with their numbers.`);
+    if (attachment.kind !== "file") throw new UserError(`${attachment.name} is an attached message or a link to a file elsewhere: it opens in Outlook only.`);
+    if (attachment.size !== null && attachment.size > ATTACHMENT_MAX_BYTES) {
+      throw new UserError(`${attachment.name} is larger than ${ATTACHMENT_MAX_BYTES / 1048576} MB, so it stays in Outlook: open it there.`);
+    }
+    const file = await client.attachment(attachment.id, signal);
+    if (file.content.length > ATTACHMENT_MAX_BYTES) throw new UserError(`${attachment.name} is larger than ${ATTACHMENT_MAX_BYTES / 1048576} MB, so it stays in Outlook: open it there.`);
+    return { name: attachment.name, contentType: file.contentType ?? attachment.contentType, content: file.content };
+  }
+
+  /** A file attached to a message, for the panel to open or save. */
+  async attachment(ref: string, index: number, signal?: AbortSignal): Promise<{ name: string; contentType: string | null; size: number; base64: string }> {
+    const file = await this.fileAttachment(ref, index, signal);
+    return { name: file.name, contentType: file.contentType, size: file.content.length, base64: file.content.toString("base64") };
+  }
+
+  /** The pictures an HTML message shows inside its text, as data: URLs. Only images, and only up to the limits above. */
+  async inlineImages(ref: string, signal?: AbortSignal): Promise<{ images: { contentId: string; dataUrl: string }[]; skipped: number }> {
+    const client = await this.client();
+    const item = await client.get({ id: await this.itemIdOf(ref) }, signal);
+    const wanted = item.attachments.filter((a) => a.kind === "file" && a.contentId);
+    const images: { contentId: string; dataUrl: string }[] = [];
+    let total = 0;
+    let skipped = 0;
+    for (const attachment of wanted) {
+      if (images.length >= INLINE_IMAGES_MAX || (attachment.size ?? 0) > INLINE_IMAGE_MAX_BYTES || total + (attachment.size ?? 0) > INLINE_IMAGES_MAX_BYTES) {
+        skipped++;
+        continue;
+      }
+      const file = await client.attachment(attachment.id, signal);
+      const type = imageType(file.content);
+      if (!type || file.content.length > INLINE_IMAGE_MAX_BYTES || total + file.content.length > INLINE_IMAGES_MAX_BYTES) {
+        skipped++;
+        continue;
+      }
+      total += file.content.length;
+      images.push({ contentId: attachment.contentId!, dataUrl: `data:${type};base64,${file.content.toString("base64")}` });
+    }
+    return { images, skipped };
   }
 
   // -------------------------------------------------------------------- drafts
@@ -395,7 +478,7 @@ export class MailService {
       to: item.to.map(toAddress),
       cc: item.cc.map(toAddress),
       bcc: item.bcc.map(toAddress),
-      attachments: item.attachments,
+      attachments: item.attachments.map(plainAttachment),
       bodyFormat: item.bodyFormat,
       body: item.body,
       text: entry.text,
@@ -447,8 +530,11 @@ export class MailService {
       if (!to?.length) throw new UserError("A new message needs at least one recipient in to");
       if (!input.subject?.trim()) throw new UserError("A new message needs a subject");
     } else {
+      if (input.kind === "forward" && !to?.length) throw new UserError("A forward needs at least one recipient in to");
       const replyRef = input.replyTo ?? previous?.replyTo?.ref;
-      if (!replyRef) throw new UserError("A reply needs reply_to: the [ref] of the message being answered");
+      if (!replyRef) {
+        throw new UserError(input.kind === "forward" ? "A forward needs the [ref] of the message to forward" : "A reply needs reply_to: the [ref] of the message being answered");
+      }
       const itemId = previous?.replyTo && previous.replyTo.ref === replyRef ? previous.replyTo.itemId : await this.itemIdOf(replyRef);
       const original = await client.get({ id: itemId }, signal);
       reference = original.item;
@@ -547,7 +633,7 @@ export class MailService {
       to: item.to.map(toAddress),
       cc: item.cc.map(toAddress),
       bcc: item.bcc.map(toAddress),
-      attachments: item.attachments,
+      attachments: item.attachments.map(plainAttachment),
       bodyFormat: item.bodyFormat,
       text: quote ? entry.text : item.body,
       quotedChars: quote.length,
@@ -581,17 +667,26 @@ export class MailService {
           const message = await this.read(input.ref, false, signal);
           return { text: formatMessage(message, input.maxChars ?? 20_000, this.offset), isError: false, draftId: null };
         }
+        case "attachment": {
+          const file = await this.fileAttachment(input.ref, input.index, signal);
+          const text = await attachmentText(file.name, file.contentType, file.content);
+          return { text: formatAttachment(input.ref, input.index, file.name, text, input.maxChars ?? 30_000), isError: false, draftId: null };
+        }
+        case "conversation": {
+          const { messages } = await this.conversation(input.ref, signal);
+          return { text: formatConversation(input.ref, messages, this.offset), isError: false, draftId: null };
+        }
         case "draft": {
-          let kind: Draft["kind"] = input.replyTo ? (input.replyAll ? "replyAll" : "reply") : "new";
-          if (!input.replyTo && input.replaces) {
+          let kind: Draft["kind"] = input.forward ? "forward" : input.replyTo ? (input.replyAll ? "replyAll" : "reply") : "new";
+          if (!input.replyTo && !input.forward && input.replaces) {
             // A revision of a reply stays a reply to the same message.
             const previous = (await this.readDrafts()).find((d) => d.id === input.replaces);
-            if (previous && previous.kind !== "new") kind = input.replyAll === undefined ? previous.kind : input.replyAll ? "replyAll" : "reply";
+            if (previous && previous.kind !== "new") kind = input.replyAll === undefined || previous.kind === "forward" ? previous.kind : input.replyAll ? "replyAll" : "reply";
           }
           const draft = await this.saveDraft(
             {
               kind,
-              replyTo: input.replyTo,
+              replyTo: input.forward ?? input.replyTo,
               to: input.to,
               cc: input.cc,
               subject: input.subject,
@@ -609,4 +704,15 @@ export class MailService {
       return { text: describe(error), isError: true, draftId: null };
     }
   }
+}
+
+/** A picture type for a data: URL, read from the bytes, not the declared type: raster formats only, no SVG. */
+function imageType(content: Buffer): string | null {
+  const head = content.subarray(0, 12);
+  if (head[0] === 0x89 && head.toString("latin1", 1, 4) === "PNG") return "image/png";
+  if (head[0] === 0xff && head[1] === 0xd8) return "image/jpeg";
+  if (head.toString("latin1", 0, 3) === "GIF") return "image/gif";
+  if (head.toString("latin1", 0, 4) === "RIFF" && head.toString("latin1", 8, 12) === "WEBP") return "image/webp";
+  if (head[0] === 0x42 && head[1] === 0x4d) return "image/bmp";
+  return null;
 }

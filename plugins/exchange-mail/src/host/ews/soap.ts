@@ -1,6 +1,7 @@
 // EWS SOAP requests. Only the operations the plugin needs: list and search a
-// folder, read a message, save a draft (new, reply, reply all), send a saved
-// draft, delete a draft, read folder counters.
+// folder, read a message and its conversation, download an attachment, save a
+// draft (new, reply, reply all, forward), send a saved draft, delete a draft,
+// read folder counters.
 //
 // Every request is plain ASCII: characters outside it become XML character
 // references, so no code page between Node, curl and Exchange can mangle them.
@@ -55,6 +56,7 @@ const folderId = (folder: FolderName) => `<t:DistinguishedFolderId Id="${folder}
 
 const SUMMARY_FIELDS = [
   "item:Subject",
+  "item:ConversationId",
   "message:From",
   "item:DateTimeReceived",
   "message:IsRead",
@@ -70,11 +72,14 @@ export interface FindOptions {
   readonly unreadOnly?: boolean;
   /** Advanced Query Syntax, as in the Outlook search box. */
   readonly query?: string;
+  /** Only the messages of this conversation. */
+  readonly conversationId?: string;
 }
 
 export function findItems(options: FindOptions): string {
-  const restriction =
-    options.unreadOnly && !options.query
+  const restriction = options.conversationId
+    ? `<m:Restriction><t:IsEqualTo>${field("item:ConversationId")}<t:FieldURIOrConstant><t:Constant Value="${xml(options.conversationId)}"/></t:FieldURIOrConstant></t:IsEqualTo></m:Restriction>`
+    : options.unreadOnly && !options.query
       ? `<m:Restriction><t:IsEqualTo>${field("message:IsRead")}<t:FieldURIOrConstant><t:Constant Value="false"/></t:FieldURIOrConstant></t:IsEqualTo></m:Restriction>`
       : "";
   return envelope(
@@ -91,6 +96,7 @@ export function findItems(options: FindOptions): string {
 
 const MESSAGE_FIELDS = [
   "item:Subject",
+  "item:ConversationId",
   "message:From",
   "message:ToRecipients",
   "message:CcRecipients",
@@ -112,13 +118,23 @@ const MESSAGE_FIELDS = [
 export const NATIVE_BODY_TAG = "0x1016";
 const nativeBody = `<t:ExtendedFieldURI PropertyTag="${NATIVE_BODY_TAG}" PropertyType="Integer"/>`;
 
-/** A whole message with its body converted to plain text by Exchange. */
-export function getItem(ref: ItemRef): string {
+/**
+ * A whole message. By default its body comes as plain text converted by
+ * Exchange (drafts, the send window, agents). With `html`, for reading in the
+ * panel, the body comes as HTML and the plain text as TextBody next to it.
+ */
+export function getItem(ref: ItemRef, options: { html?: boolean } = {}): string {
+  const fields = options.html ? [...MESSAGE_FIELDS, "item:TextBody"] : MESSAGE_FIELDS;
   return envelope(
-    `<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:BodyType>Text</t:BodyType>` +
-      `<t:AdditionalProperties>${MESSAGE_FIELDS.map(field).join("")}${nativeBody}</t:AdditionalProperties></m:ItemShape>` +
+    `<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:BodyType>${options.html ? "HTML" : "Text"}</t:BodyType>` +
+      `<t:AdditionalProperties>${fields.map(field).join("")}${nativeBody}</t:AdditionalProperties></m:ItemShape>` +
       `<m:ItemIds>${itemId({ id: ref.id })}</m:ItemIds></m:GetItem>`,
   );
+}
+
+/** One file attachment with its content. */
+export function getAttachment(attachmentId: string): string {
+  return envelope(`<m:GetAttachment><m:AttachmentIds><t:AttachmentId Id="${xml(attachmentId)}"/></m:AttachmentIds></m:GetAttachment>`);
 }
 
 /** Just the current id and change key, before acting on an item. */
@@ -135,11 +151,11 @@ const mailboxes = (tag: string, list: readonly Address[] | undefined) =>
         .join("")}</t:${tag}>`
     : "";
 
-export type DraftKind = "new" | "reply" | "replyAll";
+export type DraftKind = "new" | "reply" | "replyAll" | "forward";
 
 export interface DraftInput {
   readonly kind: DraftKind;
-  /** The message answered; required for replies. */
+  /** The message answered or forwarded; required for replies and forwards. */
   readonly reference?: ItemRef;
   /** Replies: omitted keeps the recipients Exchange chooses. */
   readonly to?: readonly Address[];
@@ -163,8 +179,8 @@ export function createDraft(input: DraftInput): string {
         `</t:Message></m:Items></m:CreateItem>`,
     );
   }
-  if (!input.reference) throw new Error("A reply needs the message it answers");
-  const tag = input.kind === "reply" ? "ReplyToItem" : "ReplyAllToItem";
+  if (!input.reference) throw new Error("A reply or a forward needs the message it answers");
+  const tag = input.kind === "reply" ? "ReplyToItem" : input.kind === "replyAll" ? "ReplyAllToItem" : "ForwardItem";
   return envelope(
     `<m:CreateItem MessageDisposition="SaveOnly">${save}<m:Items><t:${tag}>` +
       (input.subject !== undefined ? `<t:Subject>${xml(input.subject)}</t:Subject>` : "") +

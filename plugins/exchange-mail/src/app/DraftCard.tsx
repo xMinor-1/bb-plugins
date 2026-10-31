@@ -210,7 +210,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
 
   const quote = draft.body.startsWith(draft.text) ? draft.body.slice(draft.text.length).trim() : "";
   const shown = quote ? draft.text : draft.body;
-  const kind = draft.kind === "new" ? t.kindNew : draft.kind === "replyAll" ? t.kindReplyAll : t.kindReply;
+  const kind = { new: t.kindNew, reply: t.kindReply, replyAll: t.kindReplyAll, forward: t.kindForward }[draft.kind];
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card p-4 text-sm">
@@ -245,7 +245,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
       ) : (
         <>
           <Envelope draft={draft} />
-          <div className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 leading-relaxed">{shown}</div>
+          <div className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 leading-relaxed">{shown.trim() ? shown : <span className="text-muted-foreground">{t.noOwnText}</span>}</div>
           {quote ? (
             <div>
               <button type="button" className="text-xs text-muted-foreground underline underline-offset-2" onClick={() => setShowQuote((v) => !v)}>
@@ -318,7 +318,7 @@ function DraftEditor({ rpc, hostId, draft, onSaved, onCancel }: { rpc: Rpc; host
         kind: draft.kind,
         ...(draft.replyTo ? { replyTo: draft.replyTo.ref } : {}),
         // Replies keep the recipients Exchange chose unless the person changed them.
-        ...(draft.kind === "new" || toChanged || ccChanged ? { to: splitList(to), cc: splitList(cc) } : {}),
+        ...(draft.kind === "new" || draft.kind === "forward" || toChanged || ccChanged ? { to: splitList(to), cc: splitList(cc) } : {}),
         subject,
         body: text,
         replaces: draft.id,

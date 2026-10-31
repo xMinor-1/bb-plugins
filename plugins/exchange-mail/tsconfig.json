@@ -29,6 +29,7 @@
     "lib",
     "hooks",
     "test",
-    "vitest.setup.ts"
+    "vitest.setup.ts",
+    "types"
   ]
 }

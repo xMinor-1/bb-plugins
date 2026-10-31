@@ -1,5 +1,6 @@
 // Reading EWS SOAP answers. Namespaces are dropped; every value stays a string.
 import { XMLParser } from "fast-xml-parser";
+import { normalizeText } from "../../shared/mail-text.js";
 import type { Address, ItemRef } from "./soap.js";
 
 export class EwsError extends Error {
@@ -22,7 +23,8 @@ const parser = new XMLParser({
   parseAttributeValue: false,
   trimValues: false,
   processEntities: true,
-  htmlEntities: false,
+  // Exchange writes line breaks as &#xD; and may write any character as a numeric reference: decode them all.
+  htmlEntities: true,
   isArray: (name) => ARRAYS.has(name),
 });
 
@@ -89,6 +91,8 @@ function ref(node: unknown): ItemRef {
 
 export interface ParsedSummary {
   readonly item: ItemRef;
+  /** Messages of one conversation share it. Null from servers that do not say. */
+  readonly conversationId: string | null;
   readonly kind: string;
   readonly subject: string;
   readonly from: Address | null;
@@ -114,15 +118,24 @@ function items(container: unknown): { kind: string; node: Node }[] {
 function summary(kind: string, node: Node): ParsedSummary {
   return {
     item: ref(node.ItemId),
+    conversationId: text(asNode(node.ConversationId)?.["@Id"]) || null,
     kind,
     subject: text(node.Subject),
     from: address(node.From),
     received: text(node.DateTimeReceived) || null,
     isRead: node.IsRead === undefined ? true : bool(node.IsRead),
     hasAttachments: bool(node.HasAttachments),
-    preview: text(node.Preview).replace(/\s+/g, " ").trim(),
+    preview: previewOf(text(node.Preview)),
     displayTo: text(node.DisplayTo),
   };
+}
+
+/** One line for a list: whitespace runs and Exchange's written-out link targets go. */
+function previewOf(value: string): string {
+  return value
+    .replace(/<(?:https?:\/\/|mailto:)[^\s<>]*>?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function parseFindItems(xmlText: string): { items: ParsedSummary[]; total: number; last: boolean } {
@@ -150,6 +163,17 @@ function bodyFormat(node: Node): BodyFormat {
   return "unknown";
 }
 
+export interface ParsedAttachment {
+  readonly id: string;
+  readonly name: string;
+  readonly size: number | null;
+  /** "file" can be downloaded; "item" is an attached message, "reference" a link to a file elsewhere. */
+  readonly kind: "file" | "item" | "reference";
+  readonly contentType: string | null;
+  readonly contentId: string | null;
+  readonly isInline: boolean;
+}
+
 export interface ParsedMessage extends ParsedSummary {
   readonly to: Address[];
   readonly cc: Address[];
@@ -157,9 +181,29 @@ export interface ParsedMessage extends ParsedSummary {
   readonly bodyFormat: BodyFormat;
   readonly sent: string | null;
   readonly isDraft: boolean;
+  /** Plain text: the body as asked for in text, or TextBody next to an HTML body. */
   readonly body: string;
-  readonly attachments: { name: string; size: number | null }[];
+  /** The HTML body, when it was asked for. Untrusted: the panel sanitizes it. */
+  readonly html: string | null;
+  readonly attachments: ParsedAttachment[];
   readonly internetMessageId: string | null;
+}
+
+function attachmentsOf(node: Node): ParsedAttachment[] {
+  const container = asNode(node.Attachments);
+  const of = (kind: ParsedAttachment["kind"], tag: string) =>
+    list(container?.[tag]).map(
+      (a): ParsedAttachment => ({
+        id: text(asNode(a.AttachmentId)?.["@Id"]),
+        name: text(a.Name) || "(attachment)",
+        size: text(a.Size) ? Number(text(a.Size)) : null,
+        kind,
+        contentType: text(a.ContentType) || null,
+        contentId: text(a.ContentId) || null,
+        isInline: bool(a.IsInline),
+      }),
+    );
+  return [...of("file", "FileAttachment"), ...of("item", "ItemAttachment"), ...of("reference", "ReferenceAttachment")];
 }
 
 export function parseGetItem(xmlText: string): ParsedMessage {
@@ -167,11 +211,10 @@ export function parseGetItem(xmlText: string): ParsedMessage {
   const first = items(message.Items)[0];
   if (!first) throw new EwsError("ErrorItemNotFound", "The message is not in the mailbox any more");
   const { kind, node } = first;
-  const attachmentsNode = asNode(node.Attachments);
-  const attachments = [...list(attachmentsNode?.FileAttachment), ...list(attachmentsNode?.ItemAttachment), ...list(attachmentsNode?.ReferenceAttachment)].map((a) => ({
-    name: text(a.Name) || "(attachment)",
-    size: text(a.Size) ? Number(text(a.Size)) : null,
-  }));
+  const bodyType = text(asNode(node.Body)?.["@BodyType"]).toLowerCase();
+  const html = bodyType === "html" ? text(node.Body) : null;
+  // Asked for as HTML: the text comes in TextBody (Exchange 2013 and later), else from the HTML itself.
+  const plain = html === null ? text(node.Body) : node.TextBody !== undefined ? text(node.TextBody) : htmlToText(html);
   return {
     ...summary(kind, node),
     to: addresses(node.ToRecipients),
@@ -180,10 +223,43 @@ export function parseGetItem(xmlText: string): ParsedMessage {
     bodyFormat: bodyFormat(node),
     sent: text(node.DateTimeSent) || null,
     isDraft: bool(node.IsDraft),
-    body: text(node.Body).replace(/\r\n/g, "\n"),
-    attachments,
+    body: plain.replace(/\r\n?/g, "\n"),
+    html,
+    attachments: attachmentsOf(node),
     internetMessageId: text(node.InternetMessageId) || null,
   };
+}
+
+/** A rough text of an HTML body, for servers without TextBody: block tags become line breaks. */
+export function htmlToText(html: string): string {
+  return normalizeText(
+    html
+      .replace(/<(script|style|head)\b[\s\S]*?<\/\1\s*>/gi, "")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|tr|li|h[1-6]|blockquote|table)\s*>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
+      .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
+      .replace(/&amp;/gi, "&"),
+  );
+}
+
+export interface ParsedAttachmentContent {
+  readonly name: string;
+  readonly contentType: string | null;
+  readonly content: Buffer;
+}
+
+export function parseGetAttachment(xmlText: string): ParsedAttachmentContent {
+  const message = responseMessage(xmlText, "GetAttachment");
+  const container = asNode(message.Attachments);
+  const file = list(container?.FileAttachment)[0];
+  if (!file) throw new EwsError("ErrorAttachmentNotFound", "This attachment cannot be downloaded: it is an attached message or a link to a file elsewhere");
+  return { name: text(file.Name) || "attachment", contentType: text(file.ContentType) || null, content: Buffer.from(text(file.Content).replace(/\s+/g, ""), "base64") };
 }
 
 export function parseGetItemId(xmlText: string): ItemRef {
