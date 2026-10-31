@@ -39,6 +39,7 @@ const TIMEOUT_GRACE_MS = 500;
 const DEFAULT_CONFIG: EngineConfig = {
   engine: "faster-whisper",
   whisperCpp: null,
+  offline: false,
   model: "small",
   computeType: "int8",
   threads: 2,
@@ -290,9 +291,10 @@ export default experimental_defineHostEntry({
       return status;
     },
 
-    "voice.status": async ({ warmUp }, context): Promise<EngineStatus> => {
+    "voice.status": async ({ warmUp, ensureFiles }, context): Promise<EngineStatus> => {
       const active = await engineFor(context as HostContext);
-      return warmUp ? active.warmUp() : active.status();
+      if (warmUp) return active.warmUp();
+      return ensureFiles === true && active instanceof WhisperCppEngine ? active.ensureFiles() : active.status();
     },
 
     "voice.last": async (_input, context): Promise<{ text: string | null }> => {

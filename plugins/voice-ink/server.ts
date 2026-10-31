@@ -12,7 +12,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { defineRpcContract } from "@get-bb/plugin-sdk";
+import { defineRpcContract, experimental_PluginRpcRefusal } from "@get-bb/plugin-sdk";
+import { parseParts } from "./src/model-parts";
 import {
   ENGINES,
   HISTORY_AUDIO_ROUTE,
@@ -150,6 +151,15 @@ function splitCores(cores: number): { threads: number; parallel: number } {
   return { threads: Math.max(1, Math.floor(budget / parallel)), parallel };
 }
 
+function isLoopbackUrl(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return host === "localhost" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
+  } catch {
+    return false;
+  }
+}
+
 function parsePositiveInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(value.trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -188,8 +198,14 @@ export default async function plugin(bb: BbPluginApi) {
     },
     whisperCppModelSha256: {
       type: "string",
-      label: "whisper.cpp model SHA-256",
+      label: "whisper.cpp model SHA-256 (of the whole file, also when it comes in parts)",
       default: DEFAULT_WHISPER_CPP_MODEL_SHA256,
+    },
+    whisperCppModelParts: {
+      type: "string",
+      label: "whisper.cpp model in parts, in order: one part per line, its address and its SHA-256 (used instead of the single address when set)",
+      experimental_multiline: true,
+      default: "",
     },
     whisperCppMacArm64Url: {
       type: "string",
@@ -382,7 +398,10 @@ export default async function plugin(bb: BbPluginApi) {
       whisperCpp:
         engine === "whisper.cpp"
           ? {
-              model: spec(values.whisperCppModelUrl, values.whisperCppModelSha256),
+              model: {
+                ...spec(values.whisperCppModelUrl, values.whisperCppModelSha256),
+                parts: parseParts(values.whisperCppModelParts ?? ""),
+              },
               runtimes: {
                 "darwin-arm64": spec(values.whisperCppMacArm64Url, values.whisperCppMacArm64Sha256),
                 "win32-x64": spec(values.whisperCppWindowsX64Url, values.whisperCppWindowsX64Sha256),
@@ -391,6 +410,7 @@ export default async function plugin(bb: BbPluginApi) {
               authHeader: values.downloadHeader?.trim() ? values.downloadHeader.trim() : null,
             }
           : null,
+      offline: !values.onlineServices,
       model: MODEL_REPOS[model] ?? model,
       computeType: values.computeType,
       ...splitCores(parsePositiveInt(values.cpuCores, 2)),
@@ -469,12 +489,19 @@ export default async function plugin(bb: BbPluginApi) {
       return result.text;
     },
     // Without a machine there is nothing to run the model on; bb then hides the
-    // microphone instead of offering a button that can only fail.
-    // So is a whisper.cpp engine whose program or model is still downloading.
+    // microphone instead of offering a button that can only fail. With
+    // whisper.cpp, so is a program or model that is not downloaded yet; the
+    // poll itself starts a download that is missing or due for another try.
+    // faster-whisper has nothing to download first: its button stays.
     status: async () => {
       try {
         const id = await hostId();
-        const status = await host.call("voice.status", { warmUp: false }, { hostId: id, timeoutMs: 5_000 });
+        if ((await settings.get()).engine !== "whisper.cpp") return { ready: true };
+        const status = await host.call(
+          "voice.status",
+          { warmUp: false, ensureFiles: true },
+          { hostId: id, timeoutMs: 5_000 },
+        );
         if (!status.assetsReady) {
           return { ready: false, message: status.message ?? "the speech model is not downloaded yet" };
         }
@@ -485,7 +512,23 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  bb.rpc.register(rpcContract, {
+  type RpcHandlers = Parameters<typeof bb.rpc.register<typeof rpcContract>>[1];
+  type Handler = (input: unknown, context: Parameters<RpcHandlers["status"]>[1]) => unknown;
+  /** Recordings, history and the speech service are for this plugin's own panel, not for other plugins. */
+  const ownCallers = (handlers: RpcHandlers): RpcHandlers =>
+    Object.fromEntries(
+      Object.entries(handlers as Record<string, Handler>).map(([name, handler]) => [
+        name,
+        ((input, context) => {
+          if (context.experimental_caller.kind !== "client") {
+            throw new experimental_PluginRpcRefusal({ code: "forbidden", message: "Voice Ink does not answer other plugins." });
+          }
+          return handler(input, context);
+        }) satisfies Handler,
+      ]),
+    ) as unknown as RpcHandlers;
+
+  bb.rpc.register(rpcContract, ownCallers({
     status: async ({ warmUp }) => {
       const id = await hostId();
       await host.call("voice.configure", { config: await currentConfig() }, { hostId: id });
@@ -576,7 +619,7 @@ export default async function plugin(bb: BbPluginApi) {
       await bb.storage.kv.set(TIMING_KEY, kept.slice(-TIMING_LIMIT));
       return { ok: true as const };
     },
-  });
+  }));
 
   // The one method other plugins may call: a build's setup page asks whether
   // voice input works here. It reads the host's state; no download, no address.
@@ -648,7 +691,17 @@ export default async function plugin(bb: BbPluginApi) {
    * which is not something to restart with the plugin.
    */
   async function speak(text: string): Promise<SpeakResult> {
-    const base = (await settings.get()).speechServiceUrl.trim() || DEFAULT_SPEECH_SERVICE_URL;
+    const values = await settings.get();
+    const base = values.speechServiceUrl.trim() || DEFAULT_SPEECH_SERVICE_URL;
+    // The text of agent replies goes to this service: with online features
+    // off, only to one on this machine.
+    if (!values.onlineServices && !isLoopbackUrl(base)) {
+      return {
+        ok: false,
+        code: "unreachable",
+        message: `the speech service at ${base} is not on this machine, and online features are off`,
+      };
+    }
     let response: Response;
     try {
       response = await fetch(new URL("/synth", base), {

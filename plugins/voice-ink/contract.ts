@@ -10,8 +10,12 @@ export type AssetSpecConfig = z.infer<typeof assetSpecSchema>;
 /** What the whisper.cpp engine downloads; the host picks the program for its own platform. */
 export const whisperCppConfigSchema = z
   .object({
-    /** A ggml model file. */
-    model: assetSpecSchema,
+    /**
+     * A ggml model file. With `parts`, the file is put together from them
+     * (each checked on its own) and `sha256` is the sum of the whole; `url`
+     * then only names the file and may be empty.
+     */
+    model: assetSpecSchema.extend({ parts: z.array(assetSpecSchema).max(200).default([]) }).strict(),
     /** Zip archives with whisper-server, keyed by `<process.platform>-<process.arch>`. */
     runtimes: z.record(z.string(), assetSpecSchema.nullable()),
     /** `Name: value` sent with the downloads to their own origin, or null. */
@@ -30,6 +34,11 @@ export const engineConfigSchema = z
     engine: z.enum(ENGINES).default("faster-whisper"),
     /** Downloads for the whisper.cpp engine; null when the other engine is chosen. */
     whisperCpp: whisperCppConfigSchema.nullable().default(null),
+    /**
+     * Online features are off: faster-whisper loads its models from the local
+     * cache only and never fetches them from Hugging Face on its own.
+     */
+    offline: z.boolean().default(false),
     /** faster-whisper model name or a local CTranslate2 directory. */
     model: z.string().min(1),
     /** CTranslate2 quantization; int8 is the only one that keeps CPU usable. */
@@ -181,7 +190,11 @@ export const voiceHostContract = defineRpcContract({
     output: engineStatusSchema,
   },
   "voice.status": {
-    input: z.object({ warmUp: z.boolean() }).strict(),
+    /**
+     * `ensureFiles`: bb's readiness poll — whisper.cpp files that are missing
+     * (a fresh worker, a failed download whose retry is due) start downloading.
+     */
+    input: z.object({ warmUp: z.boolean(), ensureFiles: z.boolean().optional() }).strict(),
     output: engineStatusSchema,
   },
   "voice.last": {

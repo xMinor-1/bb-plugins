@@ -91,20 +91,36 @@ x64 or Linux x64). The plugin
 - tells bb its voice service is not ready until both files are in place, so
   bb's microphone appears once the download is done. `bb voice-ink status`
   shows the progress, and a dictation started earlier fails at once with the
-  reason instead of waiting.
+  reason instead of waiting. bb's readiness poll starts a missing download by
+  itself, and a failed one is tried again — after a minute when the network
+  failed, after ten when the server refused or the sum was wrong — so the
+  microphone comes back without restarting bb. (With faster-whisper there is
+  nothing to download first: the microphone is always offered.)
+- fetches a resumed download once more from the start if its sum is wrong:
+  the file at the address may have changed between the two halves.
 
 **Defaults:** the model from Hugging Face and, on Windows, the official
 whisper.cpp release zip (it needs the Microsoft Visual C++ runtime installed).
 There is no official build for macOS or Linux — build one as below and set its
 address.
 
+**A model in parts.** Some servers refuse a single 550 MB upload. Cut the
+model (`split -b 94371840 model.bin model.bin.part-`), publish the parts, and
+set **whisper.cpp model in parts**: one part per line, its address and its
+SHA-256, in order. **whisper.cpp model SHA-256** stays the sum of the whole
+file. Each part is checked on its own and appended to the whole, then deleted,
+so the disk holds the model plus one part at most; an interrupted run goes on
+with the next part. The whole is used only once its own sum matches. The
+single address keeps working when the list is empty.
+
 **Mirroring on your own server.** Put the files in a package registry or on any
 HTTPS server and set the addresses and sums. If the server wants a token, set
 **Header sent with the downloads**, e.g. `PRIVATE-TOKEN: <token>` for a GitLab
 package registry or `Authorization: Bearer <token>`. The header goes only to
 the configured origin: when the registry redirects to storage elsewhere, the
-token stays behind, and it is never sent over plain `http` except to
-`localhost`; the files themselves may come over `http`, the sum checks them. An absolute
+token stays behind. Downloads and their redirects go over `https` only; plain
+`http` is accepted only to this machine (`localhost`, `127.0.0.0/8`, `::1`),
+for a local mirror. An absolute
 path (or `file:` URL), such as a network share, works the same way.
 
 **Building the program.** The workflow
@@ -124,16 +140,31 @@ faster-whisper.
 
 Recordings are decoded in the plugin itself (WebM and Ogg with Opus, WAV; other
 formats through `ffmpeg` if it is installed), cut at pauses into pieces of at
-most 28 seconds and recognized one piece at a time.
+most 28 seconds and recognized one piece at a time. A server that spends more
+than ten minutes on one piece is restarted (SIGTERM, then SIGKILL after five
+seconds), so it cannot hold every later dictation behind it.
 
 ## Online features off
 
 **Allow features that send text to online services** (on by default) switches
-off, when cleared, everything that would send text anywhere: the transcript
-cleanup with a language model and the conversation mode's quick voice, whatever
-their own settings say. Audio never leaves the machine in either case.
+off, when cleared, everything that would reach out on its own, whatever the
+other settings say:
+
+- the transcript cleanup with a language model and the conversation mode's
+  quick voice;
+- a speech service for spoken replies that is not on this machine (the text of
+  agent replies would go there);
+- faster-whisper's own model downloads: its recognition and punctuation models
+  load from the local cache only (`HF_HUB_OFFLINE=1`), so a model that was
+  never downloaded reports an error instead of fetching it.
+
+The whisper.cpp downloads still happen: they go only to the addresses in the
+settings. Audio never leaves the machine in either case.
 
 ## Setup check for other plugins
+
+Other plugins get one RPC method; the rest (history, recordings, the speech
+service, transcription) answer this plugin's own panel only.
 
 The plugin exposes a discoverable RPC, `setupStatus`, for setup pages that walk
 a person through a new machine. Input `{ lang?: "en" | "ru", hostId?: string }`;
@@ -240,10 +271,11 @@ turns the whole thing off, which also stops the recordings from being written.
 |---|---|
 | Recognition engine | `faster-whisper` (default) or `whisper.cpp` |
 | Model (faster-whisper) | `small`, `medium` or `large-v3-turbo` |
-| whisper.cpp model address, SHA-256 | the ggml `.bin` file and its sum |
+| whisper.cpp model address, SHA-256 | the ggml `.bin` file and the sum of the whole file |
+| whisper.cpp model in parts | one part per line: address and SHA-256; used instead of the single address when set |
 | whisper.cpp program for macOS / Windows / Linux, SHA-256 | the zip for each kind of machine and its sum; empty means none for that kind |
 | Header sent with the downloads | `Name: value`, secret; sent to the configured origin only |
-| Allow features that send text to online services | off disables transcript cleanup and the quick voice |
+| Allow features that send text to online services | off disables transcript cleanup, the quick voice, a speech service on another machine and faster-whisper's own downloads |
 | Spoken language | `auto`, `ru`, `en` — naming the language avoids misdetection on short phrases |
 | Vocabulary hints | names and terms fed to the model as context, one line |
 | Precision | `int8` (CPU), `int8_float32`, `float32` |
@@ -406,7 +438,8 @@ src/host.ts      the bb.host entry, running on the machine bb runs on
 src/history.ts   recordings and transcripts on disk, and their retention
 src/jobs.ts      one job per recording, shared by callers, partial text on timeout
 src/whisper-cpp-engine.ts  whisper-server: downloads, start, pieces, paragraphs
-src/assets.ts    resumable, sum-checked downloads and the store they land in
+src/assets.ts    resumable, sum-checked downloads (whole or in parts) and their store
+src/model-parts.ts  reading the model-in-parts setting
 src/audio.ts     WebM/Ogg Opus and WAV to 16 kHz mono, without ffmpeg
 src/chunks.ts    cutting a recording at pauses
 python/worker.py resident faster-whisper process, model kept in memory

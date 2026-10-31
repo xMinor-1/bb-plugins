@@ -18,7 +18,13 @@ export const TOKEN = "t0ken";
 
 export async function startDownloadServer(
   files: Record<string, Buffer>,
-  options: { cutFirstAfterBytes?: number } = {},
+  options: {
+    cutFirstAfterBytes?: number;
+    /** Called when the first connection is cut: a test may change the files then. */
+    afterCut?: () => void;
+    /** Where the registry redirects instead of its storage, for a test of where redirects may go. */
+    redirectTo?: string;
+  } = {},
 ): Promise<DownloadServer> {
   const storageLog: DownloadServer["storageLog"] = [];
   let cutDone = false;
@@ -51,7 +57,10 @@ export async function startDownloadServer(
     if (options.cutFirstAfterBytes !== undefined && !cutDone && start === 0) {
       cutDone = true;
       response.write(slice.subarray(0, options.cutFirstAfterBytes), () => {
-        setTimeout(() => request.socket.destroy(), 20);
+        setTimeout(() => {
+          request.socket.destroy();
+          options.afterCut?.();
+        }, 20);
       });
       return;
     }
@@ -67,7 +76,7 @@ export async function startDownloadServer(
     }
     const name = (request.url ?? "").replace(/^\/pkg\//, "");
     // `localhost` is another origin than 127.0.0.1: the token must stay behind.
-    response.writeHead(302, { location: `http://localhost:${storagePort}/blob/${name}` }).end();
+    response.writeHead(302, { location: options.redirectTo ?? `http://localhost:${storagePort}/blob/${name}` }).end();
   });
   await listen(registry, "127.0.0.1");
   const registryPort = (registry.address() as AddressInfo).port;

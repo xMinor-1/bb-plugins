@@ -123,7 +123,8 @@ export class WhisperEngine {
         // The punctuation model is loaded at startup, so switching it needs a
         // fresh process.
         previous.punctuate !== config.punctuate ||
-        previous.parallel !== config.parallel);
+        previous.parallel !== config.parallel ||
+        previous.offline !== config.offline);
     if (restartNeeded) {
       await this.stop("configuration changed");
     }
@@ -272,7 +273,12 @@ export class WhisperEngine {
         "--parallel",
         String(config.parallel),
       ],
-      { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, PYTHONUNBUFFERED: "1" } },
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        // With online features off, the recognition and punctuation models come
+        // from the local cache only: Hugging Face is not contacted on its own.
+        env: { ...process.env, PYTHONUNBUFFERED: "1", ...(config.offline ? { HF_HUB_OFFLINE: "1" } : {}) },
+      },
     ) as ChildProcessWithoutNullStreams;
 
     this.child = child;

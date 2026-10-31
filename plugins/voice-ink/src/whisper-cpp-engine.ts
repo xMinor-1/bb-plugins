@@ -45,6 +45,14 @@ const READY_TIMEOUT_MS = 300_000;
 const PIECE_TIMEOUT_MS = 10 * 60_000;
 /** A download that failed for a reason worth retrying is tried again after this. */
 const RETRY_AFTER_MS = 60_000;
+/**
+ * One that failed for good (a wrong sum, a missing file, no access) is still
+ * tried again after this: someone may have fixed the server meanwhile, and a
+ * failed download must not hide the microphone until bb restarts.
+ */
+const PERMANENT_RETRY_AFTER_MS = 10 * 60_000;
+/** A server asked to stop gets this long before it is killed. */
+const STOP_GRACE_MS = 5_000;
 const OUTPUT_TAIL_LINES = 12;
 
 /** VoiceInk's prompts: an everyday sentence with punctuation in the spoken language. */
@@ -96,6 +104,7 @@ export class WhisperCppEngine {
   /** Pieces go to the server one at a time, in order. */
   private queue: Promise<unknown> = Promise.resolve();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private active = 0;
 
   constructor(private readonly options: WhisperCppEngineOptions) {
@@ -109,7 +118,7 @@ export class WhisperCppEngine {
 
   status(): EngineStatus {
     const settings = this.config?.whisperCpp ?? null;
-    const model = settings === null ? null : modelLabel(settings.model.url);
+    const model = settings === null ? null : modelName(settings.model);
     if (this.progress !== null && this.assetsTask !== null) {
       return {
         state: "loading",
@@ -148,11 +157,23 @@ export class WhisperCppEngine {
         before?.authHeader !== after?.authHeader ||
         previous.threads * previous.parallel !== config.threads * config.parallel ||
         previous.language !== config.language);
-    if (changed) {
+    if (changed || JSON.stringify(before?.model) !== JSON.stringify(after?.model) || runtimeFor(before)?.url !== runtimeFor(after)?.url) {
       // A new address is worth trying at once, whatever failed before.
       this.assetError = null;
-      await this.stop("configuration changed");
+      this.clearRetry();
     }
+    if (changed) await this.stop("configuration changed");
+    return this.status();
+  }
+
+  /**
+   * bb's readiness poll: files that are missing start downloading, unless a
+   * download is running or failed too recently. A fresh worker (the daemon
+   * restarts them) thus fetches its files without waiting for a dictation.
+   */
+  ensureFiles(): EngineStatus {
+    const config = this.config;
+    if (config !== null && this.presentAssets() === null) this.startDownload(config, false);
     return this.status();
   }
 
@@ -195,6 +216,7 @@ export class WhisperCppEngine {
   }
 
   async dispose(): Promise<void> {
+    this.clearRetry();
     await this.stop("host worker shutting down");
   }
 
@@ -210,14 +232,29 @@ export class WhisperCppEngine {
     return model === null || server === null ? null : { server, model };
   }
 
-  /** Start the downloads unless they are running, or failed a moment ago (unless forced). */
+  /** Start the downloads unless they are running, or failed too recently (unless forced). */
   private startDownload(config: EngineConfig, force: boolean): void {
     if (this.assetsTask !== null) return;
-    const failedAt = this.assetError?.at ?? 0;
-    if (!force && this.assetError !== null) {
-      if (this.assetError.permanent || Date.now() - failedAt < RETRY_AFTER_MS) return;
-    }
+    const error = this.assetError;
+    if (!force && error !== null && Date.now() - error.at < retryDelay(error.permanent)) return;
     void this.ensureAssets(config).catch(() => {});
+  }
+
+  /** A failed download is tried again on its own, so the microphone comes back without a restart. */
+  private scheduleRetry(permanent: boolean): void {
+    this.clearRetry();
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      const config = this.config;
+      if (config !== null && this.presentAssets() === null) this.startDownload(config, false);
+    }, retryDelay(permanent));
+    this.retryTimer.unref?.();
+  }
+
+  private clearRetry(): void {
+    if (this.retryTimer === null) return;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = null;
   }
 
   private ensureAssets(config: EngineConfig): Promise<Assets> {
@@ -245,7 +282,14 @@ export class WhisperCppEngine {
         throw Object.assign(new Error(`the speech engine archive has no ${SERVER_NAME}`), { permanent: true });
       }
       this.progress = { label: "speech model", doneBytes: 0, totalBytes: null };
-      const model = await this.models.ensureFile(settings.model, "speech model", fetchOptions);
+      const model =
+        settings.model.parts.length > 0
+          ? await this.models.ensureParted(
+              { sha256: settings.model.sha256, name: modelName(settings.model), parts: settings.model.parts },
+              "speech model",
+              fetchOptions,
+            )
+          : await this.models.ensureFile(settings.model, "speech model", fetchOptions);
       // Only now that the new files are in place do the old versions go.
       await this.runtimes.prune([runtime.sha256]);
       await this.models.prune([settings.model.sha256]);
@@ -256,12 +300,14 @@ export class WhisperCppEngine {
     task.then(
       () => {
         this.assetError = null;
+        this.clearRetry();
       },
       (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         const permanent = Boolean((error as { permanent?: boolean } | null)?.permanent);
         this.assetError = { message, at: Date.now(), permanent };
-        this.options.log("speech engine download failed", { message });
+        this.options.log("speech engine download failed", { message, permanent });
+        this.scheduleRetry(permanent);
       },
     ).finally(() => {
       this.assetsTask = null;
@@ -377,8 +423,8 @@ export class WhisperCppEngine {
     const child = this.child;
     if (child === null) return;
     this.onGone(child, reason);
-    child.kill();
     this.state = "idle";
+    await terminate(child, STOP_GRACE_MS);
   }
 
   // --- recognition ---------------------------------------------------------
@@ -465,12 +511,23 @@ export class WhisperCppEngine {
     form.set("temperature", "0.2");
     form.set("language", language ?? "auto");
     if (prompt !== "") form.set("prompt", prompt);
-    const response = await fetch(`http://127.0.0.1:${port}/inference`, {
-      method: "POST",
-      body: form,
-      signal: AbortSignal.timeout(PIECE_TIMEOUT_MS),
-    });
-    const body = await response.text();
+    let response: Response;
+    let body: string;
+    try {
+      response = await fetch(`http://127.0.0.1:${port}/inference`, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(PIECE_TIMEOUT_MS),
+      });
+      body = await response.text();
+    } catch (error) {
+      if ((error as { name?: string } | null)?.name !== "TimeoutError") throw error;
+      // A server stuck on one piece would hold every later dictation behind it.
+      await this.stop("a piece took too long");
+      throw new Error(
+        `the speech engine spent over ${Math.round(PIECE_TIMEOUT_MS / 60_000)} minutes on one piece and was restarted`,
+      );
+    }
     if (!response.ok) throw new Error(`speech engine answered HTTP ${response.status}: ${body.slice(0, 200)}`);
     let parsed: { text?: unknown; segments?: unknown; error?: unknown };
     try {
@@ -524,12 +581,24 @@ function runtimeFor(settings: WhisperCppConfig | null | undefined): AssetSpec | 
   return spec === undefined || spec === null || spec.url === "" ? null : spec;
 }
 
-function modelLabel(url: string): string {
+function lastSegment(url: string): string {
   try {
-    return basename(new URL(url).pathname) || url;
+    return decodeURIComponent(basename(new URL(url).pathname));
   } catch {
-    return basename(url) || url;
+    return basename(url);
   }
+}
+
+/**
+ * The model's file name: from its address, or for a model in parts from the
+ * first part with the part suffix taken off (`model.bin.part-aa`, `.part01`, `.001`).
+ */
+function modelName(model: WhisperCppConfig["model"]): string {
+  if (model.url.trim() !== "") return lastSegment(model.url) || "model.bin";
+  const first = model.parts[0];
+  if (first === undefined) return "model.bin";
+  const name = lastSegment(first.url).replace(/\.(part[-_.]?[a-z0-9]{1,4}|\d{2,4})$/i, "");
+  return name === "" ? "model.bin" : name;
 }
 
 export function promptFor(language: string | null, vocabulary: string | null): string {
@@ -567,6 +636,27 @@ function freePort(): Promise<number> {
       server.close(() => (port > 0 ? resolve(port) : reject(new Error("no free port"))));
     });
   });
+}
+
+function retryDelay(permanent: boolean): number {
+  return permanent ? PERMANENT_RETRY_AFTER_MS : RETRY_AFTER_MS;
+}
+
+/** SIGTERM, then SIGKILL if the process is still there after the grace period. */
+async function terminate(child: ChildProcess, graceMs: number): Promise<void> {
+  const running = () => child.exitCode === null && child.signalCode === null;
+  if (!running()) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  child.kill("SIGTERM");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const grace = new Promise<"late">((resolve) => {
+    timer = setTimeout(() => resolve("late"), graceMs);
+  });
+  if ((await Promise.race([exited, grace])) === "late" && running()) {
+    child.kill("SIGKILL");
+    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 1_000))]);
+  }
+  clearTimeout(timer);
 }
 
 async function waitHealthy(port: number, timeoutMs: number): Promise<void> {

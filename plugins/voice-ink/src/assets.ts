@@ -7,15 +7,19 @@
 //   check once is not hashed again on every start (a marker records it).
 // - Resumable: a download in progress is `<name>.part`; the next attempt asks
 //   for the rest with a Range request and starts over if the server ignores it.
-// - The optional authorization header goes only to the configured origin over
-//   https (or plain http on this machine): redirects are followed by hand and a
-//   redirect to another origin — object storage behind a package registry —
-//   gets no header.
+//   A resumed file whose sum is wrong is fetched once more from the start.
+// - Large files may come in parts (a server that refuses big uploads): each part
+//   is fetched and checked on its own, appended to the whole, and the whole is
+//   checked against its own sum before it is used.
+// - https only, redirects included; plain http only to this machine (a local
+//   mirror, the tests). The optional authorization header goes only to the
+//   configured origin: redirects are followed by hand and a redirect to another
+//   origin — object storage behind a package registry — gets no header.
 // - `file:` URLs and absolute paths are copied and checked the same way, so a
 //   machine without access to the server can be set up from a shared folder.
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, readdirSync, readFileSync } from "node:fs";
-import { chmod, mkdir, readdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rename, rm, stat, statfs, truncate, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, normalize, sep } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -25,6 +29,14 @@ import { unzipSync } from "fflate";
 export interface AssetSpec {
   url: string;
   sha256: string;
+}
+
+/** A file published in parts: each part with its own sum, and the sum of the whole. */
+export interface PartedSpec {
+  sha256: string;
+  /** The name the whole is stored under. */
+  name: string;
+  parts: AssetSpec[];
 }
 
 export interface AssetProgress {
@@ -54,6 +66,8 @@ export class AssetError extends Error {
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const MARKER = ".verified";
+/** How far a file in parts has been put together. */
+const ASSEMBLY = ".assembled";
 const MAX_REDIRECTS = 5;
 const ATTEMPTS = 3;
 /** Kept free on the disk beyond the file itself. */
@@ -61,9 +75,34 @@ const DISK_MARGIN_BYTES = 200 * 1024 * 1024;
 
 export function checkSpec(spec: AssetSpec, label: string): void {
   if (spec.url.trim() === "") throw new AssetError(`no address is set for the ${label}`, true);
-  if (!SHA256.test(spec.sha256)) {
+  checkSha(spec.sha256, label);
+  if (localPath(spec.url) !== null) return;
+  let url: URL;
+  try {
+    url = new URL(spec.url);
+  } catch {
+    throw new AssetError(`the address for the ${label} is not a URL`, true);
+  }
+  if (!transportAllowed(url)) {
+    throw new AssetError(`the address for the ${label} must be https (plain http only to this machine)`, true);
+  }
+}
+
+function checkSha(sha256: string, label: string): void {
+  if (!SHA256.test(sha256)) {
     throw new AssetError(`the SHA-256 for the ${label} is not 64 hexadecimal characters`, true);
   }
+}
+
+/** https anywhere; plain http only to this machine, where nobody else is on the wire. */
+function transportAllowed(url: URL): boolean {
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && isLoopback(url.hostname);
+}
+
+function isLoopback(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
 }
 
 /** The file name a download is stored under: the last path segment, made safe. */
@@ -119,6 +158,72 @@ export class AssetStore {
     });
   }
 
+  /**
+   * Fetch a file published in parts: each part is checked and appended to the
+   * whole, then removed, so the disk holds the whole plus one part at most.
+   * Progress is kept in `.assembled`, so an interrupted run continues with the
+   * next part. The whole is used only once its own sum matches.
+   */
+  ensureParted(spec: PartedSpec, label: string, options: FetchOptions): Promise<string> {
+    return this.once(`file:${spec.sha256}`, async () => {
+      checkSha(spec.sha256, label);
+      if (spec.parts.length === 0) throw new AssetError(`no parts are set for the ${label}`, true);
+      spec.parts.forEach((part, index) => checkSpec(part, `${label}, part ${index + 1}`));
+      const present = this.presentFile({ url: "", sha256: spec.sha256 });
+      if (present !== null) return present;
+      const dir = join(this.root, spec.sha256);
+      await mkdir(dir, { recursive: true });
+      const name = fileNameFor(spec.name);
+      const target = join(dir, name);
+      const whole = `${target}.part`;
+      const statePath = join(dir, ASSEMBLY);
+      const fingerprint = spec.parts.map((part) => part.sha256).join(",");
+      let state = await readAssembly(statePath, fingerprint);
+      // A run cut off mid-append leaves bytes past the recorded end.
+      const size = await stat(whole).then((info) => info.size, () => -1);
+      if (size < state.bytes) state = { parts: fingerprint, done: 0, bytes: 0 };
+      if (size >= 0) await truncate(whole, state.bytes);
+
+      const count = spec.parts.length;
+      for (let index = state.done; index < count; index++) {
+        const part = spec.parts[index] as AssetSpec;
+        const partPath = join(dir, `part-${index + 1}`);
+        const before = state.bytes;
+        await this.fetchVerified(part, `${label}, part ${index + 1} of ${count}`, partPath, {
+          ...options,
+          // One bar for the whole: the parts are equal but the last one.
+          onProgress: (progress) =>
+            options.onProgress?.({
+              label,
+              doneBytes: before + progress.doneBytes,
+              totalBytes:
+                progress.totalBytes === null ? null : before + progress.totalBytes * (count - index),
+            }),
+        });
+        const partSize = (await stat(partPath)).size;
+        await ensureDiskSpace(dir, partSize);
+        await pipeline(createReadStream(partPath), createWriteStream(whole, { flags: "a" }));
+        state = { parts: fingerprint, done: index + 1, bytes: before + partSize };
+        await writeFile(statePath, JSON.stringify(state), "utf8");
+        await rm(partPath, { force: true });
+      }
+
+      const actual = await sha256File(whole);
+      if (actual !== spec.sha256) {
+        await rm(whole, { force: true });
+        await rm(statePath, { force: true });
+        throw new AssetError(
+          `the ${label} put together from its parts does not match its SHA-256 (got ${actual.slice(0, 12)}…): the parts are not the ones the sum was made for`,
+          true,
+        );
+      }
+      await renameWithRetry(whole, target);
+      await rm(statePath, { force: true });
+      await writeMarker(dir, { kind: "file", name });
+      return target;
+    });
+  }
+
   /** Fetch a zip archive, check it, unpack it, and return the directory. */
   ensureArchive(spec: AssetSpec, label: string, options: FetchOptions): Promise<string> {
     return this.once(`archive:${spec.sha256}`, async () => {
@@ -164,12 +269,21 @@ export class AssetStore {
   private async fetchVerified(spec: AssetSpec, label: string, target: string, options: FetchOptions): Promise<void> {
     const part = `${target}.part`;
     let lastError: unknown = null;
+    let refetched = false;
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       try {
+        const resumed = await stat(part).then((info) => info.size > 0, () => false);
         await fetchTo(spec.url, part, label, options);
         const actual = await sha256File(part);
         if (actual !== spec.sha256) {
           await rm(part, { force: true });
+          // The start may be from an older file at the same address: one more
+          // try from zero, without Range, before calling the file wrong.
+          if (resumed && !refetched) {
+            refetched = true;
+            attempt--;
+            continue;
+          }
           throw new AssetError(
             `the ${label} downloaded from the configured address does not match its SHA-256 (got ${actual.slice(0, 12)}…)`,
             true,
@@ -245,8 +359,8 @@ async function fetchTo(url: string, part: string, label: string, options: FetchO
 async function request(url: string, options: FetchOptions, extra: Record<string, string>): Promise<Response> {
   const origin = new URL(url).origin;
   const header = parseHeader(options.authHeader);
-  if (header !== null && !headerAllowed(url)) {
-    throw new AssetError("the authorization header is only sent over https", true);
+  if (!transportAllowed(new URL(url))) {
+    throw new AssetError("downloads go over https only (plain http only to this machine)", true);
   }
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -265,18 +379,12 @@ async function request(url: string, options: FetchOptions, extra: Record<string,
     if (response.status < 300 || response.status >= 400 || !response.headers.has("location")) return response;
     await response.body?.cancel().catch(() => {});
     const next = new URL(response.headers.get("location") as string, current);
-    if (next.protocol !== "https:" && next.protocol !== "http:") {
-      throw new AssetError("the download redirected to an address that is not http or https", true);
+    if (!transportAllowed(next)) {
+      throw new AssetError("the download redirected to an address that is not https", true);
     }
     current = next.toString();
   }
   throw new AssetError("the download was redirected too many times", true);
-}
-
-function headerAllowed(url: string): boolean {
-  const parsed = new URL(url);
-  if (parsed.protocol === "https:") return true;
-  return parsed.protocol === "http:" && (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost");
 }
 
 function parseHeader(raw: string | null): { name: string; value: string } | null {
@@ -356,6 +464,31 @@ export async function sha256File(path: string): Promise<string> {
 interface Marker {
   kind: "file" | "archive";
   name: string;
+}
+
+interface Assembly {
+  /** The part sums, joined: a different list starts over. */
+  parts: string;
+  done: number;
+  bytes: number;
+}
+
+async function readAssembly(path: string, parts: string): Promise<Assembly> {
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<Assembly>;
+    if (
+      parsed.parts === parts &&
+      Number.isInteger(parsed.done) &&
+      Number.isInteger(parsed.bytes) &&
+      (parsed.done as number) >= 0 &&
+      (parsed.bytes as number) >= 0
+    ) {
+      return { parts, done: parsed.done as number, bytes: parsed.bytes as number };
+    }
+  } catch {
+    // nothing put together yet
+  }
+  return { parts, done: 0, bytes: 0 };
 }
 
 function readMarker(dir: string): Marker | null {

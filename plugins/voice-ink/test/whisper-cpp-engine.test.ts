@@ -4,7 +4,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { zipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
 import type { EngineConfig } from "../contract";
@@ -21,6 +21,11 @@ const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("he
  */
 const FAKE_SERVER = `
 import { createServer } from "node:http";
+import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+// A server that ignores SIGTERM, so stopping it has to come to SIGKILL.
+process.on("SIGTERM", () => {});
+writeFileSync(join(dirname(process.argv[1]), "server.pid"), String(process.pid));
 const args = process.argv.slice(2);
 const port = Number(args[args.indexOf("--port") + 1]);
 const model = args[args.indexOf("-m") + 1];
@@ -66,6 +71,7 @@ function concat(...parts: Float32Array[]): Float32Array {
 const config = (whisperCpp: EngineConfig["whisperCpp"]): EngineConfig => ({
   engine: "whisper.cpp",
   whisperCpp,
+  offline: false,
   model: "small",
   computeType: "int8",
   threads: 2,
@@ -93,6 +99,15 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function waitFor(check: () => boolean, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
@@ -117,7 +132,7 @@ describe.skipIf(process.platform === "win32")("whisper.cpp engine", () => {
     engine = new WhisperCppEngine({ dataDir, log: () => {}, retainWorker: () => ({ dispose: async () => {} }) });
     await engine.configure(
       config({
-        model: { url: `${server.registry}ggml-test.bin`, sha256: sha(model) },
+        model: { url: `${server.registry}ggml-test.bin`, sha256: sha(model), parts: [] },
         runtimes: { [platformKey()]: { url: `${server.registry}engine.zip`, sha256: sha(archive) } },
         authHeader: `${TOKEN_HEADER}: ${TOKEN}`,
       }),
@@ -164,6 +179,32 @@ describe.skipIf(process.platform === "win32")("whisper.cpp engine", () => {
     expect(paragraphs.length).toBe(2);
     expect(paragraphs[1]?.split("piece").length).toBe(3);
     await waitFor(() => partials.includes("settled"));
+
+    // Stopping does not wait on a server that ignores SIGTERM.
+    const pid = Number(readFileSync(join(dirname(warm.runtimePath as string), "server.pid"), "utf8"));
+    expect(alive(pid)).toBe(true);
+    await engine.dispose();
+    engine = null;
+    expect(alive(pid)).toBe(false);
+  }, 20_000);
+
+  it("fetches its files on bb's readiness poll, without a dictation or a warm-up", async () => {
+    const model = randomBytes(64 * 1024);
+    const archive = Buffer.from(zipSync({ "whisper-server": new TextEncoder().encode("#!/bin/sh\n") }));
+    server = await startDownloadServer({ "engine.zip": archive, "m.bin": model });
+    const dataDir = mkdtempSync(join(tmpdir(), "voice-ink-engine-"));
+    dirs.push(dataDir);
+    engine = new WhisperCppEngine({ dataDir, log: () => {}, retainWorker: () => ({ dispose: async () => {} }) });
+    await engine.configure(
+      config({
+        model: { url: `${server.registry}m.bin`, sha256: sha(model), parts: [] },
+        runtimes: { [platformKey()]: { url: `${server.registry}engine.zip`, sha256: sha(archive) } },
+        authHeader: `${TOKEN_HEADER}: ${TOKEN}`,
+      }),
+    );
+    expect(engine.ensureFiles().assetsReady).toBe(false);
+    await waitFor(() => engine?.status().assetsReady === true);
+    expect(server.storageLog.length).toBe(2);
   });
 
   it("reports a machine it has no program for instead of downloading", async () => {
@@ -171,7 +212,7 @@ describe.skipIf(process.platform === "win32")("whisper.cpp engine", () => {
     dirs.push(dataDir);
     engine = new WhisperCppEngine({ dataDir, log: () => {}, retainWorker: () => ({ dispose: async () => {} }) });
     await engine.configure(
-      config({ model: { url: "https://example.invalid/m.bin", sha256: "a".repeat(64) }, runtimes: {}, authHeader: null }),
+      config({ model: { url: "https://example.invalid/m.bin", sha256: "a".repeat(64), parts: [] }, runtimes: {}, authHeader: null }),
     );
     await engine.warmUp();
     await waitFor(() => engine?.status().state === "failed");
