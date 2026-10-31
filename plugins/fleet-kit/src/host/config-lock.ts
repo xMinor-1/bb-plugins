@@ -7,7 +7,7 @@
 // writes opencode.json, so Fleet Kit is the only plugin writer and this copy
 // evolves on its own; the lock still keeps two syncs, or a sync and a manual
 // reset, from writing at once.
-import { mkdir, readFile, writeFile, lstat, rename, rm } from "node:fs/promises";
+import { mkdir, readFile, writeFile, lstat, rename, rm, open, link } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -25,6 +25,43 @@ export interface LockOptions {
   /** Default: report the busy owner after two minutes. */
   timeoutMs?: number;
 }
+
+/** The raw text of `owner.json`: null when there is none, undefined when it cannot be read. */
+export async function ownerText(directory: string): Promise<string | null | undefined> {
+  try {
+    return await readFile(`${directory}/owner.json`, "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : undefined;
+  }
+}
+
+/**
+ * Write `owner.json` whole or not at all: a temporary file, synced, then
+ * linked into place. A process killed half way leaves a directory without an
+ * owner (which recovery handles), never an empty or truncated owner.json.
+ * The link fails if an owner.json is already there. A file system without
+ * hard links gets the plain exclusive write instead.
+ */
+async function writeOwner(directory: string, owner: LockOwner): Promise<void> {
+  const text = JSON.stringify(owner);
+  const temp = `${directory}/owner.json.${randomUUID()}.tmp`;
+  const handle = await open(temp, "wx", 0o600);
+  try {
+    await handle.writeFile(text);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await link(temp, `${directory}/owner.json`);
+  } catch (error) {
+    if (!NO_HARD_LINKS.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    await writeFile(`${directory}/owner.json`, text, { flag: "wx", mode: 0o600 });
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
+const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"]);
 
 export async function ownerAt(lock: string): Promise<LockOwner | null> {
   try {
@@ -62,6 +99,8 @@ export const owns = {
   /** The owner is still the one seen when the directory was judged stale. */
   same: (seen: LockOwner | null) => async (directory: string) =>
     JSON.stringify(await ownerAt(directory).catch(() => "unreadable")) === JSON.stringify(seen),
+  /** owner.json still reads exactly as it did (null: still absent), readable or not as JSON. */
+  text: (seen: string | null) => async (directory: string) => (await ownerText(directory)) === seen,
 };
 
 /**
@@ -104,9 +143,7 @@ export async function withRecoveryGuard<T>(lock: string, plugin: string, work: (
   const token = randomUUID();
   try {
     // Lets a user-triggered reset prove whether the guard's owner is alive.
-    await writeFile(`${recovery}/owner.json`, JSON.stringify({
-      plugin, pid: process.pid, host: hostname(), createdAt: new Date().toISOString(), token,
-    }), { flag: "wx", mode: 0o600 });
+    await writeOwner(recovery, { plugin, pid: process.pid, host: hostname(), createdAt: new Date().toISOString(), token });
   } catch (error) {
     await removeIfSame(recovery, mine, owns.nobody);
     throw error;
@@ -156,7 +193,7 @@ export async function acquireConfigLock(configPath: string, plugin: string, opti
     if (acquired) {
       const mine = await lstat(lock);
       const owner: LockOwner = { plugin, pid: process.pid, host: hostname(), createdAt: new Date().toISOString(), token: randomUUID() };
-      try { await writeFile(`${lock}/owner.json`, JSON.stringify(owner), { flag: "wx", mode: 0o600 }); } catch (error) {
+      try { await writeOwner(lock, owner); } catch (error) {
         // Remove only the directory this call created: if it was recovered as
         // stale meanwhile, the path may already hold another writer's lock.
         await removeIfSame(lock, mine, owns.nobody);

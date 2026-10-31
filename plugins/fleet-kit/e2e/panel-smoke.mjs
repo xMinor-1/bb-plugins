@@ -27,8 +27,10 @@ try {
   });
 
   await page.goto(`${base}/plugins/fleet-kit/status`, { waitUntil: "networkidle" });
-  // A fresh bb opens its first-run setup instead of the requested page.
+  // A fresh bb opens its first-run setup instead of the requested page; it
+  // can render after the network is idle, so wait for either screen.
   const skip = page.getByText("Skip setup");
+  await page.getByRole("button", { name: "Sync now" }).or(skip).first().waitFor({ timeout: 60_000 });
   if (await skip.isVisible()) {
     await skip.click();
     await page.goto(`${base}/plugins/fleet-kit/status`, { waitUntil: "networkidle" });
