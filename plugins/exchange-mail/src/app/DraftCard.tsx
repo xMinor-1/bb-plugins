@@ -1,0 +1,268 @@
+// A draft waiting for the person: who it goes to, what it says, and the Send
+// button. Send names the version shown here; if the draft changed meanwhile
+// (an agent revised it, someone edited it in Outlook) nothing is sent and the
+// new version is shown instead.
+import { useCallback, useEffect, useState } from "react";
+import { useBbNavigate, useRealtime } from "@get-bb/plugin-sdk/app";
+import type { Draft, MailAddress } from "../../contract";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Notice, errorText } from "./ui";
+import type { Rpc } from "./rpc";
+
+export type DraftTarget = { hostId: string } | { threadId: string };
+
+export const formatAddress = (a: MailAddress) => (a.name && a.name !== a.email ? `${a.name} <${a.email}>` : a.email);
+const formatList = (list: readonly MailAddress[]) => list.map(formatAddress).join(", ");
+const splitList = (text: string) =>
+  text
+    .split(/[;,\n]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+export const textareaClass =
+  "block w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
+type Outcome = { tone: "ok" | "error" | "warn"; text: string } | null;
+
+export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; target: DraftTarget; id: string; initial?: Draft; onDone?: () => void }) {
+  const navigate = useBbNavigate();
+  const [draft, setDraft] = useState<Draft | null | undefined>(initial);
+  const [hostId, setHostId] = useState<string | null>("hostId" in target ? target.hostId : null);
+  const [error, setError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<Outcome>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [showQuote, setShowQuote] = useState(false);
+
+  const load = useCallback(() => {
+    rpc.call("draft", { ...target, id }).then(
+      (result) => {
+        setDraft(result.draft);
+        setHostId(result.hostId);
+        setError(null);
+      },
+      (cause) => setError(errorText(cause)),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rpc, id, "hostId" in target ? target.hostId : target.threadId]);
+
+  useEffect(() => {
+    if (initial === undefined) load();
+  }, [load, initial]);
+  useRealtime("drafts-changed", (payload) => {
+    if ((payload as { id?: string } | null)?.id === id && outcome?.tone !== "ok") load();
+  });
+
+  const send = async () => {
+    if (!draft) return;
+    setBusy(true);
+    try {
+      const result = await rpc.call("sendDraft", { ...target, id, revision: draft.revision });
+      if (result.status === "sent") {
+        setOutcome({ tone: "ok", text: `Sent at ${new Date(result.at).toLocaleTimeString()}.` });
+        setConfirming(false);
+        onDone?.();
+      } else {
+        setOutcome({ tone: "warn", text: result.message });
+        setConfirming(false);
+        load();
+      }
+    } catch (cause) {
+      setOutcome({ tone: "error", text: errorText(cause) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const discard = async () => {
+    if (!window.confirm("Discard this draft? It is moved to Deleted Items in your mailbox.")) return;
+    setBusy(true);
+    try {
+      await rpc.call("discardDraft", { ...target, id });
+      setOutcome({ tone: "ok", text: "Discarded." });
+      onDone?.();
+    } catch (cause) {
+      setOutcome({ tone: "error", text: errorText(cause) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (error) return <Notice tone="error">Draft {id}: {error}</Notice>;
+  if (outcome?.tone === "ok") return <Notice tone="ok">{draft?.subject ? `“${draft.subject}”: ` : ""}{outcome.text}</Notice>;
+  if (draft === undefined) return <Notice tone="info">Loading draft…</Notice>;
+  if (draft === null) return <Notice tone="info">Draft {id} is no longer waiting: it was sent, discarded or deleted in Outlook.</Notice>;
+
+  const quote = draft.body.startsWith(draft.text) ? draft.body.slice(draft.text.length).trim() : "";
+  const shown = quote ? draft.text : draft.body;
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border bg-card p-4 text-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-medium">
+          {draft.kind === "new" ? "New message" : draft.kind === "replyAll" ? "Reply to all" : "Reply"} — draft, not sent
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {draft.source === "agent" ? "Prepared by an agent" : "Your draft"}
+          {draft.threadId && "hostId" in target ? (
+            <>
+              {" "}
+              in{" "}
+              <button type="button" className="underline underline-offset-2" onClick={() => navigate.toThread(draft.threadId!)}>
+                its thread
+              </button>
+            </>
+          ) : null}
+        </p>
+      </div>
+
+      {editing && hostId ? (
+        <DraftEditor
+          rpc={rpc}
+          hostId={hostId}
+          draft={draft}
+          onSaved={(next) => {
+            setDraft(next);
+            setEditing(false);
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      ) : (
+        <>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            <dt className="text-muted-foreground">To</dt>
+            <dd className="break-words">{formatList(draft.to) || <span className="text-destructive">nobody</span>}</dd>
+            {draft.cc.length ? (
+              <>
+                <dt className="text-muted-foreground">Cc</dt>
+                <dd className="break-words">{formatList(draft.cc)}</dd>
+              </>
+            ) : null}
+            <dt className="text-muted-foreground">Subject</dt>
+            <dd className="break-words">{draft.subject || "(no subject)"}</dd>
+          </dl>
+          <div className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 leading-relaxed">{shown}</div>
+          {quote ? (
+            <div>
+              <button type="button" className="text-xs text-muted-foreground underline underline-offset-2" onClick={() => setShowQuote((v) => !v)}>
+                {showQuote ? "Hide the quoted message" : "Show the quoted message, sent below the text"}
+              </button>
+              {showQuote ? <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">{quote}</div> : null}
+            </div>
+          ) : null}
+          {outcome ? <Notice tone={outcome.tone}>{outcome.text}</Notice> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => setConfirming(true)} disabled={busy || draft.to.length === 0}>
+              Send…
+            </Button>
+            <Button variant="outline" onClick={() => setEditing(true)} disabled={busy || !hostId}>
+              Edit
+            </Button>
+            <Button variant="ghost" onClick={() => void discard()} disabled={busy}>
+              Discard
+            </Button>
+          </div>
+        </>
+      )}
+
+      <Dialog open={confirming} onOpenChange={(open) => !busy && setConfirming(open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send this message?</DialogTitle>
+            <DialogDescription>It goes out from your mailbox exactly as shown and cannot be called back.</DialogDescription>
+          </DialogHeader>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+            <dt className="text-muted-foreground">To</dt>
+            <dd className="break-words">{formatList(draft.to)}</dd>
+            {draft.cc.length ? (
+              <>
+                <dt className="text-muted-foreground">Cc</dt>
+                <dd className="break-words">{formatList(draft.cc)}</dd>
+              </>
+            ) : null}
+            <dt className="text-muted-foreground">Subject</dt>
+            <dd className="break-words">{draft.subject || "(no subject)"}</dd>
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            {draft.to.length + draft.cc.length} recipient{draft.to.length + draft.cc.length === 1 ? "" : "s"}, {shown.trim().length} characters of text
+            {quote ? " plus the quoted message" : ""}.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirming(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button onClick={() => void send()} disabled={busy}>
+              {busy ? "Sending…" : "Send now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function DraftEditor({ rpc, hostId, draft, onSaved, onCancel }: { rpc: Rpc; hostId: string; draft: Draft; onSaved: (draft: Draft) => void; onCancel: () => void }) {
+  const [to, setTo] = useState(formatList(draft.to));
+  const [cc, setCc] = useState(formatList(draft.cc));
+  const [subject, setSubject] = useState(draft.subject);
+  const [text, setText] = useState(draft.kind === "new" ? draft.body : draft.text);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const toChanged = to !== formatList(draft.to);
+      const ccChanged = cc !== formatList(draft.cc);
+      const next = await rpc.call("saveDraft", {
+        hostId,
+        kind: draft.kind,
+        ...(draft.replyTo ? { replyTo: draft.replyTo.ref } : {}),
+        // Replies keep the recipients Exchange chose unless the person changed them.
+        ...(draft.kind === "new" || toChanged || ccChanged ? { to: splitList(to), cc: splitList(cc) } : {}),
+        subject,
+        body: text,
+        replaces: draft.id,
+      });
+      onSaved(next);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <label className="block space-y-1">
+        <span className="text-muted-foreground">To</span>
+        <Input value={to} onChange={(event) => setTo(event.target.value)} spellCheck={false} />
+      </label>
+      <label className="block space-y-1">
+        <span className="text-muted-foreground">Cc</span>
+        <Input value={cc} onChange={(event) => setCc(event.target.value)} spellCheck={false} />
+      </label>
+      <label className="block space-y-1">
+        <span className="text-muted-foreground">Subject</span>
+        <Input value={subject} onChange={(event) => setSubject(event.target.value)} />
+      </label>
+      <label className="block space-y-1">
+        <span className="text-muted-foreground">{draft.kind === "new" ? "Text" : "Text above the quoted message"}</span>
+        <textarea className={textareaClass} rows={10} value={text} onChange={(event) => setText(event.target.value)} />
+      </label>
+      {error ? <Notice tone="error">{error}</Notice> : null}
+      <div className="flex gap-2">
+        <Button onClick={() => void save()} disabled={saving || text.trim() === ""}>
+          {saving ? "Saving…" : "Save draft"}
+        </Button>
+        <Button variant="ghost" onClick={onCancel} disabled={saving}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
