@@ -26,6 +26,9 @@ const texts = defineMessages(
 /** Wait this long after the last key before asking the address book. */
 export const SUGGEST_DELAY_MS = 300;
 const SHOWN = 8;
+/** Answers kept per field, so typing back and forth does not ask Exchange again. */
+const CACHE_MS = 60_000;
+const CACHE_SIZE = 50;
 
 export const personDetails = (person: Person) => [person.title, person.department].filter((part): part is string => Boolean(part)).join(", ");
 
@@ -58,22 +61,35 @@ export function RecipientsInput({
   const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const asked = useRef(0);
+  const cache = useRef(new Map<string, { at: number; people: Person[] }>());
   const { head, typing } = lastRecipient(value);
   const query = typing.trim();
 
   useEffect(() => {
     const mine = ++asked.current;
-    // An address already written as "Name <address>" or in quotes is finished.
-    if (query.length < 2 || /[<>"]/.test(query)) {
+    // Only while the person is in the field; an address already written as "Name <address>" or in quotes is finished.
+    if (!focused || query.length < 2 || /[<>"]/.test(query)) {
       setPeople([]);
       return;
     }
+    const key = `${hostId}\n${query.toLowerCase()}`;
+    const show = (found: Person[]) => {
+      setPeople(found.slice(0, SHOWN));
+      setActive(0);
+    };
+    const known = cache.current.get(key);
+    if (known && Date.now() - known.at < CACHE_MS) {
+      show(known.people);
+      return;
+    }
     const timer = setTimeout(() => {
-      rpc.call("findPeople", { hostId, query }).then(
+      // The server stops this field's previous search when this one starts.
+      rpc.call("findPeople", { hostId, query, field: id }).then(
         (found) => {
-          if (asked.current !== mine) return;
-          setPeople(found.people.slice(0, SHOWN));
-          setActive(0);
+          cache.current.delete(key);
+          cache.current.set(key, { at: Date.now(), people: found.people });
+          if (cache.current.size > CACHE_SIZE) cache.current.delete(cache.current.keys().next().value!);
+          if (asked.current === mine) show(found.people);
         },
         () => {
           if (asked.current === mine) setPeople([]);
@@ -81,7 +97,7 @@ export function RecipientsInput({
       );
     }, SUGGEST_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [rpc, hostId, query]);
+  }, [rpc, hostId, query, focused, id]);
 
   const shown = focused && !dismissed && people.length > 0;
 

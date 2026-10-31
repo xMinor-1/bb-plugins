@@ -11,8 +11,8 @@ confirm in a system window on your computer.
   *To send* — every draft prepared in bb that waits for you.
 - In a thread, an agent's reply shows the draft as a card with its Send button.
 - The address book: names from the organization's directory are suggested in
-  To and Cc as you type; an agent that finds several people with a similar
-  name asks you to choose in the thread instead of picking one.
+  To and Cc as you type; when an agent finds several people with a similar
+  name, a card in the thread shows them for you to choose.
 - Mail stays in Exchange. bb keeps no copy; drafts live in your Drafts folder,
   so you also see them in Outlook.
 
@@ -75,13 +75,23 @@ Open **Mail** in the sidebar → **Settings**.
   `Name <address>` in place of what you typed; addresses typed by hand work as
   before. A name with a comma, like `Surname, Name`, stays one recipient.
 - `mail_find_person` gives agents the same search. One match comes back at
-  once. When several people match, the agent does not choose: bb shows a card
-  in the thread with everyone found, the agent waits, and only the person you
-  pick goes back to it. **None of them** tells the agent to ask you again.
+  once. When several people match (or the address book has more than it
+  listed), bb shows a card in the thread with everyone found, the agent is told
+  to wait, and the person chosen on the card goes back to it. **None of them**
+  tells the agent to ask you again.
 - The address book is the organization's data, so it is guarded like mail:
   only allowed models get the tool, a thread that used it is marked the same
   way, and the choice is checked against the allow-list again before it
-  reaches the agent.
+  reaches the agent. Agents get name, address, job title, department and
+  company; the office is shown only to you.
+
+**What the card does not guarantee.** The card shows the choice to you; it
+cannot prove that you made it. bb tells a plugin nothing about who answered a
+card, and the `bb` CLI can read a waiting card (`bb thread interactions show`
+prints everyone found) and answer it (`bb thread interactions respond`). An
+agent that may run shell commands can therefore see the list and pick someone
+itself. What protects you is the send: nothing leaves without your click and
+the system window, and both list every recipient.
 
 ## Sending is always a person's click
 

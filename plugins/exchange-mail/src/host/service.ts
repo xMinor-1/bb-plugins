@@ -22,6 +22,7 @@ import type {
 } from "../../contract.js";
 import { ATTACHMENT_MAX_BYTES } from "../shared/limits.js";
 import { normalizeText } from "../shared/mail-text.js";
+import { isAddress } from "../shared/recipients.js";
 import { oneAtATime, systemConfirmer, type SendConfirmer, type SendSummary } from "./confirm.js";
 import { curlTransport, type HttpAuth, type Transport } from "./curl.js";
 import { EwsClient, normalizeEwsUrl } from "./ews/client.js";
@@ -97,7 +98,6 @@ export function refFor(itemId: string): string {
   return `m${createHash("sha256").update(itemId).digest("base64url").replace(/[-_]/g, "").slice(0, 10).toLowerCase()}`;
 }
 
-const ADDRESS = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
 
 /** "Name <email>" or "email". */
 export function parseRecipient(input: string): Address {
@@ -105,7 +105,7 @@ export function parseRecipient(input: string): Address {
   const angle = /^(.*)<([^<>]+)>$/.exec(text);
   const email = (angle ? angle[2]! : text).trim();
   const name = angle ? angle[1]!.trim().replace(/^"(.*)"$/, "$1").trim() : "";
-  if (!ADDRESS.test(email)) throw new UserError(`"${input}" is not an email address`);
+  if (!isAddress(email)) throw new UserError(`"${input}" is not an email address`);
   return { name: name || null, email };
 }
 
@@ -714,7 +714,7 @@ export class MailService {
         }
         case "people": {
           const found = await this.findPeople(input.query, signal);
-          return { text: formatPeople(input.query, found), isError: false, draftId: null, people: found.people };
+          return { text: formatPeople(input.query, found), isError: false, draftId: null, people: found.people, more: found.more };
         }
         case "draft": {
           let kind: Draft["kind"] = input.forward ? "forward" : input.replyTo ? (input.replyAll ? "replyAll" : "reply") : "new";

@@ -10,6 +10,12 @@ export interface Recipient {
 
 const SEPARATORS = new Set([",", ";", "\n"]);
 
+/** The longest address taken; RFC 5321 allows 254 characters of path, 320 is generous. */
+export const ADDRESS_MAX = 320;
+/** One address as the host accepts it. Check the length first: the pattern is quadratic on long input. */
+export const ADDRESS = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
+export const isAddress = (value: string) => value.length <= ADDRESS_MAX && ADDRESS.test(value);
+
 /** Where each recipient starts, scanning once: separators outside quotes and <…>. */
 function separatorsOf(text: string): number[] {
   const at: number[] = [];

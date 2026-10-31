@@ -15,9 +15,10 @@ const wrap = (inner: string, status = "Success", code = "NoError") =>
   `</m:ResolveNamesResponseMessage></m:ResponseMessages></m:ResolveNamesResponse></s:Body></s:Envelope>`;
 
 describe("ResolveNames", () => {
-  it("asks for full contact data, the address book first, the query as plain ASCII", () => {
+  it("asks for full contact data without photos, the address book first, the query as plain ASCII", () => {
     const request = resolveNames('Денис <"&>');
-    expect(request).toContain('<m:ResolveNames ReturnFullContactData="true" SearchScope="ActiveDirectoryContacts" ContactDataShape="AllProperties">');
+    expect(request).toContain('<m:ResolveNames ReturnFullContactData="true" SearchScope="ActiveDirectoryContacts">');
+    expect(request).not.toContain("ContactDataShape");
     expect(request).toContain("<m:UnresolvedEntry>&#x414;&#x435;&#x43d;&#x438;&#x441; &lt;&quot;&amp;&gt;</m:UnresolvedEntry>");
   });
 
@@ -85,11 +86,11 @@ describe("recipients in a field", () => {
 });
 
 const ALLOWED = { providerId: "acp-opencode", model: "corp/large" };
-const person = (name: string, email: string, title: string | null = null): Person => ({ name, email, title, department: "Platform", company: null, office: null, kind: "person" });
+const person = (name: string, email: string, title: string | null = null): Person => ({ name, email, title, department: "Platform", company: null, office: "Room 9", kind: "person" });
 const DENISES = [person("Denis Orlov", "denis.orlov@example.test", "Engineer"), person("Denis Petrov", "denis.petrov@example.test", "Accountant")];
 
-async function setup(people: Person[]) {
-  const hostCalls: { method: string; input: unknown }[] = [];
+async function setup(people: Person[], more = false) {
+  const hostCalls: { method: string; input: unknown; signal?: AbortSignal }[] = [];
   const { bb, harness } = createFakePluginHost({
     pluginId: "exchange-mail",
     settings: { allowedModels: "acp-opencode corp/*", ewsUrl: "" },
@@ -99,9 +100,17 @@ async function setup(people: Person[]) {
       threads: { get: async ({ threadId }: { threadId: string }) => makeThreadResponse({ id: threadId, environmentId: "env_mac", providerId: "acp-opencode", sourceThreadId: null }) },
       environments: { get: async () => ({ id: "env_mac", hostId: "host_mac" }) },
     } as never,
-    experimental_callHostRpc: async ({ method, input }) => {
-      hostCalls.push({ method, input });
-      if (method === "tool") return { text: people.length === 1 ? `One match: ${people[0]!.name}` : `${people.length} matches`, isError: false, draftId: null, people };
+    experimental_callHostRpc: async ({ method, input, signal }) => {
+      hostCalls.push({ method, input, signal });
+      if (method === "tool") return { text: people.length === 1 ? `One match: ${people[0]!.name}` : `${people.length} matches`, isError: false, draftId: null, people, more };
+      if (method === "findPeople") {
+        // A search answers when the test says so, or fails when it is stopped.
+        return new Promise((resolve, reject) => {
+          if (signal?.aborted) return reject(new Error("stopped"));
+          signal?.addEventListener("abort", () => reject(new Error("stopped")), { once: true });
+          setTimeout(() => resolve({ people, more }), 50);
+        });
+      }
       return {};
     },
   });
@@ -122,19 +131,29 @@ describe("mail_find_person", () => {
     const result = await s.find("Orlov");
     expect(result.content[0]!.text).toBe("One match: Denis Orlov");
     expect(s.harness.pendingInteractions).toHaveLength(0);
-    expect(s.hostCalls).toEqual([{ method: "tool", input: { tool: "people", query: "Orlov" } }]);
+    expect(s.hostCalls.map(({ method, input }) => ({ method, input }))).toEqual([{ method: "tool", input: { tool: "people", query: "Orlov" } }]);
   });
 
   it("lets the person choose among several, and gives the agent only the one chosen", async () => {
     const s = await setup(DENISES);
     const running = s.find("Denis");
     const card = await s.card();
-    expect(card).toMatchObject({ threadId: "th_1", rendererId: PERSON_CHOICE, payload: { query: "Denis", people: DENISES } });
+    expect(card).toMatchObject({ threadId: "th_1", rendererId: PERSON_CHOICE, payload: { query: "Denis", people: DENISES, more: false } });
     s.harness.submitInteraction(card.id, { email: "DENIS.PETROV@example.test", lang: "ru" });
     const result = await running;
     expect(result.isError).toBeFalsy();
+    // No office: that is for the person's eyes.
     expect(result.content[0]!.text).toBe("The user chose: Denis Petrov <denis.petrov@example.test> — Accountant, Platform");
     expect(result.content[0]!.text).not.toContain("Orlov");
+  });
+
+  it("asks the person even about one match when the address book has more than it listed", async () => {
+    const s = await setup([DENISES[0]!], true);
+    const running = s.find("Den");
+    const card = await s.card();
+    expect(card.payload).toMatchObject({ more: true, people: [{ email: "denis.orlov@example.test" }] });
+    s.harness.submitInteraction(card.id, { email: "denis.orlov@example.test" });
+    expect((await running).content[0]!.text).toMatch(/^The user chose: Denis Orlov/);
   });
 
   it("accepts only a person it offered: anything else counts as none of them", async () => {
@@ -162,5 +181,23 @@ describe("mail_find_person", () => {
     const result = await running;
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).not.toContain("denis");
+  });
+});
+
+describe("suggestions for the panel", () => {
+  it("stops the previous search of the same field on the host when a newer one starts", async () => {
+    const s = await setup(DENISES);
+    const first = s.harness.callRpc("findPeople", { hostId: "host_mac", query: "De", field: "to-1" });
+    const second = s.harness.callRpc("findPeople", { hostId: "host_mac", query: "Den", field: "to-1" });
+    const other = s.harness.callRpc("findPeople", { hostId: "host_mac", query: "Bo", field: "cc-1" });
+    await expect(first).rejects.toThrow();
+    await expect(second).resolves.toMatchObject({ people: DENISES });
+    await expect(other).resolves.toMatchObject({ more: false });
+    const searches = s.hostCalls.filter((call) => call.method === "findPeople");
+    expect(searches.map((call) => [call.input, call.signal?.aborted])).toEqual([
+      [{ query: "De" }, true],
+      [{ query: "Den" }, false],
+      [{ query: "Bo" }, false],
+    ]);
   });
 });

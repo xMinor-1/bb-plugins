@@ -14,8 +14,9 @@ with agents that help answer mail but never send it on their own.
 - **In threads**: an agent that drafted a reply shows it as a card with the
   same Send button.
 - **Address book**: To and Cc suggest colleagues by name with job title and
-  department. When an agent finds several people with a similar name, it asks
-  you to choose in the thread instead of guessing.
+  department. When an agent finds several people with a similar name, a card
+  in the thread shows them for you to choose; every recipient is shown again
+  before you send.
 
 ## Agents read; people send
 

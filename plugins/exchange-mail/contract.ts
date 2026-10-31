@@ -222,6 +222,8 @@ export const toolOutputSchema = z
     draftId: z.string().nullable(),
     /** The people tool: everyone found, for the person to choose from when there is more than one. */
     people: z.array(personSchema).optional(),
+    /** The people tool: the address book has more matches than it listed. */
+    more: z.boolean().optional(),
   })
   .strict();
 export type ToolOutput = z.infer<typeof toolOutputSchema>;

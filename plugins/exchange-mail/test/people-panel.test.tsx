@@ -41,6 +41,11 @@ describe("choosing a person in the thread", () => {
     expect((screen.getByText("Denis Orlov").closest("button") as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("says when the address book has more matches than it shows", () => {
+    renderChoice({ query: "Den", people: DENISES, more: true });
+    expect(screen.getByText(/The address book has more matches/)).toBeTruthy();
+  });
+
   it("can say none of them", async () => {
     const submitted = renderChoice({ query: "Den", people: DENISES });
     fireEvent.click(screen.getByRole("button", { name: "None of them" }));
@@ -56,9 +61,11 @@ describe("choosing a person in the thread", () => {
 describe("suggestions in the To field", () => {
   function renderField(initial = "") {
     const asked: string[] = [];
+    const fields = new Set<string>();
     const handlers = {
-      findPeople: ({ query }: { query: string }) => {
+      findPeople: ({ query, field }: { query: string; field?: string }) => {
         asked.push(query);
+        if (field) fields.add(field);
         return { people: DENISES.filter((p) => p.name.toLowerCase().startsWith(query.toLowerCase())), more: false };
       },
     } as unknown as PluginRpcTestHandlers<typeof rpcContract>;
@@ -79,7 +86,7 @@ describe("suggestions in the To field", () => {
       );
     }
     renderSlot({ component: Harness }, {}, { rpc: handlers });
-    return { asked, value: () => value };
+    return { asked, fields, value: () => value };
   }
 
   it("suggests people for the name being typed and puts the chosen one in its place", async () => {
@@ -104,6 +111,27 @@ describe("suggestions in the To field", () => {
     fireEvent.change(input, { target: { value: "Des" } });
     fireEvent.click(await screen.findByRole("option", { name: /Design team/ }));
     expect(field.value()).toBe("Design team <design@example.test>, ");
+  });
+
+  it("names its field, so a newer search stops the older one, and asks again only after a minute", async () => {
+    const field = renderField();
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "Denis" } });
+    await screen.findByRole("option", { name: /Denis Petrov/ });
+    fireEvent.change(input, { target: { value: "Des" } });
+    await screen.findByRole("option", { name: /Design team/ });
+    fireEvent.change(input, { target: { value: "Denis" } });
+    await screen.findByRole("option", { name: /Denis Petrov/ });
+    expect(field.asked).toEqual(["Denis", "Des"]);
+    expect(field.fields.size).toBe(1);
+  });
+
+  it("asks nothing while the field is not in use", async () => {
+    const field = renderField();
+    fireEvent.change(screen.getByRole("combobox", { name: "To" }), { target: { value: "Denis" } });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(field.asked).toEqual([]);
   });
 
   it("asks nothing for one letter or for a recipient already written out", async () => {

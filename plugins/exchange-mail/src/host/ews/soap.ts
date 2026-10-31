@@ -224,10 +224,15 @@ export function getFolder(folder: FolderName): string {
  * People whose name or address starts like the query, as the To box of Outlook
  * finds them: the organization's address book first, then the person's own
  * contacts, with job title and department. Exchange returns at most 100.
+ *
+ * No ContactDataShape: its Default set has no department or office, and
+ * AllProperties adds every person's directory photo. Without the attribute
+ * Exchange returns the full contact data it always has, job title, department
+ * and office included.
  */
 export function resolveNames(query: string): string {
   return envelope(
-    `<m:ResolveNames ReturnFullContactData="true" SearchScope="ActiveDirectoryContacts" ContactDataShape="AllProperties">` +
+    `<m:ResolveNames ReturnFullContactData="true" SearchScope="ActiveDirectoryContacts">` +
       `<m:UnresolvedEntry>${xml(query)}</m:UnresolvedEntry></m:ResolveNames>`,
   );
 }

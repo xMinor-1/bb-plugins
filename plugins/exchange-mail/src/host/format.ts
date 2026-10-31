@@ -104,6 +104,7 @@ export function formatConversation(ref: string, messages: readonly MessageSummar
 export function formatPeople(query: string, found: People): string {
   if (found.people.length === 0) return `Nobody in the address book matches "${query}". Try the surname or the start of the address, or ask the user.`;
   const lines = found.people.map((person) => `- ${formatPerson(person)}`);
-  const head = found.people.length === 1 ? `One match for "${query}":` : `${found.people.length}${found.more ? "+" : ""} matches for "${query}":`;
-  return `${head}\n${lines.join("\n")}`;
+  const head = found.people.length === 1 && !found.more ? `One match for "${query}":` : `${found.people.length}${found.more ? "+" : ""} matches for "${query}":`;
+  const more = found.more ? "\nThe address book has more matches than listed: search with a fuller name." : "";
+  return `${head}\n${lines.join("\n")}${more}`;
 }

@@ -1,7 +1,9 @@
-// The card in a thread where the person chooses who an agent meant: when an
-// address book search finds several people, the agent does not pick one. The
-// choice goes back to the agent as the result of its search (server.ts,
-// mail_find_person); "None of them" tells it to ask.
+// The card in a thread where the person chooses who an agent meant, when an
+// address book search finds several people. The choice goes back to the agent
+// as the result of its search (server.ts, mail_find_person); "None of them"
+// tells it to ask. The card shows the choice to the person; it cannot prove
+// who answered (bb lets the CLI answer it too). The send window, which lists
+// every recipient, is the last check.
 import { useState } from "react";
 import type { PluginPendingInteractionProps } from "@get-bb/plugin-sdk/app";
 import type { Person } from "../../contract";
@@ -14,7 +16,8 @@ import { Notice, errorText } from "./ui";
 const texts = defineMessages(
   {
     title: (query: string) => `Several people match “${query}”. Who do you mean?`,
-    hint: "The agent waits for your choice and does not pick anyone itself.",
+    hint: "The agent waits for your choice. You will see every recipient again before anything is sent.",
+    more: "The address book has more matches. If the person is not here, choose “None of them” and give the agent a fuller name.",
     none: "None of them",
     group: "group",
     contact: "your contact",
@@ -22,7 +25,8 @@ const texts = defineMessages(
   },
   {
     title: (query) => `По запросу «${query}» нашлось несколько человек. Кого вы имеете в виду?`,
-    hint: "Агент ждёт вашего выбора и сам никого не выбирает.",
+    hint: "Агент ждёт вашего выбора. Перед отправкой вы ещё раз увидите всех адресатов.",
+    more: "В адресной книге есть и другие совпадения. Если нужного человека нет, нажмите «Никто из них» и назовите агенту имя полнее.",
     none: "Никто из них",
     group: "группа",
     contact: "ваш контакт",
@@ -44,7 +48,7 @@ export function readChoice(payload: unknown): PersonChoicePayload | null {
     const kind = p.kind === "group" || p.kind === "contact" ? p.kind : "person";
     return [{ name: p.name, email: p.email, title: text(p.title), department: text(p.department), company: text(p.company), office: text(p.office), kind }];
   });
-  return valid.length ? { query, people: valid } : null;
+  return valid.length ? { query, people: valid, more: (payload as Record<string, unknown>).more === true } : null;
 }
 
 export function PersonChoice({ interaction, submit }: PluginPendingInteractionProps) {
@@ -92,6 +96,7 @@ export function PersonChoice({ interaction, submit }: PluginPendingInteractionPr
           );
         })}
       </ul>
+      {choice.more ? <p className="text-xs text-muted-foreground">{t.more}</p> : null}
       <Button size="sm" variant="ghost" disabled={busy} onClick={() => void choose(null)}>
         {t.none}
       </Button>

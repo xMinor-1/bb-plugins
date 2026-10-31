@@ -1,6 +1,7 @@
 // Reading EWS SOAP answers. Namespaces are dropped; every value stays a string.
 import { XMLParser } from "fast-xml-parser";
 import { normalizeText } from "../../shared/mail-text.js";
+import { isAddress } from "../../shared/recipients.js";
 import type { Address, ItemRef } from "./soap.js";
 
 export class EwsError extends Error {
@@ -361,10 +362,10 @@ export interface ParsedPerson {
 
 const GROUP_TYPES = new Set(["publicdl", "privatedl", "groupmailbox"]);
 
-/** An SMTP address from "SMTP:a@b", "smtp:a@b" or "a@b"; anything else (X.500 and the like) is not one. */
+/** An SMTP address from "SMTP:a@b", "smtp:a@b" or "a@b", checked as the host checks recipients; anything else (X.500 and the like) is not one. */
 function smtp(value: string): string | null {
   const address = value.trim().replace(/^smtp:/i, "");
-  return /^[^\s@<>]+@[^\s@<>]+$/.test(address) ? address : null;
+  return isAddress(address) ? address : null;
 }
 
 /** ResolveNames: no match is an empty list, several are a Warning with all of them. */
