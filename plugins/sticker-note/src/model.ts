@@ -71,7 +71,10 @@ export const parseResultSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("command"),
     action: actionSchema,
+    /** The first card; "open" shows it. */
     targetId: z.string(),
+    /** Every card the command applies to ("закрой задачи 6 и 1"), targetId first. */
+    targetIds: z.array(z.string()).min(1),
     /** For "move": the new due date; null clears it. */
     due: dueSchema.nullable().optional(),
     /** For "importance". */

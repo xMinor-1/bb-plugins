@@ -200,6 +200,23 @@
 }
 .sn-card.imp-high .sn-num { margin-right: 8px; }
 .sn-card.done .sn-num { margin-top: 0; }
+/* Quick actions: shown over the number while the card is hovered or focused. */
+.sn-quick {
+  position: absolute; top: 4px; right: 5px; display: flex; gap: 1px; padding: 1px; border-radius: 7px;
+  background: inherit; opacity: 0; pointer-events: none; transition: opacity 0.12s;
+}
+.sn-card.done .sn-quick { top: 2px; background: var(--sn-bg); }
+.sn-card.imp-high .sn-quick { right: 16px; }
+.sn-card:hover .sn-quick, .sn-card:focus-within .sn-quick { opacity: 1; pointer-events: auto; }
+.sn-card:hover .sn-num, .sn-card:focus-within .sn-num { visibility: hidden; }
+.sn-quick button {
+  width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--sn-muted); cursor: pointer;
+}
+.sn-quick button:hover, .sn-quick button:focus-visible { background: var(--sn-seg-on); color: var(--sn-fg); outline: none; }
+.sn-quick button.on { color: var(--sn-note); }
+.sn-quick button.del:hover, .sn-quick button.del:focus-visible { color: var(--sn-overdue); }
+@media (hover: none) { .sn-quick { display: none; } }
 .sn-d-num { color: var(--sn-faint); font-variant-numeric: tabular-nums; margin-right: 2px; }
 .sn-done-at { display: block; font-size: 11.5px; color: var(--sn-faint); font-variant-numeric: tabular-nums; margin-bottom: 1px; }
 .sn-when { display: flex; align-items: center; gap: 8px; color: var(--sn-muted); font-size: 12px; margin-bottom: 1px; }

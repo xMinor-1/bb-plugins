@@ -14,6 +14,7 @@ The interface is in English and Russian, with a switch in the board's title bar.
   *Soon* (the next 7 days), *Later* (further out or no date) and *Done*.
   Important cards carry a folded yellow corner, low-priority ones are dimmed.
   Drag a card to another column to reschedule it; the round check marks it done.
+  Hovering a card shows small buttons: move to tomorrow, mark important, delete.
 - **Dictation from anywhere in bb.** Press the hotkey (Alt+S, ⌥S on a Mac, set in
   the plugin settings) and speak; press it again to add. Pressed outside the
   board, it opens the board and starts recording. The microphone button works
@@ -22,12 +23,15 @@ The interface is in English and Russian, with a switch in the board's title bar.
   - New tasks: "Tomorrow at 10 call the service about the MOT", "On Thursday renew
     the car insurance sravni.ru", "Someday buy vacuum filters", "Вечером в полвосьмого
     забрать посылку", "В понедельник до обеда посмотреть презентацию" (lunch is
-    13:00, the end of the day 18:00), "12 декабря подать документы, это важно".
+    13:00, the end of the day 18:00), "12 декабря подать документы, это важно",
+    "сходить поесть в 16 15" (a pause instead of a colon is still 16:15).
   - Commands: "mark the parcel done", "move the service call to Wednesday at 12",
     "postpone the PRD", "make the passport urgent", "delete the filters",
     "reopen the leads report". When two cards match, the board asks which one.
   - Every sticker has a number, so "move sticker 112 to done", "закрой задачу 12"
-    or "открой стикер 7" need no wording at all.
+    or "открой стикер 7" need no wording at all. One command can name several:
+    "закрой задачи 6 и 1", "перенеси 3, 5 и 8 на понедельник", "close the
+    presentation and the parcel".
   - "Close the task" with no name acts on the card you dealt with last (created,
     opened, moved) in the past 15 minutes, or on the only open card.
   - One line under the input says what was done, with the sticker's number and
@@ -75,7 +79,8 @@ works by typing and says how to turn dictation on.
 - Commands find their card by its number, or by the words of the phrase against
   open card titles (finished ones for "reopen"). A tie is reported instead of
   guessed. Numbers are never reused.
-- Undo keeps the last 30 board states in the server's memory.
+- Undo keeps the last 30 actions in the server's memory, each with only the
+  cards it touched, so undoing one never reverts later edits to other cards.
 - Inside a card, `src/compose.ts` decides between a note and an agent request
   by the verb: "find", "compare", "prepare", "check", "ask the agent" start a chat.
 

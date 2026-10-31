@@ -57,6 +57,12 @@ describe("when", () => {
     ["в будущий понедельник", "2026-11-02", null],
     ["в два раза быстрее", null, null],
     ["Dec 12", "2026-12-12", null],
+    ["в 16 15", "2026-10-31", "16:15"],
+    ["в 9 30", "2026-11-01", "09:30"],
+    ["к 4 15 вечера", "2026-10-31", "16:15"],
+    ["в 16 часов 15 минут", "2026-10-31", "16:15"],
+    ["завтра в 8 05 утра", "2026-11-01", "08:05"],
+    ["15 октября в 10 30", "2027-10-15", "10:30"],
   ])("%s", (text, date, time) => {
     const w = parseWhen(text, now);
     expect(w.date).toBe(date);
@@ -74,6 +80,11 @@ describe("when", () => {
 });
 
 describe("new tasks", () => {
+  it("a clock time said with a pause keeps its minutes", () => {
+    const r = parse("сходить поесть в 16 15");
+    expect(r).toMatchObject({ type: "create", draft: { title: "Сходить поесть", due: { date: "2026-10-31", time: "16:15" } } });
+  });
+
   it("prototype phrase 1", () => {
     const r = parse("Сегодня в 16:00 отправить Ирине презентацию по тарифам, это важно");
     expect(r).toMatchObject({

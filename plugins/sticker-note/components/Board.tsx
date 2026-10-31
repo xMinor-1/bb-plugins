@@ -12,11 +12,11 @@ import { errorText, useCards, type CardsRpc } from "../hooks/useCards";
 import { useNow } from "../hooks/useNow";
 import { filterStore, useStore, type Filter } from "../hooks/stores";
 import { COLUMNS, columnOf, layoutToday, sortColumn } from "../src/board";
-import { fullDay, localNow, type LocalNow } from "../src/dates";
+import { addDays, fullDay, localNow, type LocalNow } from "../src/dates";
 import { messages } from "../src/messages";
 import type { Card, Column } from "../src/model";
 import { CaptureBar } from "./CaptureBar";
-import { CardView, DRAG_TYPE } from "./CardView";
+import { CardView, DRAG_TYPE, type QuickAction } from "./CardView";
 import { Detail } from "./Detail";
 import { columnName, type Messages } from "./format";
 import { Icon } from "./icons";
@@ -144,7 +144,7 @@ export function BoardPage(_props: PluginNavPanelProps) {
   const capture = async (text: string, spoken: boolean) => {
     const at = localNow();
     const recent = context.current && Date.now() - context.current.at < CONTEXT_MS ? context.current.id : null;
-    const { parse, card, undoToken } = await rpc.call("capture", { text, now: at, spoken, contextId: recent });
+    const { parse, card, cards: touched, undoToken } = await rpc.call("capture", { text, now: at, spoken, contextId: recent });
     const t = messagesNow(messages);
     const list = cardsRef.current ?? [];
     switch (parse.type) {
@@ -157,9 +157,13 @@ export function BoardPage(_props: PluginNavPanelProps) {
           openCardById(card.id);
           say(commandText(t, "open", card, at.date, lang), null);
         } else if (card) {
-          say(commandText(t, parse.action, card, at.date, lang), undoToken);
+          say(commandText(t, parse.action, touched, at.date, lang), undoToken);
           if (parse.action === "delete") {
-            if (openId === card.id) setOpenId(null);
+            if (openId && touched.some((c) => c.id === openId)) setOpenId(null);
+            context.current = null;
+          } else if (touched.length > 1) {
+            if (touched.some((c) => !passes(filterStore.get(), c))) filterStore.set("all");
+            highlight(touched.map((c) => c.id));
             context.current = null;
           } else reveal(card);
         }
@@ -192,6 +196,30 @@ export function BoardPage(_props: PluginNavPanelProps) {
     [rpc, say, touch, lang],
   );
 
+  /** The small buttons on a card: tomorrow, important, delete. Each line in the log can be undone. */
+  const quick = (card: Card, action: QuickAction) => {
+    const t = messagesNow(messages);
+    const at = localNow();
+    const fail = (cause: unknown) => toast.error(t.error(errorText(cause)));
+    if (action === "delete") {
+      rpc.call("card_delete", { id: card.id }).then((result) => {
+        say(commandText(t, "delete", card, at.date, lang), result.undoToken);
+        if (openId === card.id) setOpenId(null);
+        if (context.current?.id === card.id) context.current = null;
+      }, fail);
+      return;
+    }
+    touch(card.id);
+    const patch =
+      action === "tomorrow"
+        ? { due: { date: addDays(at.date, 1), time: card.due?.time ?? null } }
+        : { importance: card.importance === "high" ? ("normal" as const) : ("high" as const) };
+    rpc.call("card_update", { id: card.id, patch }).then((result) => {
+      say(commandText(t, action === "tomorrow" ? "move" : "importance", result.card ?? card, at.date, lang), result.undoToken);
+      highlight([card.id]);
+    }, fail);
+  };
+
   const moveTo = (id: string, column: Column) => {
     const card = cards?.find((c) => c.id === id);
     if (!card || columnOf(card, now.date) === column) return;
@@ -201,7 +229,7 @@ export function BoardPage(_props: PluginNavPanelProps) {
     rpc.call("card_move", { id, column, now: at }).then(
       (result) => {
         const after = result.card ?? card;
-        say(column === "done" ? t.logDone(after.title) : commandText(t, "move", after, at.date, lang), result.undoToken);
+        say(commandText(t, column === "done" ? "done" : "move", after, at.date, lang), result.undoToken);
         highlight([id]);
       },
       (cause: unknown) => toast.error(t.error(errorText(cause))),
@@ -230,6 +258,7 @@ export function BoardPage(_props: PluginNavPanelProps) {
       flash={flashing.has(card.id)}
       onOpen={openCardById}
       onToggleDone={toggleDone}
+      onQuick={quick}
     />
   );
 
