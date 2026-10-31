@@ -50,11 +50,18 @@ Open **Mail** in the sidebar → **Settings**.
 - The card shows everything that goes: To, Cc, **Bcc**, subject, attachments,
   whether the body is HTML, and the text. Send asks once more in the panel.
 - Then the computer that holds the mailbox shows a **system window** — macOS
-  `display dialog`, a Windows window, `zenity` on a Linux desktop — with the
-  same list and the start of the text. Only **Send** in that window sends.
-  bb cannot tell a click in its panel from a program calling the plugin, but
-  no agent can press a button in a window on your screen. With no desktop
-  session (a server, a locked-down machine) nothing is sent: send from Outlook.
+  `display dialog`, a Windows window, `/usr/bin/zenity` on a Linux desktop —
+  with the same list, the length of the text and its start, marked as only the
+  start. Only **Send** in that window sends. bb cannot tell a click in its
+  panel from a program calling the plugin, so calling the plugin is not enough:
+  the window on your desktop must be answered too. That raises the bar, it is
+  not a wall — on Windows and under X11 a program running as you can press
+  buttons in other windows (on macOS, one with the Accessibility permission).
+  Read what the window lists before you press Send. With no desktop session (a
+  server, a locked-down machine) nothing is sent: send from Outlook.
+- The helpers that draw the window are called by absolute path
+  (`/usr/bin/osascript`, PowerShell in `System32`, `/usr/bin/zenity`), never
+  looked up in `PATH`.
 - Send names the exact version of the draft you were shown (Exchange's change
   key), in the panel and in the system window. If the draft changed in the
   meantime — an agent revised it, someone edited it in Outlook — nothing is
@@ -120,8 +127,11 @@ carefully:
   password — and the pause survives restarts and Disconnect. After that, one
   attempt is made when you enter a new password or press *Try once more*; the
   refused password is never retried on its own.
-- Until a sign-in is known to work, requests go one at a time: the first signs
-  in and the rest wait for its answer instead of each sending the password.
+- Requests with the password always go one at a time, not only until the first
+  sign-in works: the domain can stop taking the password at any moment (it
+  expired, it was changed elsewhere). Each request waits for the answer to the
+  one before it, so after the first refusal the rest stop in bb instead of
+  each sending the password again.
 
 ## Agent tools
 

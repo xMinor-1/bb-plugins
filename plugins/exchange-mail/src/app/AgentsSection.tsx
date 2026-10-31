@@ -7,12 +7,14 @@ import { useMessages } from "@/lib/i18n";
 import { messages } from "../messages";
 import { createPolicy } from "../shared/policy";
 import { Notice, Section, errorText } from "./ui";
+import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
 
 type Rule = { provider: string; model: string };
 
 export function AgentsSection({ rpc, hostId }: { rpc: Rpc; hostId: string }) {
   const t = useMessages(messages);
+  const explain = useExplain();
   const [rules, setRules] = useState<Rule[] | null>(null);
   const [policyError, setPolicyError] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentsView | null>(null);
@@ -54,7 +56,7 @@ export function AgentsSection({ rpc, hostId }: { rpc: Rpc; hostId: string }) {
         </ul>
       ) : null}
 
-      {agentsError ? <Notice tone="error">{agentsError}</Notice> : null}
+      {agentsError ? <Notice tone="error">{explain(agentsError)}</Notice> : null}
       {agents === null && !agentsError ? <Notice tone="info">{t.loadingAgents}</Notice> : null}
       {agents?.providers.length ? (
         <div className="space-y-2">

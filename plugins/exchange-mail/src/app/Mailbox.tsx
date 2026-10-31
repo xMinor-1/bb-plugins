@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { messages as texts } from "../messages";
 import { DraftCard, formatAddress, textareaClass } from "./DraftCard";
 import { Notice, errorText } from "./ui";
+import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
 
 const PAGE = 30;
@@ -23,6 +24,7 @@ function shortTime(iso: string | null, lang: Lang): string {
 
 export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; folder: Folder }) {
   const t = useMessages(texts);
+  const explain = useExplain();
   const lang = useLang();
   const [query, setQuery] = useState("");
   const [applied, setApplied] = useState("");
@@ -77,7 +79,7 @@ export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; fol
           </Button>
         </form>
         <p className="text-xs text-muted-foreground">{t.searchHint}</p>
-        {error ? <Notice tone="error">{error}</Notice> : null}
+        {error ? <Notice tone="error">{explain(error)}</Notice> : null}
         {messages === null && !error ? <Notice tone="info">{t.loading}</Notice> : null}
         {messages?.length === 0 ? <Notice tone="info">{applied ? t.nothingFound : t.noMessages}</Notice> : null}
         {messages?.length ? (
@@ -131,6 +133,7 @@ export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; fol
 
 function MessageView({ rpc, hostId, ref_, onRead, canReply }: { rpc: Rpc; hostId: string; ref_: string; onRead: (ref: string) => void; canReply: boolean }) {
   const t = useMessages(texts);
+  const explain = useExplain();
   const lang = useLang();
   const [message, setMessage] = useState<MailMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +170,7 @@ function MessageView({ rpc, hostId, ref_, onRead, canReply }: { rpc: Rpc; hostId
     }
   };
 
-  if (error) return <Notice tone="error">{error}</Notice>;
+  if (error) return <Notice tone="error">{explain(error)}</Notice>;
   if (!message) return <Notice tone="info">{t.opening}</Notice>;
 
   return (
@@ -206,7 +209,7 @@ function MessageView({ rpc, hostId, ref_, onRead, canReply }: { rpc: Rpc; hostId
       {reply ? (
         <div className="space-y-2">
           <textarea className={textareaClass} rows={8} autoFocus value={text} onChange={(event) => setText(event.target.value)} placeholder={t.replyPlaceholder} />
-          {saveError ? <Notice tone="error">{saveError}</Notice> : null}
+          {saveError ? <Notice tone="error">{explain(saveError)}</Notice> : null}
           <div className="flex gap-2">
             <Button size="sm" onClick={() => void save()} disabled={saving || text.trim() === ""}>
               {saving ? t.saving : t.prepare}

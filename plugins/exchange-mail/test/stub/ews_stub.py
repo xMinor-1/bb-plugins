@@ -11,7 +11,8 @@ Kerberos ticket for the caller. The mailbox is synthetic.
   POST /__touch?id=<id>    change an item's change key (an edit in Outlook)
   POST /__purge?id=<id>    remove an item for good (deleted in Outlook)
   POST /__edit?id=<id>     edit an item as Outlook would: JSON {bcc, attachments, format, body}
-  POST /__reset            back to the seed mailbox
+  POST /__password         the domain takes another password from now on (body: the password)
+  POST /__reset            back to the seed mailbox and the first password
 """
 import base64
 import datetime
@@ -29,7 +30,8 @@ from xml.sax.saxutils import escape
 
 USER = os.environ.get("STUB_USER", "alice")
 DOMAIN = os.environ.get("STUB_DOMAIN", "STUB")
-PASSWORD = os.environ.get("STUB_PASSWORD", "S3cret pass \"quoted\" \\ ok")
+FIRST_PASSWORD = os.environ.get("STUB_PASSWORD", "S3cret pass \"quoted\" \\ ok")
+PASSWORD = FIRST_PASSWORD
 SELF = {"name": "Alice Example", "email": "alice@example.test"}
 
 NS = {
@@ -454,6 +456,7 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(404)
 
     def do_POST(self):
+        global PASSWORD
         url = urlparse(self.path)
         raw = self.read_body()
         if url.path == "/__touch":
@@ -481,9 +484,14 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 item = STATE["items"].pop(parse_qs(url.query).get("id", [""])[0], None)
             return self.reply(200 if item else 404, b"{}", content_type="application/json")
+        if url.path == "/__password":
+            with LOCK:
+                PASSWORD = raw.decode("utf-8")
+            return self.reply(200, b"{}", content_type="application/json")
         if url.path == "/__reset":
             with LOCK:
                 seed()
+                PASSWORD = FIRST_PASSWORD
             return self.reply(200, b"{}", content_type="application/json")
         if url.path.lower() != "/ews/exchange.asmx":
             return self.reply(404)
