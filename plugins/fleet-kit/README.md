@@ -381,7 +381,7 @@ OpenCode 1.x path.
 `e2e/panel-smoke.mjs` clicks through the panel in headless Chromium inside the
 container — Sync now, removing the key and entering it again through the form,
 then the panel in Russian (English panel texts left over, buttons whose text
-overflows, at 1280 and 800 px) — and fails on console errors or if the key
+overflows or sticks out, at 1280, 900, 600 and 400 px) — and fails on console errors or if the key
 shows up on the page. Stop OpenCode's `serve` processes first: Chromium and
 them do not fit in the container's 2 GB.
 

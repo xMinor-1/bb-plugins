@@ -514,7 +514,8 @@ export const rpcContract = defineRpcContract({
   },
   /** A PDF of a paged document with its comments, to download. */
   "doc.export": {
-    input: z.object({ docId: z.string(), signer: signerSchema }).strict(),
+    /** `lang`: the panel's language, for the list of comments a person reads in the PDF. */
+    input: z.object({ docId: z.string(), signer: signerSchema, lang: z.enum(["en", "ru"]).optional() }).strict(),
     output: z.object({ link: linkSchema, name: z.string(), count: z.number() }),
   },
   /** Comments a PDF carries from another bb's export, if any. */

@@ -1,6 +1,12 @@
 import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, degrees } from "pdf-lib";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { annotatePdf, pdfFromImages, readingOrder, readShared, UnreadablePdfError, wrapText } from "./annotate";
+import { exportName } from "./exchange";
+import { exportFonts } from "./fonts";
 import type { Anchor, ReviewComment } from "./types";
 
 let seq = 0;
@@ -191,5 +197,35 @@ describe("export with comments", () => {
     expect(wrapText("one two three", 7, measure)).toEqual(["one two", "three"]);
     expect(wrapText("abcdefghij", 4, measure)).toEqual(["abcd", "efgh", "ij"]);
     expect(wrapText("a\n\nb", 4, measure)).toEqual(["a", "", "b"]);
+  });
+
+  it("names the export in the panel's language, with one suffix", () => {
+    expect(exportName("deck.pptx")).toBe("deck (comments).pdf");
+    expect(exportName("deck.pptx", "ru")).toBe("deck (комментарии).pdf");
+    expect(exportName("deck (comments).pdf", "ru")).toBe("deck (комментарии).pdf");
+  });
+
+  const pdftotext = (() => {
+    try {
+      execFileSync("pdftotext", ["-v"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  it.skipIf(!pdftotext)("writes the list of comments in Russian when asked", async () => {
+    const fonts = await exportFonts();
+    if (!fonts) return;
+    const whole = comment({ kind: "doc" }, "Поправить вывод");
+    const { bytes } = await annotatePdf(await samplePdf(), [whole], { ...options, fonts, lang: "ru" });
+    const dir = mkdtempSync(path.join(tmpdir(), "doc-review-"));
+    const file = path.join(dir, "out.pdf");
+    writeFileSync(file, bytes);
+    const text = execFileSync("pdftotext", [file, "-"]).toString();
+    rmSync(dir, { recursive: true });
+    expect(text).toContain("Комментарии");
+    expect(text).toContain("Весь документ");
+    expect(text).toContain("1 комментарий");
   });
 });

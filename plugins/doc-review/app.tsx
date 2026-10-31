@@ -10,6 +10,7 @@
 // attachment's chip in its own preview, which no file opener reaches.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import "./app.css";
+import { defineMessages, messagesNow } from "./lib/i18n";
 import {
   PDF_EXTENSIONS,
   PRESENTATION_EXTENSIONS,
@@ -22,10 +23,25 @@ import { ReviewOpener } from "./ui/review-opener";
 import { PANEL_PATH, ReviewsPage } from "./ui/reviews-page";
 import { WebReviewAction } from "./ui/web-review";
 
+// Registered once at load: a language picked later shows after a page reload.
+const messages = defineMessages(
+  {
+    openerTitle: "Doc Review (view and comment)",
+    tabTooltip: "Review files attached in this chat",
+    actionTitle: "Review attached files in Doc Review",
+  },
+  {
+    openerTitle: "Doc Review (смотреть и комментировать)",
+    tabTooltip: "Ревью файлов, вложенных в этот тред",
+    actionTitle: "Открыть вложенные файлы в Doc Review",
+  },
+);
+
 export default definePluginApp((app) => {
+  const t = messagesNow(messages);
   app.slots.fileOpener({
     id: "review",
-    title: "Doc Review (view and comment)",
+    title: t.openerTitle,
     extensions: [
       ...MARKDOWN_EXTENSIONS,
       ...PDF_EXTENSIONS,
@@ -46,7 +62,7 @@ export default definePluginApp((app) => {
   app.slots.experimental_tab({
     id: "attachments",
     title: "Doc Review",
-    tooltip: "Review files attached in this chat",
+    tooltip: t.tabTooltip,
     icon: "FileText",
     layout: "flush",
     context: { kind: "thread" },
@@ -56,7 +72,7 @@ export default definePluginApp((app) => {
 
   app.slots.messageAction({
     id: "review-attachments",
-    title: "Review attached files in Doc Review",
+    title: t.actionTitle,
     icon: "FileText",
     run: (context) => {
       context.openPanel({

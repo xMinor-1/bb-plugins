@@ -229,19 +229,20 @@ function SecretRow({ secret, store, onSave, onClear }: {
   };
   return (
     <li className="py-2.5">
-      <div className="flex items-center gap-2">
+      {/* Wraps on a narrow panel: the buttons move to their own line instead of past the card's edge. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <Icon name={secret.set ? "Lock" : "SquareUnlock02"} className={cn("size-4", secret.set ? "text-muted-foreground" : "text-amber-600 dark:text-amber-400")} />
-        <span className="flex-1 font-medium">{secret.title}</span>
-        <span className="text-xs text-muted-foreground">{secret.set ? t.savedIn(storeName(store, lang)) : t.notSet}</span>
+        <span className="min-w-0 flex-1 font-medium">{secret.title}</span>
+        <span className="min-w-0 break-words text-xs text-muted-foreground">{secret.set ? t.savedIn(storeName(store, lang)) : t.notSet}</span>
         {secret.set && !editing ? (
-          <>
+          <div className="ml-auto flex shrink-0 gap-1">
             <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
               {t.replace}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => void onClear()}>
               {t.remove}
             </Button>
-          </>
+          </div>
         ) : null}
       </div>
       {secret.hint ? <p className="mt-1 pl-6 text-xs text-muted-foreground">{secret.hint}</p> : null}

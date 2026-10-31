@@ -17,7 +17,9 @@ import {
 import { Markdown } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { defineMessages, useMessages } from "@/lib/i18n";
 import type { Anchor, ReviewComment } from "../src/types";
+import { countWords } from "./labels";
 import { findHeading, narrowLines, rewriteImages, splitBlocks, type MdBlock } from "./md-blocks";
 import { isCommentShortcut, SelectionMenu } from "./selection-menu";
 import {
@@ -26,6 +28,8 @@ import {
   findQuoteRange,
   setHighlights,
 } from "./text-ranges";
+
+const messages = defineMessages({ empty: "This file is empty." }, { empty: "Файл пустой." });
 
 export interface Point {
   top: number;
@@ -109,6 +113,8 @@ export function MarkdownDoc({
   onSelectComment: (id: string) => void;
   onDetached: (ids: Set<string>) => void;
 }) {
+  const t = useMessages(messages);
+  const words = useMessages(countWords);
   const root = useRef<HTMLDivElement>(null);
   const blocks = useMemo(() => {
     return splitBlocks(content).map((block) => ({
@@ -371,7 +377,7 @@ export function MarkdownDoc({
         />
       ) : null}
       {blocks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">This file is empty.</p>
+        <p className="text-sm text-muted-foreground">{t.empty}</p>
       ) : (
         blocks.map((block) => <Block key={`${block.start}:${block.markdown.length}`} block={block} linkDocument={linkDocument} />)
       )}
@@ -392,7 +398,7 @@ export function MarkdownDoc({
                 : "bg-primary/85 text-primary-foreground",
           )}
           style={{ top: pin.top }}
-          aria-label={`Comment ${pin.seq}`}
+          aria-label={words.pin(pin.seq)}
         >
           {pin.seq}
         </button>

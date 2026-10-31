@@ -55,8 +55,42 @@ export interface ExportOptions {
   signer: string | null;
   /** Without them the list falls back to a Latin-only built-in font. */
   fonts: ExportFonts | null;
+  /** The language of the list of comments; English when absent (the CLI, agents). */
+  lang?: ExportLang;
   now?: Date;
 }
+
+export type ExportLang = "en" | "ru";
+
+const ruComments = (n: number) => {
+  const lastTwo = n % 100;
+  const last = n % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return "комментариев";
+  if (last === 1) return "комментарий";
+  return last >= 2 && last <= 4 ? "комментария" : "комментариев";
+};
+
+/** The words of the list of comments at the end of an exported PDF. */
+const LIST_WORDS = {
+  en: {
+    title: "Comments",
+    count: (n: number) => `${n} comment${n === 1 ? "" : "s"}`,
+    page: (kind: DocKind, n: number) => `${pageNoun(kind)} ${n}`,
+    wholeDocument: "Whole document",
+    agent: "Agent",
+    agentOf: (name: string) => `${name}'s agent`,
+    reply: "Reply",
+  },
+  ru: {
+    title: "Комментарии",
+    count: (n: number) => `${n} ${ruComments(n)}`,
+    page: (kind: DocKind, n: number) => `${kind === "presentation" ? "Слайд" : "Страница"} ${n}`,
+    wholeDocument: "Весь документ",
+    agent: "Агент",
+    agentOf: (name: string) => `Агент (${name})`,
+    reply: "Ответ",
+  },
+};
 
 /** The source cannot be opened for editing (encrypted or damaged); rebuild it from page images. */
 export class UnreadablePdfError extends Error {}
@@ -509,6 +543,7 @@ async function addList(
   kind: DocKind,
   signer: string | null,
   fonts: ExportFonts | null,
+  lang: ExportLang,
 ): Promise<void> {
   const first = new PageFrame(pdf.getPage(0));
   const width = first.shownWidth;
@@ -516,9 +551,10 @@ async function addList(
   const margin = Math.max(36, Math.min(width, height) * 0.07);
   const { regular, bold, builtIn } = await listFonts(pdf, fonts);
   const fit = encodable(regular, builtIn);
+  // The built-in font has no Cyrillic: without a system font the list stays in English.
+  const words = LIST_WORDS[builtIn ? "en" : lang];
   const indent = 28;
   const textWidth = width - margin * 2 - indent;
-  const noun = pageNoun(kind);
   const measure = (font: PDFFont, size: number) => (text: string) => font.widthOfTextAtSize(text, size);
 
   let page = pdf.addPage([width, height]);
@@ -529,9 +565,9 @@ async function addList(
     y = height - margin;
   };
 
-  page.drawText(fit("Comments"), { x: margin, y: y - 20, size: 20, font: bold, color: INK });
+  page.drawText(fit(words.title), { x: margin, y: y - 20, size: 20, font: bold, color: INK });
   y -= 30;
-  const count = `${placed.length} comment${placed.length === 1 ? "" : "s"}`;
+  const count = words.count(placed.length);
   for (const line of wrapText(fit(`${title} — ${count}`), width - margin * 2, measure(regular, 10))) {
     page.drawText(line, { x: margin, y: y - 10, size: 10, font: regular, color: MUTED });
     y -= 14;
@@ -539,7 +575,7 @@ async function addList(
   y -= 14;
 
   for (const item of placed) {
-    const place = item.anchor ? `${noun} ${item.anchor.page}` : "Whole document";
+    const place = item.anchor ? words.page(kind, item.anchor.page) : words.wholeDocument;
     const author = item.comment.author ?? signer;
     const label = author ? `${place} — ${author}` : place;
     const rawQuote =
@@ -579,7 +615,10 @@ async function addList(
     }
     for (const reply of item.comment.thread) {
       const who = reply.name ?? (reply.author === "agent" ? null : signer);
-      const name = replyAuthor({ ...reply, name: who, sentAt: reply.sentAt ?? 0 }).replace(/^You$/, "Reply");
+      const name = replyAuthor(
+        { ...reply, name: who, sentAt: reply.sentAt ?? 0 },
+        { agent: words.agent, agentOf: words.agentOf, you: words.reply, youNotSent: words.reply },
+      );
       const lines = wrapText(fit(`${name}: ${truncate(reply.body.trim(), LIST_TEXT_MAX)}`), textWidth - 12, measure(regular, 10));
       y -= 3;
       for (const line of lines) {
@@ -796,7 +835,7 @@ export async function annotatePdf(
     now: now.getTime(),
   });
   if (placed.length > 0) {
-    await addList(pdf, placed, file.name, file.kind, options.signer, options.fonts);
+    await addList(pdf, placed, file.name, file.kind, options.signer, options.fonts, options.lang ?? "en");
     await pdf.attach(new TextEncoder().encode(JSON.stringify(shared)), SHARE_FILE, {
       mimeType: "application/json",
       description: "Review comments for Doc Review in bb (getbb.app)",

@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
+import { defineMessages, LanguageSwitch, useMessages } from "@/lib/i18n";
 import { familyIcon } from "@/components/viewer/family";
 import type { RecentDocument } from "../src/contract";
 import { docKindFor, type ReviewDoc } from "../src/types";
@@ -35,12 +36,56 @@ interface DocSummary {
   lastActivity: number;
 }
 
+const messages = defineMessages(
+  {
+    answered: (n: number) => `${n} answered`,
+    drafts: (n: number) => `${n} draft${n === 1 ? "" : "s"}`,
+    waiting: (n: number) => `${n} waiting`,
+    done: (n: number) => `${n} done`,
+    intro:
+      "Read Markdown, PDF, Word, PowerPoint, Excel, and HTML files and comment on them. Files opened from a chat land in a tab beside it; send the comments to the agent from there.",
+    pathPlaceholder: "/absolute/path/to/file.docx",
+    fileToOpen: "File to open",
+    open: "Open",
+    withComments: "With comments",
+    recent: "Recent",
+    clear: "Clear",
+    browse: "Browse",
+    parentFolder: "Parent folder",
+    loading: "Loading…",
+    noDocuments: "No documents here.",
+    backToList: "Back to the list",
+    allFiles: "All files",
+  },
+  {
+    answered: (n) => `с ответом: ${n}`,
+    drafts: (n) => `черновики: ${n}`,
+    waiting: (n) => `ждут: ${n}`,
+    done: (n) => `готово: ${n}`,
+    intro:
+      "Читайте и комментируйте файлы Markdown, PDF, Word, PowerPoint, Excel и HTML. Файл, открытый из треда, встаёт во вкладку рядом с ним — оттуда комментарии и отправляются агенту.",
+    pathPlaceholder: "/полный/путь/к/файлу.docx",
+    fileToOpen: "Какой файл открыть",
+    open: "Открыть",
+    withComments: "С комментариями",
+    recent: "Недавние",
+    clear: "Очистить",
+    browse: "Папки",
+    parentFolder: "Папка выше",
+    loading: "Загружаем…",
+    noDocuments: "Здесь нет документов.",
+    backToList: "Назад к списку",
+    allFiles: "Все файлы",
+  },
+);
+
 function Counts({ counts }: { counts: DocSummary["counts"] }) {
+  const t = useMessages(messages);
   const parts = [
-    counts.replied ? `${counts.replied} answered` : null,
-    counts.draft ? `${counts.draft} draft${counts.draft === 1 ? "" : "s"}` : null,
-    counts.sent ? `${counts.sent} waiting` : null,
-    counts.resolved ? `${counts.resolved} done` : null,
+    counts.replied ? t.answered(counts.replied) : null,
+    counts.draft ? t.drafts(counts.draft) : null,
+    counts.sent ? t.waiting(counts.sent) : null,
+    counts.resolved ? t.done(counts.resolved) : null,
   ].filter(Boolean);
   return <span>{parts.join(" · ")}</span>;
 }
@@ -94,6 +139,7 @@ function FileRow({ path, title, detail, onOpen }: { path: string; title: string;
 }
 
 function DocList() {
+  const t = useMessages(messages);
   const rpc = useReviewRpc();
   const navigate = useBbNavigate();
   const [docs, setDocs] = useState<DocSummary[] | null>(null);
@@ -165,20 +211,20 @@ function DocList() {
   return (
     <div className="@container h-full min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto box-border w-full max-w-3xl space-y-5 px-4 pb-6 pt-3 md:px-5 md:pt-4">
-        <p className="text-sm text-muted-foreground">
-          Read Markdown, PDF, Word, PowerPoint, Excel, and HTML files and comment on them. Files opened
-          from a chat land in a tab beside it; send the comments to the agent from there.
-        </p>
+        <div className="flex items-start gap-3">
+          <p className="min-w-0 flex-1 text-sm text-muted-foreground">{t.intro}</p>
+          <LanguageSwitch />
+        </div>
         <form onSubmit={submit} className="flex items-center gap-2">
           <Input
             value={path}
             onChange={(event) => setPath(event.target.value)}
-            placeholder="/absolute/path/to/file.docx"
-            aria-label="File to open"
+            placeholder={t.pathPlaceholder}
+            aria-label={t.fileToOpen}
           />
           <Button type="submit" disabled={opening || !path.trim()}>
             <Icon name={opening ? "Loading" : "FileText"} className={opening ? "size-4 animate-spin" : "size-4"} />
-            Open
+            {t.open}
           </Button>
         </form>
         {error ? (
@@ -188,7 +234,7 @@ function DocList() {
         ) : null}
 
         {docs && docs.length > 0 ? (
-          <Section title="With comments">
+          <Section title={t.withComments}>
             <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
               {docs.map((doc) => (
                 <FileRow
@@ -205,14 +251,14 @@ function DocList() {
 
         {recents.length > 0 ? (
           <Section
-            title="Recent"
+            title={t.recent}
             action={
               <button
                 type="button"
                 className="text-xs text-muted-foreground hover:text-foreground"
                 onClick={() => rpc.call("recents.clear").then((result) => setRecents(result.recents), () => undefined)}
               >
-                Clear
+                {t.clear}
               </button>
             }
           >
@@ -229,7 +275,7 @@ function DocList() {
           </Section>
         ) : null}
 
-        <Section title="Browse">
+        <Section title={t.browse}>
           <div className="overflow-hidden rounded-lg border border-border bg-card">
             <div className="flex flex-wrap items-center gap-1 border-b border-border px-2 py-1.5 text-xs text-muted-foreground">
               <Button
@@ -238,7 +284,7 @@ function DocList() {
                 variant="ghost"
                 className="size-7"
                 disabled={!folder?.parent}
-                aria-label="Parent folder"
+                aria-label={t.parentFolder}
                 onClick={() => folder && browse({ hostId: folder.hostId, path: folder.parent })}
               >
                 <Icon name="ChevronLeft" className="size-4" />
@@ -258,9 +304,9 @@ function DocList() {
             </div>
             <div className="max-h-96 overflow-y-auto py-1">
               {folder === null ? (
-                <p className="px-3 py-2 text-sm text-muted-foreground">Loading…</p>
+                <p className="px-3 py-2 text-sm text-muted-foreground">{t.loading}</p>
               ) : folder.entries.length === 0 ? (
-                <p className="px-3 py-2 text-sm text-muted-foreground">No documents here.</p>
+                <p className="px-3 py-2 text-sm text-muted-foreground">{t.noDocuments}</p>
               ) : (
                 folder.entries.map((entry) => (
                   <button
@@ -290,6 +336,7 @@ function DocList() {
 }
 
 function DocPage({ docId }: { docId: string }) {
+  const t = useMessages(messages);
   const rpc = useReviewRpc();
   const navigate = useBbNavigate();
   const [doc, setDoc] = useState<ReviewDoc | null>(null);
@@ -312,7 +359,7 @@ function DocPage({ docId }: { docId: string }) {
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
         <p>{error}</p>
         <Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH)}>
-          Back to the list
+          {t.backToList}
         </Button>
       </div>
     );
@@ -335,7 +382,7 @@ function DocPage({ docId }: { docId: string }) {
           onClick={() => navigate.toPluginPanel(PANEL_PATH)}
         >
           <Icon name="ChevronLeft" className="size-4" />
-          All files
+          {t.allFiles}
         </Button>
         <span className="min-w-0 truncate text-xs text-muted-foreground">{doc.absPath}</span>
       </div>

@@ -33,12 +33,16 @@ async function panelText(page, groupName) {
   return panel.first().innerText();
 }
 
+// Buttons whose text overflows them, or that stick out past the panel or the window.
 async function overflowing(page) {
-  return page.evaluate(() =>
-    [...document.querySelectorAll("div.max-w-3xl button")]
-      .filter((button) => button.scrollWidth > button.clientWidth + 1 || button.scrollHeight > button.clientHeight + 1)
-      .map((button) => button.innerText.trim()),
-  );
+  return page.evaluate(() => {
+    const panel = document.querySelector("div.max-w-3xl");
+    const edge = Math.min(window.innerWidth, panel ? panel.getBoundingClientRect().right : window.innerWidth);
+    return [...document.querySelectorAll("div.max-w-3xl button")]
+      .filter((button) => button.scrollWidth > button.clientWidth + 1 || button.scrollHeight > button.clientHeight + 1
+        || button.getBoundingClientRect().right > edge + 1)
+      .map((button) => button.innerText.trim());
+  });
 }
 
 const browser = await chromium.launch({ executablePath: "/usr/bin/chromium", args: ["--no-sandbox"] });
@@ -102,9 +106,14 @@ try {
   console.log(`info Latin words in the Russian panel (ids, paths, texts from bb): ${latin.join(" ")}`);
   check("Russian buttons fit", (await overflowing(page)).length === 0, (await overflowing(page)).join(", "));
   await page.screenshot({ path: `${home}/.fk-e2e/panel-ru.png`, fullPage: true });
-  await page.setViewportSize({ width: 800, height: 900 });
-  check("Russian buttons fit at 800 px", (await overflowing(page)).length === 0, (await overflowing(page)).join(", "));
-  await page.screenshot({ path: `${home}/.fk-e2e/panel-ru-800.png`, fullPage: true });
+  for (const width of [900, 600, 400]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(300);
+    const out = await overflowing(page);
+    check(`Russian buttons fit at ${width} px`, out.length === 0, out.join(", "));
+    await page.screenshot({ path: `${home}/.fk-e2e/panel-ru-${width}.png`, fullPage: true });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("group", { name: "Язык интерфейса" }).getByRole("button", { name: "EN" }).click();
   check("switch back to English", await page.getByRole("button", { name: "Sync now" }).waitFor({ timeout: 10_000 }).then(() => true, () => false));
 

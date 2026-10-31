@@ -25,11 +25,11 @@ import {
 import { createPortal } from "react-dom";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { defineMessages, useMessages } from "@/lib/i18n";
 import type { Capture } from "../src/contract";
 import { DRAW_COLOR, DRAW_STEP, DRAW_WIDTH, isShape, strokeBounds, strokeKept, strokePath } from "../src/drawing";
 import {
   pageImageWidth,
-  pageNoun,
   type Anchor,
   type DocKind,
   type DrawTool,
@@ -40,6 +40,7 @@ import {
   type Stroke,
 } from "../src/types";
 import { DrawingBar } from "./drawing-bar";
+import { countWords } from "./labels";
 import type { Point } from "./markdown-doc";
 import {
   anchorAt,
@@ -53,8 +54,19 @@ import {
   type ZoomAnchor,
 } from "./page-layout";
 import { isCommentShortcut, SelectionMenu } from "./selection-menu";
-import { errorText, useReviewRpc } from "./use-review";
+import { rawErrorText, useReviewRpc } from "./use-review";
 import { ZoomBar } from "./zoom-bar";
+
+const messages = defineMessages(
+  {
+    holdArea: "Hold, then drag to mark an area",
+    holdDraw: "Hold, then drag to draw",
+  },
+  {
+    holdArea: "Нажмите и держите, затем ведите, чтобы выделить область",
+    holdDraw: "Нажмите и держите, затем ведите, чтобы рисовать",
+  },
+);
 
 export type PageMode = "text" | "area" | "draw";
 
@@ -178,6 +190,7 @@ function Pin({
   resolved: boolean;
   onClick: () => void;
 }) {
+  const words = useMessages(countWords);
   return (
     <button
       type="button"
@@ -195,7 +208,7 @@ function Pin({
             : "bg-primary/90 text-primary-foreground",
       )}
       style={{ left: `max(10px, ${pct(rect.x)})`, top: `max(10px, ${pct(rect.y)})` }}
-      aria-label={`Comment ${seq}`}
+      aria-label={words.pin(seq)}
     >
       {seq}
     </button>
@@ -581,6 +594,7 @@ const PageView = memo(function PageView({
   onSelectComment,
   onArea,
 }: PageViewProps) {
+  const words = useMessages(countWords);
   const element = useRef<HTMLDivElement>(null);
   // Pages flown past while scrolling never start loading.
   const [settled, setSettled] = useState(false);
@@ -630,7 +644,7 @@ const PageView = memo(function PageView({
     >
       {mounted ? (
         <>
-          {settled ? <PageImage url={imageUrl} alt={`${pageNoun(kind)} ${page.n}`} onError={onStale} /> : null}
+          {settled ? <PageImage url={imageUrl} alt={`${words.page(kind)} ${page.n}`} onError={onStale} /> : null}
 
           {/* Existing comments, the live selection, and the comment being written. */}
           <div className="pointer-events-none absolute inset-0 z-10">
@@ -870,7 +884,7 @@ export function PagesDoc({
         (result) => setTexts((current) => new Map(current).set(n, result.lines)),
         (cause: unknown) => {
           requested.current.delete(n);
-          if (/changed/i.test(errorText(cause))) onStale();
+          if (/changed/i.test(rawErrorText(cause))) onStale();
         },
       );
     },
@@ -1382,7 +1396,7 @@ export function PagesDoc({
   // Under the comment sheet, room below the last page lets it scroll into view.
   const covered = coveredBottom > 0 ? Math.round((scroller.current?.clientHeight ?? 0) * coveredBottom) : 0;
   const composerWidth = Math.max(200, Math.min(352, (scroller.current?.clientWidth ?? 368) - 16));
-  const noun = pageNoun(kind);
+  const t = useMessages(messages);
 
   return (
     <div
@@ -1483,7 +1497,7 @@ export function PagesDoc({
               {mode !== "text" && coarse ? (
                 <div className="absolute inset-x-0 top-2 flex justify-center">
                   <span className="rounded-full border border-border bg-background/95 px-3 py-1 text-xs text-muted-foreground shadow-sm">
-                    {mode === "area" ? "Hold, then drag to mark an area" : "Hold, then drag to draw"}
+                    {mode === "area" ? t.holdArea : t.holdDraw}
                   </span>
                 </div>
               ) : null}
@@ -1492,7 +1506,7 @@ export function PagesDoc({
                   zoom={zoom}
                   page={current}
                   count={pages.length}
-                  noun={noun}
+                  slides={kind === "presentation"}
                   onStep={(direction) => zoomTo(stepZoom(zoomRef.current, direction))}
                   onFit={() => zoomTo(1)}
                   onJump={jumpTo}

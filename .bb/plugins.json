@@ -16,12 +16,20 @@
       "source": "./plugins/doc-review"
     },
     {
+      "name": "exchange-mail",
+      "source": "./plugins/exchange-mail"
+    },
+    {
       "name": "file-manager",
       "source": "./plugins/file-manager"
     },
     {
       "name": "fleet-kit",
       "source": "./plugins/fleet-kit"
+    },
+    {
+      "name": "qlik-sense",
+      "source": "./plugins/qlik-sense"
     },
     {
       "name": "server-status",
