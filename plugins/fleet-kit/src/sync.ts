@@ -1088,14 +1088,18 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     managed.opencode = null;
   }
 
-  // The rules file goes first: opencode.json then lists a file that exists.
-  try {
-    if (await syncAgentRules(location.directory, manifest.agentRules)) {
-      steps.add("opencode", "agent rules", "changed", say(manifest.agentRules ? "agentRulesUpdated" : "agentRulesRemoved"));
+  // opencode.json never lists a missing rules file: new rules are written before it,
+  // and old rules are removed only after it no longer lists them.
+  const syncRules = async () => {
+    try {
+      if (await syncAgentRules(location.directory, manifest.agentRules)) {
+        steps.add("opencode", "agent rules", "changed", say(manifest.agentRules ? "agentRulesUpdated" : "agentRulesRemoved"));
+      }
+    } catch (error) {
+      steps.add("opencode", "agent rules", "error", errorText(error));
     }
-  } catch (error) {
-    steps.add("opencode", "agent rules", "error", errorText(error));
-  }
+  };
+  if (manifest.agentRules) await syncRules();
 
   const previouslyOwned = managed.opencode?.owned ?? [];
   try {
@@ -1104,6 +1108,7 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     if (result.changed) {
       steps.add("opencode", location.configFile, "changed", say("configUpdated", { backup: result.backup ?? "" }));
     }
+    if (!manifest.agentRules) await syncRules();
   } catch (error) {
     const lock = await lockState(location.configFile).catch(() => null);
     if (lock) status.lock = lock;

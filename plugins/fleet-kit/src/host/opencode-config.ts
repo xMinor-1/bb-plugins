@@ -205,6 +205,12 @@ export function patchOpenCodeConfig(source: string, plan: OpenCodePlan, previous
     if (wanted.has(pathKey(path))) continue;
     if (findNodeAtLocation(parseConfig(text), path) === undefined) continue;
     text = applyEdits(text, modify(text, path, undefined, { formattingOptions }));
+    // A nested path (agents.<id>, experimental.<key>, mcp.timeout) may leave its parent empty: drop that too.
+    const parentPath = path.slice(0, -1);
+    const parent = parentPath.length > 0 ? findNodeAtLocation(parseConfig(text), parentPath) : undefined;
+    if (parent?.type === "object" && (parent.children ?? []).length === 0) {
+      text = applyEdits(text, modify(text, parentPath, undefined, { formattingOptions }));
+    }
   }
   for (const { path, value } of plan.entries) {
     const current = findNodeAtLocation(parseConfig(text), path);

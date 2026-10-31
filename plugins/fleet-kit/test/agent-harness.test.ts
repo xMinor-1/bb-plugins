@@ -112,9 +112,11 @@ describe("plan and patch: agent harness", () => {
     const config = parse(patchOpenCodeConfig(full, bare, owned));
     expect(config.agents).toEqual({ mine: {} });
     expect(config.mcp).toEqual({ servers: {} });
-    expect(config.experimental).toEqual({});
+    expect(config.experimental).toBeUndefined();
     expect(config.compaction).toBeUndefined();
     expect(config.instructions).toBeUndefined();
+    const onlyOurs = parse(patchOpenCodeConfig(patchOpenCodeConfig("{}", plan(), []), bare, owned));
+    expect([onlyOurs.agents, onlyOurs.mcp, onlyOurs.experimental]).toEqual([undefined, undefined, undefined]);
   });
 
   it("leaves a string instructions alone without rules and refuses it with rules", () => {

@@ -270,7 +270,10 @@ The person who uses OpenCode edits this file too, so Fleet Kit:
   each experimental key, `mcp.timeout`, the other top-level keys of the
   `opencode` block (such as `model` and `update`), `enabled_providers`, and its
   own entry in `instructions`. The person's own agents, MCP servers and
-  instructions stay. It remembers which keys it
+  instructions stay. A build agent is written whole: an agent the person also
+  configured under the same id (say `build`) gets the build's entry instead, so
+  put personal agent settings under another id. A parent the build leaves empty
+  (`agents`, `experimental`, `mcp`) is removed with its last key. It remembers which keys it
   wrote and removes one only when the build drops it. Comments and formatting of
   the rest of the file are kept.
 - Writes under a lock directory `<config>.bb-config-lock` with an `owner.json`
