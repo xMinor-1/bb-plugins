@@ -131,6 +131,8 @@ const en = {
   previousConfigCleanFailed: (p: { error: string }) => `Could not clean the previous configuration: ${p.error}`,
   configUpdated: (p: { backup: string }) => (p.backup ? `Updated; the original is saved as ${p.backup}.` : "Updated."),
   resolverUpdated: (p: { store: string }) => `Updated the OpenCode plugin that reads keys from ${p.store}.`,
+  agentRulesUpdated: () => "Updated the build's agent rules for OpenCode.",
+  agentRulesRemoved: () => "Removed the build's agent rules: the manifest no longer has them.",
   modelPickerDirectory: (p: { directory: string }) =>
     `bb's model picker reads the default OpenCode configuration, not ${p.directory}. Start bb with OPENCODE_CONFIG_DIR=${p.directory} so the picker shows the build's models; threads already use the directory.`,
 
@@ -234,6 +236,8 @@ const ru: Catalog = {
   previousConfigCleanFailed: (p) => `Не удалось очистить прежнюю конфигурацию: ${p.error}`,
   configUpdated: (p) => (p.backup ? `Обновлён; исходный файл сохранён как ${p.backup}.` : "Обновлён."),
   resolverUpdated: (p) => `Обновлён плагин OpenCode, который берёт ключи из хранилища «${storeName(p.store, "ru")}».`,
+  agentRulesUpdated: () => "Обновлены правила сборки для агентов OpenCode.",
+  agentRulesRemoved: () => "Правила сборки для агентов убраны: в манифесте их больше нет.",
   modelPickerDirectory: (p) =>
     `Список моделей bb читает конфигурацию OpenCode по умолчанию, а не ${p.directory}. Запустите bb с OPENCODE_CONFIG_DIR=${p.directory}, чтобы в списке были модели сборки; треды эту папку уже используют.`,
 

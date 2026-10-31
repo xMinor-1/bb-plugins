@@ -3,8 +3,13 @@
 // The manifest's `opencode` block is a native OpenCode 2 configuration
 // fragment. Fleet Kit owns exactly:
 //   - `providers.<id>` for every provider the block declares;
+//   - `agents.<id>` for every agent the block declares, `experimental.<key>`
+//     for every experimental key, and only `mcp.timeout` of `mcp` (servers
+//     belong to the person and to other plugins);
 //   - every other top-level key the block declares (`model`, `update`, ...);
-//   - `enabled_providers`, set from the manifest's `allowedProviders`.
+//   - `enabled_providers`, set from the manifest's `allowedProviders`;
+//   - one entry of `instructions`: the build's agent rules file, when the
+//     manifest has `agentRules`. The person's own entries stay.
 // Everything else in the file (the user's own settings, MCP servers written by
 // other plugins, comments) is preserved byte for byte. Paths Fleet Kit owned
 // before and the manifest no longer declares are removed.
@@ -59,7 +64,13 @@ export interface OpenCodePlan {
   resolver: Record<string, ResolverProvider>;
   /** Secret names the plan needs. */
   secrets: string[];
+  /** Absolute path of the build's agent rules file to list in `instructions`. */
+  instructions?: string;
 }
+
+/** The rules file's name inside the OpenCode configuration directory. */
+export const RULES_FILE = "fleet-kit-rules.md";
+const isRulesEntry = (value: unknown) => typeof value === "string" && /(^|[\\/])fleet-kit-rules\.md$/.test(value);
 
 const SECRET_ONLY = /^\{secret:([a-z0-9][a-z0-9-]*)\}$/;
 const hasSecretRef = (value: string) => /\{secret:[^}]*\}/.test(value);
@@ -80,7 +91,11 @@ function findSecretRefs(value: unknown, path: string[], found: string[][]): void
 }
 
 /** Turn the manifest block into owned paths plus resolver headers. */
-export function planOpenCode(block: Record<string, unknown>, allowedProviders: string[], options: { allowDevSources?: boolean } = {}): OpenCodePlan {
+export function planOpenCode(
+  block: Record<string, unknown>,
+  allowedProviders: string[],
+  options: { allowDevSources?: boolean; rulesFile?: string } = {},
+): OpenCodePlan {
   const entries: OpenCodePlan["entries"] = [];
   const resolver: OpenCodePlan["resolver"] = {};
   const secrets = new Set<string>();
@@ -137,10 +152,23 @@ export function planOpenCode(block: Record<string, unknown>, allowedProviders: s
     const leftovers: string[][] = [];
     findSecretRefs(value, [key], leftovers);
     if (leftovers.length > 0) throw new Error(`opencode.${leftovers[0]!.join(".")}: {secret:...} is supported only in provider settings`);
-    entries.push({ path: [key], value: clone(value) });
+    if (key === "agents" || key === "experimental") {
+      for (const [name, item] of Object.entries(value as Record<string, unknown>)) entries.push({ path: [key, name], value: clone(item) });
+    } else if (key === "mcp") {
+      const mcp = value as Record<string, unknown>;
+      if (Object.keys(mcp).some((name) => name !== "timeout")) throw new Error("opencode.mcp: a build may set only mcp.timeout");
+      if (mcp.timeout !== undefined) entries.push({ path: ["mcp", "timeout"], value: clone(mcp.timeout) });
+    } else {
+      entries.push({ path: [key], value: clone(value) });
+    }
   }
   entries.push({ path: ["enabled_providers"], value: [...allowedProviders] });
-  return { entries, resolver, secrets: [...secrets].sort() };
+  const plan: OpenCodePlan = { entries, resolver, secrets: [...secrets].sort() };
+  if (options.rulesFile !== undefined) {
+    if (!isAbsolute(options.rulesFile) || !isRulesEntry(options.rulesFile)) throw new Error(`the agent rules file must be an absolute path to ${RULES_FILE}`);
+    plan.instructions = options.rulesFile;
+  }
+  return plan;
 }
 
 const pathKey = (path: string[]) => JSON.stringify(path);
@@ -177,14 +205,40 @@ export function patchOpenCodeConfig(source: string, plan: OpenCodePlan, previous
     if (wanted.has(pathKey(path))) continue;
     if (findNodeAtLocation(parseConfig(text), path) === undefined) continue;
     text = applyEdits(text, modify(text, path, undefined, { formattingOptions }));
+    // A nested path (agents.<id>, experimental.<key>, mcp.timeout) may leave its parent empty: drop that too.
+    const parentPath = path.slice(0, -1);
+    const parent = parentPath.length > 0 ? findNodeAtLocation(parseConfig(text), parentPath) : undefined;
+    if (parent?.type === "object" && (parent.children ?? []).length === 0) {
+      text = applyEdits(text, modify(text, parentPath, undefined, { formattingOptions }));
+    }
   }
   for (const { path, value } of plan.entries) {
     const current = findNodeAtLocation(parseConfig(text), path);
     if (current !== undefined && JSON.stringify(nodeValue(current)) === JSON.stringify(value)) continue;
     text = applyEdits(text, modify(text, path, value, { formattingOptions }));
   }
+  text = patchInstructions(text, plan.instructions, formattingOptions);
   if (!text.endsWith(eol)) text += eol;
   return text;
+}
+
+/**
+ * Keep exactly one rules entry in `instructions` (or none without rules),
+ * after the person's own entries. A string `instructions` is the person's
+ * and is left alone.
+ */
+function patchInstructions(text: string, rulesFile: string | undefined, formattingOptions: { insertSpaces: boolean; tabSize: number; eol: string }): string {
+  const node = findNodeAtLocation(parseConfig(text), ["instructions"]);
+  if (node !== undefined && node.type !== "array") {
+    if (rulesFile === undefined) return text;
+    throw new Error('opencode.json: "instructions" must be a list');
+  }
+  const current = node === undefined ? [] : (nodeValue(node) as unknown[]);
+  const own = current.filter((entry) => !isRulesEntry(entry));
+  const wanted = rulesFile === undefined ? own : [...own, rulesFile];
+  if (JSON.stringify(wanted) === JSON.stringify(current)) return text;
+  const value = wanted.length === 0 ? undefined : wanted;
+  return applyEdits(text, modify(text, ["instructions"], value, { formattingOptions }));
 }
 
 function nodeValue(node: Node): unknown {

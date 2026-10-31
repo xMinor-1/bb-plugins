@@ -32,6 +32,7 @@ import type { SecretStore } from "./secret-store.js";
 import { planOpenCode, readOwnedValue, writeOpenCodeConfig, openCodeMajor, type OpenCodePlan } from "./host/opencode-config.js";
 import { syncResolverPlugin } from "./host/opencode-resolver.js";
 import { resolveOpenCodeLocation } from "./host/opencode-location.js";
+import { rulesPath, syncAgentRules } from "./host/agent-rules.js";
 import { checkOpenCodeConfiguration } from "./host/check-models.js";
 import { readSystemPolicy } from "./host/system-policy.js";
 import { lockState } from "./host/lock-state.js";
@@ -1065,7 +1066,10 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
   status.configFile = location.configFile;
   let plan: OpenCodePlan;
   try {
-    plan = planOpenCode(manifest.opencode as Record<string, unknown>, manifest.allowedProviders, { allowDevSources: deps.settings.allowDevSources });
+    plan = planOpenCode(manifest.opencode as Record<string, unknown>, manifest.allowedProviders, {
+      allowDevSources: deps.settings.allowDevSources,
+      ...(manifest.agentRules ? { rulesFile: rulesPath(location.directory) } : {}),
+    });
   } catch (error) {
     steps.add("opencode", "opencode.json", "error", errorText(error));
     return status;
@@ -1076,12 +1080,26 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     try {
       await writeOpenCodeConfig(managed.opencode.configFile, { entries: [], resolver: {}, secrets: [] }, managed.opencode.owned, { signal: deps.signal, timeoutMs: 30_000 });
       await syncResolverPlugin(managed.opencode.directory, null);
+      await syncAgentRules(managed.opencode.directory, undefined);
       steps.add("opencode", managed.opencode.configFile, "changed", say("previousConfigCleaned"));
     } catch (error) {
       steps.add("opencode", managed.opencode.configFile, "warning", say("previousConfigCleanFailed", { error: errorText(error) }));
     }
     managed.opencode = null;
   }
+
+  // opencode.json never lists a missing rules file: new rules are written before it,
+  // and old rules are removed only after it no longer lists them.
+  const syncRules = async () => {
+    try {
+      if (await syncAgentRules(location.directory, manifest.agentRules)) {
+        steps.add("opencode", "agent rules", "changed", say(manifest.agentRules ? "agentRulesUpdated" : "agentRulesRemoved"));
+      }
+    } catch (error) {
+      steps.add("opencode", "agent rules", "error", errorText(error));
+    }
+  };
+  if (manifest.agentRules) await syncRules();
 
   const previouslyOwned = managed.opencode?.owned ?? [];
   try {
@@ -1090,6 +1108,7 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     if (result.changed) {
       steps.add("opencode", location.configFile, "changed", say("configUpdated", { backup: result.backup ?? "" }));
     }
+    if (!manifest.agentRules) await syncRules();
   } catch (error) {
     const lock = await lockState(location.configFile).catch(() => null);
     if (lock) status.lock = lock;
