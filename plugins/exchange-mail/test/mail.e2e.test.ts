@@ -1,11 +1,14 @@
 // The host service against the EWS stub (test/stub/ews_stub.py) through the
 // system curl: real NTLMv2 sign-in, listing, search, reading, drafts and Send.
+// The system window that confirms a send is a stand-in that answers as told.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { ConfirmOutcome, SendSummary } from "../src/host/confirm";
 import { openFileSecretStore } from "../src/host/secret-store";
 import { MailService } from "../src/host/service";
+import { RETRY_AFTER_MS } from "../src/host/signin";
 
 const STUB = process.env.EWS_STUB_URL;
 if (!STUB) throw new Error("Set EWS_STUB_URL (test/stub/run.sh prints it)");
@@ -14,10 +17,23 @@ const PASSWORD = 'S3cret pass "quoted" \\ ok';
 
 let dir: string;
 let service: MailService;
+let clock: number;
+/** What the stand-in window was asked, and how it answers. */
+let asked: SendSummary[];
+let answer: (summary: SendSummary) => Promise<ConfirmOutcome>;
 
-async function state(): Promise<{ sent: { subject: string; to: { email: string }[]; cc: { email: string }[]; body: string }[]; drafts: { id: string; subject: string }[]; requests: string[] }> {
+type Address = { name: string | null; email: string };
+async function state(): Promise<{
+  sent: { subject: string; to: Address[]; cc: Address[]; bcc: Address[]; body: string }[];
+  drafts: { id: string; subject: string }[];
+  requests: string[];
+  signIns: number;
+  refused: number;
+}> {
   return (await fetch(`${STUB}/__state`)).json() as never;
 }
+
+const edit = (id: string, change: object) => fetch(`${STUB}/__edit?id=${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(change) });
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "exchange-mail-e2e-"));
@@ -30,7 +46,22 @@ beforeEach(async () => {
   await fetch(`${STUB}/__reset`, { method: "POST" });
   service?.close();
   const data = await mkdtemp(join(dir, "case-"));
-  service = new MailService({ dataDir: data, secrets: openFileSecretStore(join(data, "secrets")), utcOffsetMinutes: 180 });
+  clock = Date.UTC(2026, 9, 31, 9, 0);
+  asked = [];
+  answer = async () => ({ ok: true });
+  service = new MailService({
+    dataDir: data,
+    secrets: openFileSecretStore(join(data, "secrets")),
+    utcOffsetMinutes: 180,
+    allowLocalHttp: true,
+    now: () => clock,
+    confirm: {
+      confirm: (summary) => {
+        asked.push(summary);
+        return answer(summary);
+      },
+    },
+  });
 });
 
 async function connect() {
@@ -58,28 +89,47 @@ describe("sign-in", () => {
     await service.saveConnection({ url: EWS, auth: "password", user: "STUB\\alice", password: "wrong" });
     expect((await service.check()).ok).toBe(false);
     expect((await service.status()).blocked).toMatch(/did not accept/);
-    const before = (await state()).requests.length;
+    const before = await state();
     const tool = await service.tool({ tool: "list" });
     expect(tool).toMatchObject({ isError: true });
     expect(tool.text).toMatch(/sign-in is paused/);
-    expect((await service.check()).message).toMatch(/paused/);
-    expect((await state()).requests.length).toBe(before);
-    // Saving the same settings again does not lift the pause; a new password does.
-    await service.saveConnection({ url: EWS, auth: "password", user: "STUB\\alice" });
-    expect((await service.status()).blocked).not.toBeNull();
+    expect((await service.check(true)).message).toMatch(/paused/);
+    // A new password waits for the pause too.
     await service.saveConnection({ url: EWS, auth: "password", user: "STUB\\alice", password: PASSWORD });
-    expect((await service.status()).blocked).toBeNull();
+    expect((await service.check()).message).toMatch(/no earlier than/);
+    const during = await state();
+    expect(during.signIns).toBe(before.signIns);
+    expect(during.requests.length).toBe(before.requests.length);
+
+    clock += RETRY_AFTER_MS;
     expect((await service.check()).ok).toBe(true);
+    expect((await service.status()).blocked).toBeNull();
+    expect((await state()).refused).toBe(1);
   });
 
-  it("tries once more on request while paused", async () => {
+  it("tries once more on request after the pause, and pauses again when refused", async () => {
     await service.saveConnection({ url: EWS, auth: "password", user: "STUB\\alice", password: "wrong" });
     await service.check();
-    const before = (await state()).requests.length;
+    clock += RETRY_AFTER_MS;
+    expect((await service.check()).message).toMatch(/Enter the password again/);
+    expect((await state()).refused).toBe(1);
     expect((await service.check(true)).ok).toBe(false);
-    // The stub counts only authorized SOAP calls; a retry reaches Exchange but is refused again.
-    expect((await state()).requests.length).toBe(before);
-    expect((await service.status()).blocked).not.toBeNull();
+    // The retry reached Exchange and was refused again.
+    expect((await state()).refused).toBe(2);
+    expect((await service.status()).retryAt).toBe(clock + RETRY_AFTER_MS);
+  });
+
+  it("signs in once for a burst of parallel calls with a wrong password", async () => {
+    await service.saveConnection({ url: EWS, auth: "password", user: "STUB\\alice", password: "wrong" });
+    await Promise.all([
+      service.list({ folder: "inbox" }).catch(() => undefined),
+      service.list({ folder: "sent" }).catch(() => undefined),
+      service.tool({ tool: "search", query: "budget" }),
+      service.check(),
+    ]);
+    const after = await state();
+    expect(after.signIns).toBe(1);
+    expect(after.refused).toBe(1);
   });
 
   it("explains a failed automatic sign-in (no Kerberos ticket here)", async () => {
@@ -181,6 +231,7 @@ describe("drafts and sending", () => {
     expect(draft.body).toContain("Could you check the numbers");
 
     expect(await service.send(draft.id, draft.revision)).toMatchObject({ status: "sent" });
+    expect(asked).toHaveLength(1);
     const sent = (await state()).sent;
     expect(sent).toHaveLength(1);
     expect(sent[0]!.body.startsWith("Привет, Боб!")).toBe(true);
@@ -238,5 +289,80 @@ describe("drafts and sending", () => {
     await fetch(`${STUB}/__purge?id=${encodeURIComponent((await state()).drafts[0]!.id)}`, { method: "POST" });
     expect(await service.send(draft.id, draft.revision)).toMatchObject({ status: "gone" });
     expect((await service.drafts()).drafts).toHaveLength(0);
+  });
+
+  it("sends nothing unless Send is pressed in the system window", async () => {
+    const saved = await service.tool({ tool: "draft", threadId: "thr_1", replyTo: await firstRef(), body: "Only if you say so" });
+    const draft = (await service.draft(saved.draftId!))!;
+    for (const outcome of [
+      { ok: false, reason: "cancelled", message: "You did not confirm sending in the system window. Nothing was sent." },
+      { ok: false, reason: "unavailable", message: "no desktop session" },
+      { ok: false, reason: "timeout", message: "Nobody answered" },
+    ] as const) {
+      answer = async () => outcome;
+      expect(await service.send(draft.id, draft.revision)).toEqual({ status: "cancelled", message: outcome.message });
+    }
+    const after = await state();
+    expect(after.sent).toHaveLength(0);
+    expect(after.requests).not.toContain("SendItem");
+    expect(asked).toHaveLength(3);
+    // Still waiting, at the same version: the person can try again.
+    answer = async () => ({ ok: true });
+    expect(await service.send(draft.id, draft.revision)).toMatchObject({ status: "sent" });
+  });
+
+  it("does not open the window for a version the person did not see", async () => {
+    const saved = await service.tool({ tool: "draft", threadId: "thr_1", replyTo: await firstRef(), body: "Seen" });
+    const seen = (await service.draft(saved.draftId!))!;
+    await fetch(`${STUB}/__touch?id=${encodeURIComponent((await state()).drafts[0]!.id)}`, { method: "POST" });
+    expect(await service.send(seen.id, seen.revision)).toMatchObject({ status: "changed" });
+    expect(asked).toHaveLength(0);
+  });
+
+  it("shows Bcc, attachments and the HTML format as Exchange holds the draft, in the card and in the window", async () => {
+    // Bob's message is HTML, so Exchange keeps the reply as HTML too.
+    const saved = await service.tool({ tool: "draft", threadId: "thr_1", replyTo: await firstRef(), replyAll: true, body: "See the numbers attached." });
+    expect((await service.draft(saved.draftId!))!.bodyFormat).toBe("html");
+    // Someone adds a blind copy and a file in Outlook.
+    await edit((await state()).drafts[0]!.id, { bcc: [{ name: "Hidden Watcher", email: "watcher@example.test" }], attachments: [["numbers.xlsx", 2048]] });
+    const draft = (await service.draft(saved.draftId!))!;
+    expect(draft.bcc).toEqual([{ name: "Hidden Watcher", email: "watcher@example.test" }]);
+    expect(draft.attachments).toEqual([{ name: "numbers.xlsx", size: 2048 }]);
+
+    expect(await service.send(draft.id, draft.revision)).toMatchObject({ status: "sent" });
+    expect(asked[0]).toMatchObject({
+      kind: "replyAll",
+      mailbox: "STUB\\alice",
+      to: [{ email: "bob@example.test" }],
+      cc: [{ email: "carol@example.test" }],
+      bcc: [{ email: "watcher@example.test" }],
+      attachments: [{ name: "numbers.xlsx" }],
+      bodyFormat: "html",
+      text: "See the numbers attached.",
+    });
+    expect(asked[0]!.quotedChars).toBeGreaterThan(20);
+    expect((await state()).sent[0]!.bcc.map((a) => a.email)).toEqual(["watcher@example.test"]);
+  });
+
+  it("does not send a draft that changed while the window was open", async () => {
+    const saved = await service.tool({ tool: "draft", threadId: "thr_1", replyTo: await firstRef(), body: "Version one" });
+    const draft = (await service.draft(saved.draftId!))!;
+    answer = async () => {
+      // An agent, or Outlook, rewrites the draft while the person reads the window.
+      await edit((await state()).drafts[0]!.id, { body: "Version two, sent to someone else" });
+      return { ok: true };
+    };
+    expect(await service.send(draft.id, draft.revision)).toMatchObject({ status: "changed" });
+    expect((await state()).sent).toHaveLength(0);
+  });
+
+  it("lets a card in a thread reach only that thread's drafts", async () => {
+    const saved = await service.tool({ tool: "draft", threadId: "thr_1", replyTo: await firstRef(), body: "Mine" });
+    const draft = (await service.draft(saved.draftId!))!;
+    expect(await service.draft(draft.id, undefined, "thr_2")).toBeNull();
+    expect(await service.send(draft.id, draft.revision, undefined, "thr_2")).toMatchObject({ status: "gone" });
+    expect(await service.discardDraft(draft.id, undefined, "thr_2")).toEqual({ ok: false });
+    expect(asked).toHaveLength(0);
+    expect(await service.draft(draft.id, undefined, "thr_1")).not.toBeNull();
   });
 });

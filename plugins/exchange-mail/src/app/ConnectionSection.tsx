@@ -1,7 +1,7 @@
 // Step 1: connect this machine to Exchange. Windows laptops in a domain sign in
 // as the Windows user with no password; elsewhere a login and password, kept in
 // the OS credential store.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AuthMode, ConnectionStatus } from "../../contract";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,7 +80,12 @@ export function ConnectionSection({
 
   const saved = status.url !== null;
   const changed = url !== (status.url ?? "") || auth !== status.auth || (auth === "password" && (user !== (status.user ?? "") || password !== ""));
-  const needsPassword = auth === "password" && !password && !(status.hasPassword && status.auth === "password");
+  // The saved password belongs to the saved address and login: changing either needs it typed again.
+  const sameAccount = status.auth === "password" && url.trim() === (status.url ?? "") && user.trim() === (status.user ?? "");
+  const needsPassword = auth === "password" && !password && !(status.hasPassword && sameAccount);
+  const now = useNow(status.retryAt);
+  const waiting = status.blocked !== null && status.retryAt !== null && now < status.retryAt;
+  const retryClock = status.retryAt ? new Date(status.retryAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
   const curlMissing = status.curlError !== null;
 
   return (
@@ -115,7 +120,16 @@ export function ConnectionSection({
           <Field label="Login" hint="DOMAIN\name or name@company.com">
             <Input value={user} onChange={(event) => setUser(event.target.value)} autoComplete="username" spellCheck={false} />
           </Field>
-          <Field label="Password" hint={status.hasPassword && status.auth === "password" ? "Saved. Type a new one to replace it." : undefined}>
+          <Field
+            label="Password"
+            hint={
+              status.hasPassword && sameAccount
+                ? "Saved. Type a new one to replace it."
+                : status.hasPassword && status.auth === "password"
+                  ? "The saved password is only for the saved address and login. Type it for this one."
+                  : undefined
+            }
+          >
             <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" />
           </Field>
         </div>
@@ -124,8 +138,9 @@ export function ConnectionSection({
       {error ? <Notice tone="error">{error}</Notice> : null}
       {status.blocked && !changed ? (
         <Notice tone="error">
-          Sign-in is paused: {status.blocked} Agents and this panel stop trying, so the domain does not lock your account. Enter the password again, or
-          try once more if you are sure it is right.
+          Sign-in is paused: {status.blocked} So that the domain does not lock your account, nothing — agents, this panel, a new password — tries
+          again before {retryClock}.{" "}
+          {waiting ? "Check the password meanwhile." : "Enter the password again, or try once more if you are sure it is right."}
         </Notice>
       ) : status.lastCheck && !changed ? (
         <Notice tone={status.lastCheck.ok ? "ok" : "error"}>{status.lastCheck.message}</Notice>
@@ -136,8 +151,8 @@ export function ConnectionSection({
           {busy === "connect" ? "Connecting…" : saved ? "Save and check" : "Connect"}
         </Button>
         {saved ? (
-          <Button variant="outline" onClick={() => void check(Boolean(status.blocked))} disabled={busy !== null}>
-            {busy === "check" ? "Checking…" : status.blocked ? "Try once more" : "Check again"}
+          <Button variant="outline" onClick={() => void check(Boolean(status.blocked))} disabled={busy !== null || waiting}>
+            {busy === "check" ? "Checking…" : waiting ? `Try again at ${retryClock}` : status.blocked ? "Try once more" : "Check again"}
           </Button>
         ) : null}
         {saved ? (
@@ -159,4 +174,18 @@ export function ConnectionSection({
       />
     </Section>
   );
+}
+
+/** The current time, ticking each 15 s while a pause is running, so the retry button wakes up by itself. */
+function useNow(until: number | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (until === null || Date.now() >= until) return;
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() >= until) clearInterval(timer);
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [until]);
+  return now;
 }

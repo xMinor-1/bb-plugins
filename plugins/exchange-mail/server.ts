@@ -10,14 +10,25 @@
 //      keep the tools working.
 //   3. A thread that has received mail is marked; the dispatch hook refuses to
 //      send such a thread to a model outside the allow-list, because the whole
-//      history — mail included — would go to that model.
-//   4. Agents can save drafts but there is no agent tool that sends. Sending is
-//      a panel action that must name the draft version the person was shown.
-import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
+//      history — mail included — would go to that model. Forks inherit the
+//      history, so the whole chain of fork sources counts, and a mark outlives
+//      the deletion of its thread.
+//   4. Agents can save drafts but there is no agent tool that sends. Sending
+//      needs the draft version the person was shown and a confirmation in a
+//      system window on the person's machine (src/host/confirm.ts).
+//
+// What bb does not let this module check: who calls an RPC method. The panel,
+// the bb CLI and an agent with a shell all arrive as `{ kind: "client" }`, with
+// no thread or session, so RPC reads cannot be limited to approved models here.
+// Only calls from other plugins are told apart, and refused. Keeping unapproved
+// agents away from `bb plugin rpc call` is the bb build's job: ship only
+// approved agents. The allow-list itself comes from the build's settings; the
+// panel only shows it.
+import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { connectionStatusSchema, draftInputSchema, draftSchema, folderSchema, hostContract, listInputSchema, listOutputSchema, messageSchema, saveConnectionInputSchema, sendResultSchema, type ToolInput } from "./contract";
 import { groupModels } from "./src/shared/models";
-import { createPolicy, formatRules, parseRules, PolicyError, type Policy } from "./src/shared/policy";
+import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
 
 const hostId = z.string().min(1).max(200);
 /** The panel names a machine; a draft card in a thread names the thread, whose machine is looked up. */
@@ -47,13 +58,16 @@ export const rpcContract = defineRpcContract({
   discardDraft: { input: target.extend({ id: z.string().min(1).max(64) }).strict(), output: z.object({ ok: z.boolean() }).strict() },
   sendDraft: { input: target.extend({ id: z.string().min(1).max(64), revision: z.string().min(1).max(512) }).strict(), output: sendResultSchema },
   policy: { input: z.null(), output: policyOutput },
-  savePolicy: { input: z.object({ rules: z.array(ruleSchema).max(200) }).strict(), output: policyOutput },
   agents: { input: z.object({ hostId }).strict(), output: agentsOutputSchema },
 });
 
 const SKILL = "exchange-mail";
 const TOOL_TIMEOUT_MS = 120_000;
 const MODELS_TIMEOUT_MS = 15_000;
+/** Send waits for the person in the system window (src/host/confirm.ts gives up after 4 minutes). */
+const SEND_TIMEOUT_MS = 6 * 60_000;
+/** Fork chains longer than this are not walked; such a thread counts as holding mail. */
+const MAX_FORK_DEPTH = 64;
 /** Realtime channel: a draft was saved, sent or discarded. */
 export const DRAFTS_CHANGED = "drafts-changed";
 
@@ -85,7 +99,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Agents allowed to read mail",
       description:
-        "One rule per line: <provider-id> <model-glob>, for example `acp-opencode corp/*`. Empty means no agent gets mail tools. Edit it in Mail → Settings → Agents.",
+        "One rule per line: <provider-id> <model-glob>, for example `acp-opencode corp/*`. Empty means no agent gets mail tools. Set by whoever builds and configures bb for your company; Mail → Settings shows it.",
       experimental_multiline: true,
       default: "",
       experimental_schema: z.string().max(8000).refine((value) => {
@@ -118,19 +132,57 @@ export default async function plugin(bb: BbPluginApi) {
   const kv = bb.storage.kv;
   const execKey = (threadId: string) => `exec:${threadId}`;
   const taintKey = (threadId: string) => `taint:${threadId}`;
+  /** The thread a thread was forked from, kept here because a deleted thread can no longer be looked up. */
+  const sourceKey = (threadId: string) => `source:${threadId}`;
 
-  async function isTainted(threadId: string | null | undefined): Promise<boolean> {
-    if (!threadId) return false;
-    return ((await kv.get(taintKey(threadId))) ?? null) !== null;
-  }
+  const isMarked = async (threadId: string) => ((await kv.get(taintKey(threadId))) ?? null) !== null;
   const markTainted = (threadId: string) => kv.set(taintKey(threadId), { at: Date.now() });
+
+  async function rememberSource(thread: { id: string; sourceThreadId?: string | null }) {
+    if (thread.sourceThreadId && (await kv.get<string>(sourceKey(thread.id))) !== thread.sourceThreadId) {
+      await kv.set(sourceKey(thread.id), thread.sourceThreadId);
+    }
+  }
+
+  /** The thread each fork came from, or `undefined` when nobody can say any more. */
+  async function sourceOf(threadId: string): Promise<string | null | undefined> {
+    const known = await kv.get<string>(sourceKey(threadId));
+    if (known) return known;
+    try {
+      const thread = await bb.sdk.threads.get({ threadId });
+      await rememberSource(thread);
+      return thread.sourceThreadId ?? null;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Whether a thread or any thread it was forked from, however far back, has
+   * received mail. A link that cannot be followed counts as mail: the
+   * history might hold some.
+   */
+  async function holdsMail(thread: { id: string; sourceThreadId?: string | null }): Promise<boolean> {
+    if (await isMarked(thread.id)) return true;
+    const seen = new Set([thread.id]);
+    let next: string | null | undefined = thread.sourceThreadId ?? null;
+    for (let depth = 0; next; depth++) {
+      if (seen.has(next) || depth >= MAX_FORK_DEPTH) return true;
+      seen.add(next);
+      if (await isMarked(next)) return true;
+      next = await sourceOf(next);
+      if (next === undefined) return true;
+    }
+    return false;
+  }
 
   // ---------- Who may receive mail ----------
 
   bb.experimental_hooks.on("message.dispatch", async (ctx) => {
     const { providerId, model } = ctx.requestedExecution;
     const thread = ctx.thread;
-    const tainted = (await isTainted(thread.id)) || (await isTainted(thread.sourceThreadId));
+    await rememberSource(thread);
+    const tainted = await holdsMail(thread);
     if (tainted && !policy.allows(providerId, model)) {
       return {
         action: "reject",
@@ -139,7 +191,8 @@ export default async function plugin(bb: BbPluginApi) {
           "Switch back to one of them, or start a new thread.",
       };
     }
-    if (tainted && thread.sourceThreadId && !(await isTainted(thread.id))) await markTainted(thread.id);
+    // A fork of a thread with mail is marked itself, so the mark holds even after its source is deleted.
+    if (tainted && !(await isMarked(thread.id))) await markTainted(thread.id);
     // Tool calls check the model of the turn that is running, not the one the thread started with.
     await kv.set(execKey(thread.id), { providerId, model, at: Date.now() } satisfies Execution);
     return { action: "proceed" };
@@ -149,9 +202,15 @@ export default async function plugin(bb: BbPluginApi) {
     policy.allows(ctx.provider.id, ctx.provider.model) ? { tools: TOOL_NAMES, skills: [SKILL] } : { tools: [], skills: [] },
   );
 
+  bb.events.on("thread.created", async ({ thread }) => {
+    await rememberSource(thread);
+    if (thread.sourceThreadId && (await holdsMail(thread))) await markTainted(thread.id);
+  });
+
+  // The mark and the fork link stay: forks of a deleted thread still hold its mail.
   bb.events.on("thread.deleted", async ({ thread }) => {
+    await rememberSource(thread);
     await kv.delete(execKey(thread.id));
-    await kv.delete(taintKey(thread.id));
   });
 
   async function hostOfThread(threadId: string): Promise<string | null> {
@@ -263,7 +322,23 @@ export default async function plugin(bb: BbPluginApi) {
   const changed = (id: string) => bb.realtime.publish(DRAFTS_CHANGED, { id });
   const policyView = () => ({ rules: [...policy.rules], error: policyError });
 
-  bb.rpc.register(rpcContract, {
+  type RpcHandlers = Parameters<typeof bb.rpc.register<typeof rpcContract>>[1];
+  type Handler = (input: unknown, context: Parameters<RpcHandlers["status"]>[1]) => unknown;
+  /** Mail and the connection are for this plugin's own panel and people, not for other plugins. */
+  const ownCallers = (handlers: RpcHandlers): RpcHandlers =>
+    Object.fromEntries(
+      Object.entries(handlers as Record<string, Handler>).map(([name, handler]) => [
+        name,
+        ((input, context) => {
+          if (context.experimental_caller.kind !== "client") {
+            throw new experimental_PluginRpcRefusal({ code: "forbidden", message: "Exchange Mail does not answer other plugins." });
+          }
+          return handler(input, context);
+        }) satisfies Handler,
+      ]),
+    ) as unknown as RpcHandlers;
+
+  const handlers: RpcHandlers = {
     machines: async () => {
       const hosts = await bb.sdk.hosts.list();
       const machines = hosts
@@ -284,7 +359,8 @@ export default async function plugin(bb: BbPluginApi) {
     drafts: ({ hostId }) => call("drafts", hostId, {}),
     draft: async ({ id, ...where }) => {
       const hostId = await resolve(where);
-      return { draft: await call("draft", hostId, { id }), hostId };
+      // A card in a thread shows only that thread's drafts; the id comes from message text anyone could write.
+      return { draft: await call("draft", hostId, { id, threadId: where.threadId }), hostId };
     },
     saveDraft: async ({ hostId, ...input }) => {
       const draft = await call("saveDraft", hostId, { ...input, source: "person", threadId: null });
@@ -292,30 +368,18 @@ export default async function plugin(bb: BbPluginApi) {
       return draft;
     },
     discardDraft: async ({ id, ...where }) => {
-      const result = await call("discardDraft", await resolve(where), { id });
+      const result = await call("discardDraft", await resolve(where), { id, threadId: where.threadId });
       changed(id);
       return result;
     },
     sendDraft: async ({ id, revision, ...where }) => {
-      const result = await call("send", await resolve(where), { id, revision }, 120_000);
+      // The host asks the person in a system window before anything leaves.
+      const result = await call("send", await resolve(where), { id, revision, threadId: where.threadId }, SEND_TIMEOUT_MS);
       changed(id);
       bb.log.info(`draft ${id}: ${result.status}`);
       return result;
     },
     policy: () => policyView(),
-    savePolicy: async ({ rules }) => {
-      let text: string;
-      try {
-        text = formatRules(parseRules(formatRules(rules)));
-      } catch (error) {
-        // A bad rule is the person's typo, not a server failure: keep the saved list and say what is wrong.
-        if (error instanceof PolicyError) return { rules: [...policy.rules], error: error.message };
-        throw error;
-      }
-      await settings.experimental_set({ allowedModels: text });
-      applyPolicy(text);
-      return policyView();
-    },
     agents: async ({ hostId }) => {
       const providers = await bb.sdk.providers.list({ hostId });
       const out = await Promise.all(
@@ -333,7 +397,8 @@ export default async function plugin(bb: BbPluginApi) {
       // Agents not installed on that machine have nothing to tick.
       return { providers: out.filter((provider) => provider.groups.length > 0) };
     },
-  });
+  };
+  bb.rpc.register(rpcContract, ownCallers(handlers));
 }
 
 const TOOL_NAMES = ["mail_list", "mail_search", "mail_read", "mail_draft"];

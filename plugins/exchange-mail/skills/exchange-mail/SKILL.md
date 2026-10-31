@@ -49,8 +49,9 @@ not work on another machine.
    button. Then say in one sentence what the draft says and who gets it.
 5. To change the draft, call `mail_draft` again with `replaces` = the draft id
    and the full new text. The user's Send button always sends the latest
-   version they saw; if you change a draft while they look at it, bb asks them
-   to review it again.
+   version they saw, after they confirm it in a system window on their
+   computer; if you change a draft while they look at it, bb asks them to
+   review it again. Never try to send or confirm a draft yourself.
 
 A new message (not a reply) needs `to` (`"Name <email>"` or `email`) and a
 `subject`.

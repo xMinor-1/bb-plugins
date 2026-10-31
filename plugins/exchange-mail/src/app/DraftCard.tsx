@@ -1,10 +1,13 @@
 // A draft waiting for the person: who it goes to, what it says, and the Send
 // button. Send names the version shown here; if the draft changed meanwhile
 // (an agent revised it, someone edited it in Outlook) nothing is sent and the
-// new version is shown instead.
+// new version is shown instead. The button only starts sending: the machine
+// that holds the mailbox asks once more in a system window, and only that
+// answer sends.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBbNavigate, useRealtime } from "@get-bb/plugin-sdk/app";
-import type { Draft, MailAddress } from "../../contract";
+import type { BodyFormat, Draft, MailAddress } from "../../contract";
+import { whileConfirming } from "./draft-sync";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -26,6 +29,43 @@ export const textareaClass =
 
 type Outcome = { tone: "ok" | "error" | "warn"; text: string } | null;
 
+const FORMAT: Record<BodyFormat, string> = {
+  text: "Plain text",
+  html: "HTML — goes out with the formatting Outlook shows",
+  rtf: "Rich text (RTF) — goes out with formatting",
+  unknown: "Unknown — Exchange did not say; it may go out as HTML",
+};
+
+const size = (bytes: number | null) => (bytes === null ? "" : bytes < 1024 ? ` (${bytes} B)` : bytes < 1048576 ? ` (${Math.round(bytes / 1024)} KB)` : ` (${(bytes / 1048576).toFixed(1)} MB)`);
+
+/** Everything that goes: the card and the confirmation show the same list. */
+function Envelope({ draft }: { draft: Draft }) {
+  return (
+    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+      <dt className="text-muted-foreground">To</dt>
+      <dd className="break-words">{formatList(draft.to) || <span className="text-destructive">nobody</span>}</dd>
+      {draft.cc.length ? (
+        <>
+          <dt className="text-muted-foreground">Cc</dt>
+          <dd className="break-words">{formatList(draft.cc)}</dd>
+        </>
+      ) : null}
+      {draft.bcc.length ? (
+        <>
+          <dt className="text-muted-foreground">Bcc</dt>
+          <dd className="break-words font-medium">{formatList(draft.bcc)}</dd>
+        </>
+      ) : null}
+      <dt className="text-muted-foreground">Subject</dt>
+      <dd className="break-words">{draft.subject || "(no subject)"}</dd>
+      <dt className="text-muted-foreground">Attachments</dt>
+      <dd className="break-words">{draft.attachments.length ? draft.attachments.map((a) => `${a.name}${size(a.size)}`).join(", ") : "none"}</dd>
+      <dt className="text-muted-foreground">Format</dt>
+      <dd className="break-words">{FORMAT[draft.bodyFormat]}</dd>
+    </dl>
+  );
+}
+
 export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; target: DraftTarget; id: string; initial?: Draft; onDone?: () => void }) {
   const navigate = useBbNavigate();
   const [draft, setDraft] = useState<Draft | null | undefined>(initial);
@@ -35,6 +75,11 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
   const [confirming, setConfirming] = useState<null | "send" | "discard">(null);
   // Our own send or discard announces itself over realtime before its answer arrives; that echo must not reload the card.
   const acting = useRef(false);
+  // Read inside the realtime handler, which may hold an older render's values.
+  const shownRef = useRef<Draft | null | undefined>(initial);
+  shownRef.current = draft;
+  const confirmingRef = useRef(confirming);
+  confirmingRef.current = confirming;
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showQuote, setShowQuote] = useState(false);
@@ -55,7 +100,25 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
     if (initial === undefined) load();
   }, [load, initial]);
   useRealtime("drafts-changed", (payload) => {
-    if ((payload as { id?: string } | null)?.id === id && !acting.current && outcome?.tone !== "ok") load();
+    if ((payload as { id?: string } | null)?.id !== id || acting.current || outcome?.tone === "ok") return;
+    if (!confirmingRef.current) {
+      load();
+      return;
+    }
+    // A dialog is open: what it shows must not change under the person's eyes.
+    // If the draft moved on, the dialog closes and the new version is shown instead.
+    const asked = confirmingRef.current;
+    rpc.call("draft", { ...target, id }).then(
+      (result) => {
+        const next = whileConfirming(shownRef.current ?? null, result.draft);
+        if (next.action === "keep" || confirmingRef.current !== asked || acting.current) return;
+        setConfirming(null);
+        setDraft(result.draft);
+        setHostId(result.hostId);
+        setOutcome({ tone: "warn", text: next.message });
+      },
+      () => undefined,
+    );
   });
 
   const named = (text: string) => (draft?.subject ? `“${draft.subject}”: ${text}` : text);
@@ -72,7 +135,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
         onDone?.();
       } else {
         setOutcome({ tone: "warn", text: result.message });
-        load();
+        if (result.status !== "cancelled") load();
       }
     } catch (cause) {
       setOutcome({ tone: "error", text: errorText(cause) });
@@ -139,18 +202,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
         />
       ) : (
         <>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-            <dt className="text-muted-foreground">To</dt>
-            <dd className="break-words">{formatList(draft.to) || <span className="text-destructive">nobody</span>}</dd>
-            {draft.cc.length ? (
-              <>
-                <dt className="text-muted-foreground">Cc</dt>
-                <dd className="break-words">{formatList(draft.cc)}</dd>
-              </>
-            ) : null}
-            <dt className="text-muted-foreground">Subject</dt>
-            <dd className="break-words">{draft.subject || "(no subject)"}</dd>
-          </dl>
+          <Envelope draft={draft} />
           <div className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 leading-relaxed">{shown}</div>
           {quote ? (
             <div>
@@ -178,27 +230,17 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
       <ConfirmDialog
         open={confirming === "send"}
         title="Send this message?"
-        description="It goes out from your mailbox exactly as shown and cannot be called back."
-        confirmLabel="Send now"
-        busyLabel="Sending…"
+        description="It goes out from your mailbox exactly as shown and cannot be called back. Your computer then asks once more in a system window: only Send there sends it."
+        confirmLabel="Continue"
+        busyLabel="Confirm in the system window…"
         busy={busy}
         onConfirm={() => void send()}
         onCancel={() => setConfirming(null)}
       >
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-          <dt className="text-muted-foreground">To</dt>
-          <dd className="break-words">{formatList(draft.to)}</dd>
-          {draft.cc.length ? (
-            <>
-              <dt className="text-muted-foreground">Cc</dt>
-              <dd className="break-words">{formatList(draft.cc)}</dd>
-            </>
-          ) : null}
-          <dt className="text-muted-foreground">Subject</dt>
-          <dd className="break-words">{draft.subject || "(no subject)"}</dd>
-        </dl>
+        <Envelope draft={draft} />
         <p className="text-xs text-muted-foreground">
-          {draft.to.length + draft.cc.length} recipient{draft.to.length + draft.cc.length === 1 ? "" : "s"}, {shown.trim().length} characters of text
+          {draft.to.length + draft.cc.length + draft.bcc.length} recipient{draft.to.length + draft.cc.length + draft.bcc.length === 1 ? "" : "s"},{" "}
+          {shown.trim().length} characters of text
           {quote ? " plus the quoted message" : ""}.
         </p>
       </ConfirmDialog>

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildCurlConfig, configString, defaultCurlPath, parseCurlVersion } from "../src/host/curl";
 import { normalizeEwsUrl } from "../src/host/ews/client";
 import { EwsError, parseCreateItem, parseFindItems, parseGetItem } from "../src/host/ews/parse";
-import { createDraft, findItems, sendItem, xml } from "../src/host/ews/soap";
+import { createDraft, findItems, getItem, sendItem, xml } from "../src/host/ews/soap";
 import { formatTime } from "../src/host/format";
 import { parseRecipient, refFor } from "../src/host/service";
 
@@ -29,6 +29,12 @@ describe("requests", () => {
     expect(reply).toMatch(/<t:ReplyAllToItem><t:ReferenceItemId Id="ID1" ChangeKey="CK1"\/><t:NewBodyContent BodyType="Text">ok<\/t:NewBodyContent><\/t:ReplyAllToItem>/);
     expect(() => sendItem({ id: "ID1" })).toThrow(/change key/);
     expect(sendItem({ id: "ID1", changeKey: "CK2" })).toContain('<t:ItemId Id="ID1" ChangeKey="CK2"/>');
+  });
+
+  it("ask GetItem for Bcc and the stored body format", () => {
+    const request = getItem({ id: "ID1" });
+    expect(request).toContain('<t:FieldURI FieldURI="message:BccRecipients"/>');
+    expect(request).toContain('<t:ExtendedFieldURI PropertyTag="0x1016" PropertyType="Integer"/></t:AdditionalProperties>');
   });
 
   it("put FindItem parts in schema order", () => {
@@ -81,6 +87,26 @@ describe("answers", () => {
     ]);
   });
 
+  it("read Bcc and how the body is stored, which the plain-text body hides", () => {
+    const get = (extra: string) =>
+      parseGetItem(
+        wrap(
+          `<m:GetItemResponse><m:ResponseMessages><m:GetItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Items><t:Message>` +
+            `<t:ItemId Id="A" ChangeKey="a"/><t:Subject>S</t:Subject><t:Body BodyType="Text">hi</t:Body>${extra}` +
+            `</t:Message></m:Items></m:GetItemResponseMessage></m:ResponseMessages></m:GetItemResponse>`,
+        ),
+      );
+    const html = get(
+      `<t:BccRecipients><t:Mailbox><t:Name>Hidden</t:Name><t:EmailAddress>h@x.test</t:EmailAddress></t:Mailbox></t:BccRecipients>` +
+        `<t:ExtendedProperty><t:ExtendedFieldURI PropertyTag="0x1016" PropertyType="Integer"/><t:Value>3</t:Value></t:ExtendedProperty>`,
+    );
+    expect(html.bcc).toEqual([{ name: "Hidden", email: "h@x.test" }]);
+    expect(html.bodyFormat).toBe("html");
+    expect(get(`<t:ExtendedProperty><t:ExtendedFieldURI PropertyTag="0x1016" PropertyType="Integer"/><t:Value>1</t:Value></t:ExtendedProperty>`).bodyFormat).toBe("text");
+    expect(get("").bodyFormat).toBe("unknown");
+    expect(get("").bcc).toEqual([]);
+  });
+
   it("turn EWS errors and SOAP faults into EwsError", () => {
     const error = wrap(
       `<m:CreateItemResponse><m:ResponseMessages><m:CreateItemResponseMessage ResponseClass="Error"><m:MessageText>The change key is stale.</m:MessageText><m:ResponseCode>ErrorStaleObject</m:ResponseCode></m:CreateItemResponseMessage></m:ResponseMessages></m:CreateItemResponse>`,
@@ -130,7 +156,8 @@ describe("helpers", () => {
     expect(normalizeEwsUrl("https://mail.example.test/EWS/Exchange.asmx")).toBe("https://mail.example.test/EWS/Exchange.asmx");
     expect(() => normalizeEwsUrl("http://mail.example.test/EWS/Exchange.asmx")).toThrow(/https/);
     expect(() => normalizeEwsUrl("https://me:pw@mail.example.test/")).toThrow(/login/);
-    expect(normalizeEwsUrl("http://127.0.0.1:8080/EWS/Exchange.asmx")).toBe("http://127.0.0.1:8080/EWS/Exchange.asmx");
+    expect(() => normalizeEwsUrl("http://127.0.0.1:8080/EWS/Exchange.asmx")).toThrow(/https/);
+    expect(normalizeEwsUrl("http://127.0.0.1:8080/EWS/Exchange.asmx", { allowLocalHttp: true })).toBe("http://127.0.0.1:8080/EWS/Exchange.asmx");
   });
 
   it("parses recipients", () => {

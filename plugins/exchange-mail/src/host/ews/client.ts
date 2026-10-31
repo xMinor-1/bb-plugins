@@ -13,8 +13,15 @@ export interface EwsClientOptions {
   readonly onAuthFailure?: (message: string) => Promise<void>;
 }
 
-/** Normalizes the EWS address: https only, path defaults to /EWS/Exchange.asmx. */
-export function normalizeEwsUrl(input: string): string {
+/** Lets a test server on this machine use plain http. Never on by default. */
+export const DEV_HTTP_FLAG = "EXCHANGE_MAIL_DEV_ALLOW_LOCAL_HTTP";
+
+/**
+ * Normalizes the EWS address: https only, path defaults to /EWS/Exchange.asmx.
+ * Plain http to this machine is allowed only with `allowLocalHttp`, for tests
+ * and development against a stub.
+ */
+export function normalizeEwsUrl(input: string, options: { allowLocalHttp?: boolean } = {}): string {
   let url: URL;
   try {
     url = new URL(input.trim().includes("://") ? input.trim() : `https://${input.trim()}`);
@@ -22,8 +29,10 @@ export function normalizeEwsUrl(input: string): string {
     throw new Error("Enter the Exchange address, for example https://mail.example.com/EWS/Exchange.asmx");
   }
   const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
-  // Plain http would hand the sign-in to anyone on the network; only a test server on this machine may use it.
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) throw new Error("The Exchange address must start with https://");
+  // Plain http would hand the sign-in to anyone on the network; only a test server on this machine, under the dev flag, may use it.
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local && options.allowLocalHttp === true)) {
+    throw new Error("The Exchange address must start with https://");
+  }
   if (url.username || url.password) throw new Error("Do not put a login into the address");
   if (url.pathname === "/" || url.pathname === "") url.pathname = "/EWS/Exchange.asmx";
   url.hash = "";

@@ -30,8 +30,10 @@ export const connectionStatusSchema = z
     user: z.string().nullable(),
     hasPassword: z.boolean(),
     passwordStore: z.string().nullable(),
-    /** Why sign-in is paused: Exchange refused the password. Nothing signs in again until the person acts. */
+    /** Why sign-in is paused: Exchange refused the password for this login. */
     blocked: z.string().nullable(),
+    /** While paused: the earliest time (ms) bb may try this login again, whoever asks. */
+    retryAt: z.number().nullable(),
     lastCheck: z.object({ ok: z.boolean(), at: z.number(), message: z.string() }).strict().nullable(),
   })
   .strict();
@@ -83,6 +85,12 @@ export type ListOutput = z.infer<typeof listOutputSchema>;
 export const draftKindSchema = z.enum(["new", "reply", "replyAll"]);
 export type DraftKind = z.infer<typeof draftKindSchema>;
 
+/** How Exchange stores the body. Anything but text goes out with formatting the plain-text view does not show. */
+export const bodyFormatSchema = z.enum(["text", "html", "rtf", "unknown"]);
+export type BodyFormat = z.infer<typeof bodyFormatSchema>;
+
+export const attachmentSchema = z.object({ name: z.string(), size: z.number().nullable() }).strict();
+
 const recipientList = z.array(z.string().min(3).max(320)).max(100);
 
 export const draftInputSchema = z
@@ -113,6 +121,10 @@ export const draftSchema = z
     subject: z.string(),
     to: z.array(addressSchema),
     cc: z.array(addressSchema),
+    /** Blind copies: added in Outlook, for example. The person must see them before sending. */
+    bcc: z.array(addressSchema),
+    attachments: z.array(attachmentSchema),
+    bodyFormat: bodyFormatSchema,
     /** What Exchange holds now, as plain text: the new text and, for replies, the quoted message. */
     body: z.string(),
     /** The text written for this draft, without the quote. */
@@ -129,6 +141,8 @@ export const sendResultSchema = z
     z.object({ status: z.literal("sent"), at: z.number() }).strict(),
     z.object({ status: z.literal("changed"), message: z.string() }).strict(),
     z.object({ status: z.literal("gone"), message: z.string() }).strict(),
+    /** The person did not confirm in the system window, or no window could be shown. Nothing was sent. */
+    z.object({ status: z.literal("cancelled"), message: z.string() }).strict(),
   ]);
 export type SendResult = z.infer<typeof sendResultSchema>;
 
@@ -166,6 +180,8 @@ export const saveConnectionInputSchema = z
   .strict();
 
 const empty = z.object({}).strict();
+/** A draft by id. With `threadId`, only a draft prepared in that thread answers: a card in a thread shows its own drafts. */
+const draftRef = z.object({ id: z.string().min(1).max(64), threadId: z.string().min(1).max(200).optional() }).strict();
 
 export const hostContract = defineRpcContract({
   status: { input: empty, output: connectionStatusSchema, experimental_retryable: true },
@@ -175,9 +191,9 @@ export const hostContract = defineRpcContract({
   list: { input: listInputSchema, output: listOutputSchema, experimental_retryable: true },
   read: { input: z.object({ ref: z.string().min(1).max(64), markRead: z.boolean().optional() }).strict(), output: messageSchema },
   drafts: { input: empty, output: z.object({ drafts: z.array(draftSchema) }).strict(), experimental_retryable: true },
-  draft: { input: z.object({ id: z.string().min(1).max(64) }).strict(), output: draftSchema.nullable(), experimental_retryable: true },
+  draft: { input: draftRef, output: draftSchema.nullable(), experimental_retryable: true },
   saveDraft: { input: draftInputSchema, output: draftSchema },
-  discardDraft: { input: z.object({ id: z.string().min(1).max(64) }).strict(), output: z.object({ ok: z.boolean() }).strict() },
-  send: { input: z.object({ id: z.string().min(1).max(64), revision: z.string().min(1).max(512) }).strict(), output: sendResultSchema },
+  discardDraft: { input: draftRef, output: z.object({ ok: z.boolean() }).strict() },
+  send: { input: draftRef.extend({ revision: z.string().min(1).max(512) }).strict(), output: sendResultSchema },
   tool: { input: toolInputSchema, output: toolOutputSchema },
 });

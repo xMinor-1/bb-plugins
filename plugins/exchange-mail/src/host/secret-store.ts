@@ -171,6 +171,13 @@ function keychainStore(): SecretStore {
     },
     async set(name, value) {
       checkName(name);
+      // No `-T <host binary>`: the Keychain checks the program that reads the
+      // item, and that is always /usr/bin/security (node cannot read the
+      // Keychain itself). Listing the host binary would make every read ask
+      // the person; the default list — /usr/bin/security, which created the
+      // item — is the narrowest that works. Any program running as this user
+      // can therefore read the password through `security`, which is why the
+      // README recommends Kerberos sign-in on a Mac.
       const secret = keychainQuote(checkSecretValue(value));
       const command = `add-generic-password -U -s ${KEYCHAIN_SERVICE} -a ${name} -l "Exchange Mail ${name}" -w ${secret}\n`;
       const result = await run(security, ["-i"], { input: command });

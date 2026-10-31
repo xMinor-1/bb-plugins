@@ -94,6 +94,7 @@ const MESSAGE_FIELDS = [
   "message:From",
   "message:ToRecipients",
   "message:CcRecipients",
+  "message:BccRecipients",
   "item:DateTimeReceived",
   "item:DateTimeSent",
   "message:IsRead",
@@ -104,11 +105,18 @@ const MESSAGE_FIELDS = [
   "message:InternetMessageId",
 ];
 
+/**
+ * PR_NATIVE_BODY_INFO: how the body is stored (1 text, 2 RTF, 3 HTML). The body
+ * is asked for as text, so this is the only way to know it goes out formatted.
+ */
+export const NATIVE_BODY_TAG = "0x1016";
+const nativeBody = `<t:ExtendedFieldURI PropertyTag="${NATIVE_BODY_TAG}" PropertyType="Integer"/>`;
+
 /** A whole message with its body converted to plain text by Exchange. */
 export function getItem(ref: ItemRef): string {
   return envelope(
     `<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:BodyType>Text</t:BodyType>` +
-      `<t:AdditionalProperties>${MESSAGE_FIELDS.map(field).join("")}</t:AdditionalProperties></m:ItemShape>` +
+      `<t:AdditionalProperties>${MESSAGE_FIELDS.map(field).join("")}${nativeBody}</t:AdditionalProperties></m:ItemShape>` +
       `<m:ItemIds>${itemId({ id: ref.id })}</m:ItemIds></m:GetItem>`,
   );
 }

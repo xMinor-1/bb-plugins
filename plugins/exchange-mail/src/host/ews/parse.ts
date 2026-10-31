@@ -12,7 +12,7 @@ export class EwsError extends Error {
   }
 }
 
-const ARRAYS = new Set(["Mailbox", "FileAttachment", "ItemAttachment", "ReferenceAttachment"]);
+const ARRAYS = new Set(["Mailbox", "FileAttachment", "ItemAttachment", "ReferenceAttachment", "ExtendedProperty"]);
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -136,9 +136,25 @@ export function parseFindItems(xmlText: string): { items: ParsedSummary[]; total
   };
 }
 
+export type BodyFormat = "text" | "html" | "rtf" | "unknown";
+
+/** PR_NATIVE_BODY_INFO from the item's extended properties. */
+function bodyFormat(node: Node): BodyFormat {
+  for (const property of list(node.ExtendedProperty)) {
+    const uri = asNode(property.ExtendedFieldURI);
+    const tag = text(uri?.["@PropertyTag"]).trim().toLowerCase();
+    if (tag !== "0x1016" && tag !== "4118") continue;
+    const value = Number(text(property.Value));
+    return value === 1 ? "text" : value === 2 ? "rtf" : value === 3 ? "html" : "unknown";
+  }
+  return "unknown";
+}
+
 export interface ParsedMessage extends ParsedSummary {
   readonly to: Address[];
   readonly cc: Address[];
+  readonly bcc: Address[];
+  readonly bodyFormat: BodyFormat;
   readonly sent: string | null;
   readonly isDraft: boolean;
   readonly body: string;
@@ -160,6 +176,8 @@ export function parseGetItem(xmlText: string): ParsedMessage {
     ...summary(kind, node),
     to: addresses(node.ToRecipients),
     cc: addresses(node.CcRecipients),
+    bcc: addresses(node.BccRecipients),
+    bodyFormat: bodyFormat(node),
     sent: text(node.DateTimeSent) || null,
     isDraft: bool(node.IsDraft),
     body: text(node.Body).replace(/\r\n/g, "\n"),

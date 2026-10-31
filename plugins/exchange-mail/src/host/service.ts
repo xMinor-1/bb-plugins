@@ -16,6 +16,7 @@ import type {
   SendResult,
   ToolInput,
 } from "../../contract.js";
+import { oneAtATime, systemConfirmer, type SendConfirmer, type SendSummary } from "./confirm.js";
 import { curlTransport, TransportError, type HttpAuth, type Transport } from "./curl.js";
 import { AuthError, EwsClient, EwsError, normalizeEwsUrl } from "./ews/client.js";
 import type { ParsedMessage, ParsedSummary } from "./ews/parse.js";
@@ -23,6 +24,7 @@ import type { Address, FolderName, ItemRef } from "./ews/soap.js";
 import { readJson, removeFile, serial, writeJson } from "./files.js";
 import { formatDraft, formatList, formatMessage } from "./format.js";
 import { openSecretStore, type SecretStore } from "./secret-store.js";
+import { accountName, SignInGate, SignInPaused, type Refusal, type RefusalStore } from "./signin.js";
 
 const EWS_FOLDER: Record<Folder, FolderName> = { inbox: "inbox", sent: "sentitems", drafts: "drafts", deleted: "deleteditems" };
 const FOLDER_TITLE: Record<Folder, string> = { inbox: "Inbox", sent: "Sent Items", drafts: "Drafts", deleted: "Deleted Items" };
@@ -35,9 +37,13 @@ interface Connection {
   auth: AuthMode;
   user: string | null;
   lastCheck: { ok: boolean; at: number; message: string } | null;
-  /** Set when Exchange refused the password: retrying every agent call would lock the account. */
-  blocked?: string | null;
+  /** Changes with every password typed in, so a refused password is never retried on its own. */
+  passwordVersion?: string | null;
+  /** The address and login the stored password was entered for; it is used for nothing else. */
+  passwordFor?: string | null;
 }
+
+const bindingOf = (url: string, user: string) => `${url}\n${user}`;
 
 interface DraftEntry {
   id: string;
@@ -59,6 +65,12 @@ export interface MailServiceOptions {
   readonly platform?: NodeJS.Platform;
   /** For tests: minutes east of UTC used in agent answers. */
   readonly utcOffsetMinutes?: number;
+  /** The system window that confirms each send. Tests pass a stand-in. */
+  readonly confirm?: SendConfirmer;
+  /** Plain http to this machine, for a test server only. */
+  readonly allowLocalHttp?: boolean;
+  /** For tests: the clock. */
+  readonly now?: () => number;
 }
 
 /** Short, stable names for Exchange item ids, which run to 150+ characters. */
@@ -81,7 +93,9 @@ export function parseRecipient(input: string): Address {
 const toAddress = (a: Address): MailAddress => ({ name: a.name, email: a.email });
 
 function describe(error: unknown): string {
-  if (error instanceof UserError || error instanceof AuthError || error instanceof TransportError || error instanceof EwsError) return error.message;
+  if (error instanceof UserError || error instanceof SignInPaused || error instanceof AuthError || error instanceof TransportError || error instanceof EwsError) {
+    return error.message;
+  }
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -91,8 +105,13 @@ export class MailService {
   private readonly secrets: SecretStore;
   private readonly platform: NodeJS.Platform;
   private readonly offset: number | undefined;
+  private readonly confirmer: SendConfirmer;
+  private readonly allowLocalHttp: boolean;
+  private readonly now: () => number;
+  private readonly gate: SignInGate;
   private readonly writeDrafts = serial();
   private readonly writeRefs = serial();
+  private readonly writeSignIn = serial();
   private refs: Map<string, string> | null = null;
   private refsDirty: NodeJS.Timeout | null = null;
 
@@ -102,6 +121,10 @@ export class MailService {
     this.secrets = options.secrets ?? openSecretStore("auto", options.platform);
     this.platform = options.platform ?? process.platform;
     this.offset = options.utcOffsetMinutes;
+    this.confirmer = oneAtATime(options.confirm ?? systemConfirmer(this.platform));
+    this.allowLocalHttp = options.allowLocalHttp === true;
+    this.now = options.now ?? Date.now;
+    this.gate = new SignInGate(this.refusalStore(), this.now);
   }
 
   close(): void {
@@ -115,10 +138,36 @@ export class MailService {
   // ---------------------------------------------------------------- connection
 
   private connectionFile = () => join(this.dataDir, "connection.json");
+  /** Refused sign-ins per login. Not mail, and kept through Disconnect: forgetting it would lift the pause. */
+  private signInFile = () => join(this.dataDir, "signin.json");
   private draftsFile = () => join(this.dataDir, "drafts.json");
   private refsFile = () => join(this.dataDir, "refs.json");
 
   private readConnection = () => readJson<Connection>(this.connectionFile());
+
+  private refusalStore(): RefusalStore {
+    const read = async () => (await readJson<Record<string, Refusal>>(this.signInFile())) ?? {};
+    return {
+      get: async (login) => (await read())[login] ?? null,
+      set: (login, refusal) =>
+        this.writeSignIn(async () => {
+          const all = await read();
+          if (refusal) all[login] = refusal;
+          else delete all[login];
+          // A day-old refusal no longer counts towards any lockout window.
+          for (const [name, entry] of Object.entries(all)) if (this.now() - entry.at > 86_400_000) delete all[name];
+          await writeJson(this.signInFile(), all);
+        }),
+    };
+  }
+
+  private normalizeUrl(input: string): string {
+    try {
+      return normalizeEwsUrl(input, { allowLocalHttp: this.allowLocalHttp });
+    } catch (error) {
+      throw new UserError(describe(error));
+    }
+  }
 
   async status(): Promise<ConnectionStatus> {
     const connection = await this.readConnection();
@@ -131,7 +180,11 @@ export class MailService {
     } catch (error) {
       curlError = describe(error);
     }
-    const hasPassword = connection?.auth === "password" ? await this.secrets.has(PASSWORD).catch(() => false) : false;
+    const password = connection?.auth === "password" && connection.user;
+    const hasPassword = password
+      ? connection.passwordFor === bindingOf(connection.url, connection.user!) && (await this.secrets.has(PASSWORD).catch(() => false))
+      : false;
+    const pause = password ? await this.gate.status(accountName(connection.user!)) : { blocked: null, retryAt: null };
     return {
       platform: this.platform,
       curl,
@@ -141,42 +194,57 @@ export class MailService {
       user: connection?.user ?? null,
       hasPassword,
       passwordStore: this.secrets.label,
-      blocked: connection?.blocked ?? null,
+      blocked: pause.blocked,
+      retryAt: pause.retryAt,
       lastCheck: connection?.lastCheck ?? null,
     };
   }
 
   async saveConnection(input: { url: string; auth: AuthMode; user?: string; password?: string }): Promise<ConnectionStatus> {
-    let url: string;
-    try {
-      url = normalizeEwsUrl(input.url);
-    } catch (error) {
-      throw new UserError(describe(error));
-    }
+    const url = this.normalizeUrl(input.url);
     const previous = await this.readConnection();
     let user: string | null = null;
+    let passwordVersion: string | null = null;
+    let passwordFor: string | null = null;
     if (input.auth === "password") {
       user = (input.user ?? "").trim();
       if (!user) throw new UserError("Enter the login, for example DOMAIN\\name or name@company.com");
-      if (input.password) await this.secrets.set(PASSWORD, Buffer.from(input.password, "utf8").toString("base64"));
-      else if (!(await this.secrets.has(PASSWORD))) throw new UserError("Enter the password");
+      passwordFor = bindingOf(url, user);
+      if (input.password) {
+        await this.secrets.set(PASSWORD, Buffer.from(input.password, "utf8").toString("base64"));
+        passwordVersion = randomBytes(6).toString("hex");
+      } else {
+        // A password belongs to the address and login it was typed for: never send it to another server or as another login.
+        const kept = previous?.auth === "password" && previous.passwordFor === passwordFor && (await this.secrets.has(PASSWORD));
+        if (!kept) {
+          const hadOne = previous?.auth === "password";
+          await this.secrets.delete(PASSWORD).catch(() => false);
+          throw new UserError(
+            hadOne
+              ? "The saved password was for the previous address or login, so bb removed it. Enter the password for this one."
+              : "Enter the password",
+          );
+        }
+        passwordVersion = previous.passwordVersion ?? null;
+      }
     } else {
       await this.secrets.delete(PASSWORD).catch(() => false);
     }
     const sameTarget = previous && previous.url === url && previous.auth === input.auth && previous.user === user && !input.password;
-    // A new password, login or address lifts the pause; saving the same settings again does not.
     await writeJson(this.connectionFile(), {
       url,
       auth: input.auth,
       user,
       lastCheck: sameTarget ? previous.lastCheck : null,
-      blocked: sameTarget ? (previous.blocked ?? null) : null,
+      passwordVersion,
+      passwordFor,
     } satisfies Connection);
     return this.status();
   }
 
   async forget(): Promise<ConnectionStatus> {
     await this.secrets.delete(PASSWORD).catch(() => false);
+    this.gate.reset();
     await removeFile(this.connectionFile());
     await this.writeDrafts(() => removeFile(this.draftsFile()));
     await this.writeRefs(async () => {
@@ -189,23 +257,20 @@ export class MailService {
   private async client(options: { retry?: boolean } = {}): Promise<EwsClient> {
     const connection = await this.readConnection();
     if (!connection) throw new UserError("Mail is not connected on this machine yet. Connect it in Mail → Settings in the bb sidebar.");
-    let auth: HttpAuth;
-    if (connection.auth === "negotiate") auth = { kind: "negotiate" };
-    else {
-      if (connection.blocked && !options.retry) {
-        throw new UserError(`Mail sign-in is paused: ${connection.blocked} Enter the password again in Mail → Settings in the bb sidebar, or press Try once more there.`);
-      }
-      const stored = await this.secrets.get(PASSWORD);
-      if (!stored || !connection.user) throw new UserError("The mail password is missing on this machine. Enter it again in Mail → Settings in the bb sidebar.");
-      auth = { kind: "ntlm", user: connection.user, password: Buffer.from(stored, "base64").toString("utf8") };
+    const url = this.normalizeUrl(connection.url);
+    if (connection.auth === "negotiate") return new EwsClient({ url, auth: { kind: "negotiate" }, transport: this.transport });
+    if (!connection.user || connection.passwordFor !== bindingOf(connection.url, connection.user)) {
+      await this.secrets.delete(PASSWORD).catch(() => false);
+      throw new UserError("The mail password is missing on this machine. Enter it again in Mail → Settings in the bb sidebar.");
     }
-    const block = async (message: string) => {
-      const latest = await this.readConnection();
-      if (latest && latest.url === connection.url && latest.user === connection.user && latest.auth === "password") {
-        await writeJson(this.connectionFile(), { ...latest, blocked: message });
-      }
-    };
-    return new EwsClient({ url: connection.url, auth, transport: this.transport, onAuthFailure: connection.auth === "password" ? block : undefined });
+    const account = { login: accountName(connection.user), version: connection.passwordVersion ?? null, url, retry: options.retry === true };
+    // Fail before reading the password; the gate checks again at the moment it would sign in.
+    const paused = await this.gate.check(account);
+    if (paused) throw new UserError(paused);
+    const stored = await this.secrets.get(PASSWORD);
+    if (!stored) throw new UserError("The mail password is missing on this machine. Enter it again in Mail → Settings in the bb sidebar.");
+    const auth: HttpAuth = { kind: "ntlm", user: connection.user, password: Buffer.from(stored, "base64").toString("utf8") };
+    return new EwsClient({ url, auth, transport: this.gate.transport(this.transport, account) });
   }
 
   async check(retry = false, signal?: AbortSignal): Promise<{ ok: boolean; message: string; unread: number | null }> {
@@ -219,12 +284,8 @@ export class MailService {
       result = { ok: false, message: describe(error), unread: null };
     }
     const latest = await this.readConnection();
-    if (latest && latest.url === connection.url && latest.auth === connection.auth) {
-      await writeJson(this.connectionFile(), {
-        ...latest,
-        ...(result.ok ? { blocked: null } : {}),
-        lastCheck: { ok: result.ok, at: Date.now(), message: result.message },
-      });
+    if (latest && latest.url === connection.url && latest.auth === connection.auth && latest.user === connection.user) {
+      await writeJson(this.connectionFile(), { ...latest, lastCheck: { ok: result.ok, at: this.now(), message: result.message } });
     }
     return result;
   }
@@ -344,6 +405,9 @@ export class MailService {
       subject: item.subject,
       to: item.to.map(toAddress),
       cc: item.cc.map(toAddress),
+      bcc: item.bcc.map(toAddress),
+      attachments: item.attachments,
+      bodyFormat: item.bodyFormat,
       body: item.body,
       text: entry.text,
       replyTo: entry.replyTo ? { ref: entry.replyTo.ref, subject: entry.replyTo.subject, from: entry.replyTo.from } : null,
@@ -363,8 +427,15 @@ export class MailService {
     return { drafts: out.sort((a, b) => b.createdAt - a.createdAt) };
   }
 
-  async draft(id: string, signal?: AbortSignal): Promise<Draft | null> {
+  /** A waiting draft. With `threadId`, only one prepared in that thread. */
+  private async entry(id: string, threadId?: string): Promise<DraftEntry | undefined> {
     const entry = (await this.readDrafts()).find((d) => d.id === id);
+    if (entry && threadId !== undefined && entry.threadId !== threadId) return undefined;
+    return entry;
+  }
+
+  async draft(id: string, signal?: AbortSignal, threadId?: string): Promise<Draft | null> {
+    const entry = await this.entry(id, threadId);
     if (!entry) return null;
     return this.view(await this.client(), entry, signal);
   }
@@ -405,7 +476,7 @@ export class MailService {
       kind: input.kind,
       source: previous?.source ?? input.source,
       threadId: previous?.threadId ?? input.threadId ?? null,
-      createdAt: Date.now(),
+      createdAt: this.now(),
       text: input.body,
       replyTo,
     };
@@ -420,8 +491,8 @@ export class MailService {
     return draft;
   }
 
-  async discardDraft(id: string, signal?: AbortSignal): Promise<{ ok: boolean }> {
-    const entry = (await this.readDrafts()).find((d) => d.id === id);
+  async discardDraft(id: string, signal?: AbortSignal, threadId?: string): Promise<{ ok: boolean }> {
+    const entry = await this.entry(id, threadId);
     if (!entry) return { ok: false };
     const client = await this.client();
     await client.delete({ id: entry.itemId }, signal).catch((error) => {
@@ -432,37 +503,66 @@ export class MailService {
   }
 
   /**
-   * Sends a draft only at the version the person saw: the change key the panel
-   * showed must still be the draft's change key. Anything that touched the
-   * draft since — an agent revising it, an edit in Outlook — changes the key.
+   * Sends a draft only at the version the person saw, and only after they
+   * confirm it in a system window on this machine:
+   *   1. the change key the panel showed must still be the draft's change key —
+   *      an agent revising the draft or an edit in Outlook changes it;
+   *   2. the window shows that exact version as Exchange holds it: recipients
+   *      including Bcc, subject, attachments, format and the start of the text;
+   *   3. SendItem names the same change key, so a draft changed while the
+   *      window was open is refused by Exchange instead of sent.
+   * Nothing here trusts the caller: bb cannot tell the panel from an agent.
    */
-  async send(id: string, revision: string, signal?: AbortSignal): Promise<SendResult> {
-    const entry = (await this.readDrafts()).find((d) => d.id === id);
+  async send(id: string, revision: string, signal?: AbortSignal, threadId?: string): Promise<SendResult> {
+    const entry = await this.entry(id, threadId);
     if (!entry) return { status: "gone", message: "This draft is no longer waiting: it was sent, discarded or replaced." };
+    const connection = await this.readConnection();
     const client = await this.client();
-    let current: ItemRef;
+    const gone = async (): Promise<SendResult> => {
+      await this.writeDrafts(async () => writeJson(this.draftsFile(), (await this.readDrafts()).filter((d) => d.id !== id)));
+      return { status: "gone", message: "The draft is not in Drafts any more: it was sent or deleted in Outlook." };
+    };
+    const changed: SendResult = { status: "changed", message: "The draft changed after you opened it. Review the new version before sending." };
+    let item: ParsedMessage;
     try {
-      current = await client.currentId({ id: entry.itemId }, signal);
+      item = await client.get({ id: entry.itemId }, signal);
     } catch (error) {
-      if (error instanceof EwsError && error.code === "ErrorItemNotFound") {
-        await this.writeDrafts(async () => writeJson(this.draftsFile(), (await this.readDrafts()).filter((d) => d.id !== id)));
-        return { status: "gone", message: "The draft is not in Drafts any more: it was sent or deleted in Outlook." };
-      }
+      if (error instanceof EwsError && error.code === "ErrorItemNotFound") return gone();
       throw error;
     }
-    if (current.changeKey !== revision) {
-      return { status: "changed", message: "The draft changed after you opened it. Review the new version before sending." };
-    }
+    if (item.item.changeKey !== revision) return changed;
+
+    const outcome = await this.confirmer.confirm(this.summaryOf(entry, item, connection?.auth === "password" ? connection.user : null), signal);
+    if (!outcome.ok) return { status: "cancelled", message: outcome.message };
+
     try {
+      const current = await client.currentId({ id: entry.itemId }, signal);
+      if (current.changeKey !== revision) return changed;
       await client.send({ id: entry.itemId, changeKey: revision }, signal);
     } catch (error) {
-      if (error instanceof EwsError && /Stale|Conflict|ChangeKey/i.test(error.code)) {
-        return { status: "changed", message: "The draft changed after you opened it. Review the new version before sending." };
-      }
+      if (error instanceof EwsError && error.code === "ErrorItemNotFound") return gone();
+      if (error instanceof EwsError && /Stale|Conflict|ChangeKey/i.test(error.code)) return changed;
       throw error;
     }
     await this.writeDrafts(async () => writeJson(this.draftsFile(), (await this.readDrafts()).filter((d) => d.id !== id)));
-    return { status: "sent", at: Date.now() };
+    return { status: "sent", at: this.now() };
+  }
+
+  private summaryOf(entry: DraftEntry, item: ParsedMessage, mailbox: string | null): SendSummary {
+    // The same split the panel shows: the text written for the draft, then the quoted original.
+    const quote = item.body.startsWith(entry.text) ? item.body.slice(entry.text.length).trim() : "";
+    return {
+      kind: entry.kind,
+      mailbox,
+      subject: item.subject,
+      to: item.to.map(toAddress),
+      cc: item.cc.map(toAddress),
+      bcc: item.bcc.map(toAddress),
+      attachments: item.attachments,
+      bodyFormat: item.bodyFormat,
+      text: quote ? entry.text : item.body,
+      quotedChars: quote.length,
+    };
   }
 
   // --------------------------------------------------------------- agent tools

@@ -3,7 +3,8 @@
 Read and answer your Microsoft Exchange mail (on-premises, Exchange Web
 Services) without leaving bb. Agents on the models you approve can read and
 search the mailbox and prepare replies — but **only a person sends mail**: an
-agent saves a draft, you see who it goes to and what it says, and press Send.
+agent saves a draft, you see who it goes to and what it says, press Send, and
+confirm in a system window on your computer.
 
 - **Mail** page in the bb sidebar: Inbox and Sent with search, the open
   message, Reply / Reply all, and *To send* — every draft prepared in bb that
@@ -29,21 +30,32 @@ Open **Mail** in the sidebar → **Settings**.
      domain, signed in with the work account, Exchange recognizes you the way
      Outlook does.
    - **Kerberos ticket** (macOS, Linux) — no password, when the machine has a
-     valid Kerberos ticket for the company domain.
+     valid Kerberos ticket for the company domain. On a Mac this is the
+     preferred way: no password is stored at all.
    - **Login and password** — `DOMAIN\name` or `name@company.com`. The password
-     goes to the system credential store (see below).
-2. **Agents that may read mail.** Tick the provider/model pairs your company
-   approved for its mail. Nothing is ticked at first, so no agent gets mail
-   until you choose.
+     goes to the system credential store (see below). Use it when the other
+     two do not work.
+2. **Agents that may read mail.** The page shows the provider/model pairs that
+   may read mail and which agents on this machine they cover. The list comes
+   from the plugin's `allowedModels` setting, set by whoever configures bb for
+   the company; the panel does not change it. Empty means no agent gets mail.
 
 ## Sending is always a person's click
 
 - Agents have tools to list, search and read mail and to save drafts. There is
   no agent tool that sends.
-- Send shows the recipients, the subject and the text, and asks once more.
+- The card shows everything that goes: To, Cc, **Bcc**, subject, attachments,
+  whether the body is HTML, and the text. Send asks once more in the panel.
+- Then the computer that holds the mailbox shows a **system window** — macOS
+  `display dialog`, a Windows window, `zenity` on a Linux desktop — with the
+  same list and the start of the text. Only **Send** in that window sends.
+  bb cannot tell a click in its panel from a program calling the plugin, but
+  no agent can press a button in a window on your screen. With no desktop
+  session (a server, a locked-down machine) nothing is sent: send from Outlook.
 - Send names the exact version of the draft you were shown (Exchange's change
-  key). If the draft changed in the meantime — an agent revised it, someone
-  edited it in Outlook — nothing is sent and the card shows the new version.
+  key), in the panel and in the system window. If the draft changed in the
+  meantime — an agent revised it, someone edited it in Outlook — nothing is
+  sent: an open dialog closes and the card shows the new version.
 
 ## Who gets the mail
 
@@ -55,8 +67,9 @@ that in bb, not in the agent:
 - Every tool call re-checks the model the thread is running *now*, so switching
   models mid-thread does not keep the tools working.
 - A thread that has received mail is marked. bb refuses to send that thread —
-  or a fork of it — to a model outside the list, because the whole history,
-  mail included, would go to that model.
+  or a fork of it, or a fork of a fork — to a model outside the list, because
+  the whole history, mail included, would go to that model. Marks stay when a
+  thread is deleted: its forks still hold its mail.
 - Tool answers remind the agent that mail is other people's text and that
   instructions inside a message are not orders.
 
@@ -66,11 +79,14 @@ The allow-list is one rule per line, `<provider-id> <model-glob>`:
 acp-opencode corp/*
 ```
 
-**What this does not cover.** bb cannot tell a click in its own window from a
-program running as the same user: an agent that may run shell commands can
-call the plugin's panel actions with `bb plugin rpc call`, or reach Exchange
-itself with `curl` under the user's Windows sign-in. Keep shell commands of
-agents that read mail behind approval in the agent's own permission settings.
+**What this does not cover.** bb tells a plugin nothing about who calls its
+panel actions: the panel, the `bb` CLI and an agent with a shell all look the
+same, with no thread or model attached. So an agent that may run shell
+commands can read mail with `bb plugin rpc call`, whatever its model, or reach
+Exchange itself with `curl` under the user's Windows sign-in. It cannot send:
+that takes the system window. Other plugins are refused. Ship only approved
+agents in a bb build for company mail, and keep shell commands of agents that
+read mail behind approval in the agent's own permission settings.
 bb's own AI services (thread titles, commit messages, voice) send thread text
 to their service — turn them off in Settings → AI services when threads hold
 company mail.
@@ -86,11 +102,23 @@ Exchange, never on the bb server:
 | Windows | Credential Manager (`bb-exchange-mail:password`) |
 | Linux | a file readable only by the user |
 
-The password never appears on a command line: curl receives it on stdin. When
-Exchange refuses the password, the plugin stops signing in — for agents and the
-panel alike, across restarts — until you enter the password again or press
-*Try once more*. Otherwise every agent call would retry a stale password, and
-the domain locks the account after a few failures.
+The password never appears on a command line: curl receives it on stdin. It
+belongs to the address and login it was typed for: change either, and bb
+deletes it and asks again, so it never goes to another server.
+
+On macOS the Keychain item is read through `/usr/bin/security`, so any program
+running as you can read it the same way; prefer Kerberos sign-in on a Mac.
+
+A domain locks an account after a few refused passwords, so bb signs in
+carefully:
+
+- After Exchange refuses the login, nothing tries that login again for **15
+  minutes** — not agents, not the panel, not *Try once more*, not a new
+  password — and the pause survives restarts and Disconnect. After that, one
+  attempt is made when you enter a new password or press *Try once more*; the
+  refused password is never retried on its own.
+- Until a sign-in is known to work, requests go one at a time: the first signs
+  in and the rest wait for its answer instead of each sending the password.
 
 ## Agent tools
 
@@ -127,13 +155,16 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
 - The **server entry** (`server.ts`) decides who gets mail (the allow-list, the
   model check, the thread mark) and forwards panel actions to the host. It
   stores no mail.
+- Send is decided on the host: `src/host/confirm.ts` draws the system window,
+  `src/host/service.ts` checks the change key before and after it.
 - EWS operations used: `GetFolder`, `FindItem`, `GetItem` (body as plain text),
   `CreateItem` with `SaveOnly` (drafts only), `SendItem` with the change key,
   `DeleteItem` (to Deleted Items), `UpdateItem` (marks a message read when you
   open it in the panel; agents' reads do not).
 - On the host, the plugin's data folder keeps the connection settings, short
-  message refs (`m…` → Exchange ids) and the list of drafts made in bb with the
-  text you or the agent wrote, until the draft is sent or discarded.
+  message refs (`m…` → Exchange ids), refused sign-ins per login (times only)
+  and the list of drafts made in bb with the text you or the agent wrote, until
+  the draft is sent or discarded.
 
 ## Not yet
 
@@ -150,4 +181,9 @@ bb plugin build .
 ```
 
 `test/stub/ews_stub.py` is a small EWS stand-in with NTLMv2 sign-in and a
-synthetic mailbox; it also checks the element order of the requests.
+synthetic mailbox; it also checks the element order of the requests. The
+end-to-end tests replace the system window with a stand-in.
+
+The plugin refuses plain `http://` addresses. To point a development bb at the
+stub on the same machine, start bb with `EXCHANGE_MAIL_DEV_ALLOW_LOCAL_HTTP=1`;
+even then only `localhost` may use http.
