@@ -2,7 +2,8 @@
 import { lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { applyEdits, modify, parseTree, type ParseError, findNodeAtLocation } from "jsonc-parser";
+// BB's managed-install bundler cannot resolve the package's UMD relative requires.
+import { applyEdits, modify, parseTree, type ParseError, findNodeAtLocation } from "jsonc-parser/lib/esm/main.js";
 import { acquireConfigLock, type LockOptions } from "./config-lock.js";
 import { resolveOpenCodeLocation, type OpenCodeLocationOptions } from "./opencode-location.js";
 

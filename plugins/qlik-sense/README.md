@@ -147,12 +147,27 @@ Standalone lifecycle verified against the official
 [implementation](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/src/services/standalone.ts)
 and [tests](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/test/standalone.test.ts).
 
-OpenCode 2 uses managed system policy to restrict provider use; user/project
-configuration is insufficient to prove that restriction. See the official
+OpenCode 2 also supports managed system policy to restrict provider use. The
+configuration check uses the resulting model list in either installation mode.
+See the official
 [config guide](https://opencode.ai/v2/docs/config/) and
 [policy guide](https://opencode.ai/v2/docs/policies/).
 
 ## Verification
+
+The writer imports `jsonc-parser/lib/esm/main.js` explicitly. The package's UMD
+main entry may build successfully but fail to load after BB bundles a managed
+Git installation (`Cannot find module './impl/format'`). Unit tests and a green
+build alone do not cover this. Verify bundle loading and Git installation in a
+separate test BB with production dependencies; do not install regression fixtures
+into the user's running BB.
+
+Verified on 2026-10-31 in fresh Docker (Node 24, BB 0.48.1): two minimal Git
+plugins copied the production writer modules. The UMD fixture built but failed
+activation and bundle import; the ESM fixture was running, executed its CLI,
+and imported with a function default export. Neither installation included the
+development SDK. This verifies the reusable module bundle, not a complete Qlik
+plugin release.
 
 Fleet-kit can copy these module files and focused tests, preserving their relative
 layout. Runtime dependencies are `jsonc-parser` (^3.3.1) and `zod` (^4.6.5);
