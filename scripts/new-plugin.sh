@@ -2,15 +2,15 @@
 # Создаёт новый плагин bb внутри этого репозитория и регистрирует его
 # в .bb/plugins.json, чтобы он сразу ставился отдельной командой.
 #
-#   scripts/new-plugin.sh <имя> [--app] [--host]
+#   scripts/new-plugin.sh <имя>
 #
-# Флаги после имени передаются в `bb plugin new` как есть (--app добавляет
-# фронтенд-точку входа, --host — хост-демон).
+# С bb 0.48 у `bb plugin new` нет флагов: каркас всегда с фронтендом,
+# `bb.host` добавляется руками. Лишние аргументы передаются как есть.
 set -euo pipefail
 
 name="${1:-}"
 if [ -z "$name" ]; then
-  echo "использование: scripts/new-plugin.sh <имя> [--app] [--host]" >&2
+  echo "использование: scripts/new-plugin.sh <имя>" >&2
   exit 1
 fi
 shift

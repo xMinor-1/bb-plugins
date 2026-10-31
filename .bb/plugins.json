@@ -24,6 +24,10 @@
       "source": "./plugins/fleet-kit"
     },
     {
+      "name": "qlik-sense",
+      "source": "./plugins/qlik-sense"
+    },
+    {
       "name": "server-status",
       "source": "./plugins/server-status"
     },
