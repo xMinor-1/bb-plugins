@@ -7,7 +7,7 @@
 //
 // Secret values never travel in process arguments (endpoint security tools log
 // command lines): macOS receives them on stdin, Windows in the child's
-// environment. The OpenCode resolver (opencode/resolver-plugin.ts) reads the
+// environment. The OpenCode resolver (host/opencode-resolver.ts) reads the
 // same locations; keep both sides in step.
 import { spawn } from "node:child_process";
 import { chmod, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
@@ -80,6 +80,8 @@ function run(command: string, args: string[], options: { input?: string; env?: N
       clearTimeout(timer);
       resolve({ code, stdout: Buffer.concat(out).toString("utf8") });
     });
+    // A child that exits before reading its input raises EPIPE here.
+    child.stdin.on("error", () => undefined);
     child.stdin.end(options.input ?? "");
   });
 }
@@ -188,6 +190,10 @@ function keychainStore(): SecretStore {
 /** Reads FLEET_KIT_SECRET_ACTION / _TARGET / _VALUE from its environment. */
 export const WINDOWS_CREDENTIAL_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
+# Take the value out of the environment before Add-Type starts the C# compiler,
+# which would inherit it.
+$secretValue = $env:FLEET_KIT_SECRET_VALUE
+Remove-Item Env:FLEET_KIT_SECRET_VALUE -ErrorAction SilentlyContinue
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -243,7 +249,7 @@ public static class FleetKitCredential {
 '@
 $target = $env:FLEET_KIT_SECRET_TARGET
 switch ($env:FLEET_KIT_SECRET_ACTION) {
-  'write' { [FleetKitCredential]::Write($target, $env:FLEET_KIT_SECRET_VALUE); exit 0 }
+  'write' { [FleetKitCredential]::Write($target, $secretValue); exit 0 }
   'read' { $v = [FleetKitCredential]::Read($target); if ($null -eq $v) { exit 3 }; [Console]::Out.Write($v); exit 0 }
   'exists' { $v = [FleetKitCredential]::Read($target); if ($null -eq $v) { exit 3 }; exit 0 }
   'delete' { if ([FleetKitCredential]::Delete($target)) { exit 0 } else { exit 3 } }
@@ -294,10 +300,43 @@ function credentialManagerStore(): SecretStore {
 
 export type SecretStorePreference = "auto" | "file";
 
+/**
+ * Remember whether each secret is present for a short while: the panel asks on
+ * every redraw, and on Windows every question starts PowerShell. Writes and
+ * deletes through this store refresh the answer at once.
+ */
+export function withPresenceCache(inner: SecretStore, ttlMs = 30_000): SecretStore {
+  const known = new Map<string, { at: number; present: boolean }>();
+  return {
+    kind: inner.kind,
+    label: inner.label,
+    directory: inner.directory,
+    async has(name) {
+      const hit = known.get(name);
+      if (hit && Date.now() - hit.at < ttlMs) return hit.present;
+      const present = await inner.has(name);
+      known.set(name, { at: Date.now(), present });
+      return present;
+    },
+    get: (name) => inner.get(name),
+    async set(name, value) {
+      known.delete(name);
+      await inner.set(name, value);
+      known.set(name, { at: Date.now(), present: true });
+    },
+    async delete(name) {
+      known.delete(name);
+      const removed = await inner.delete(name);
+      known.set(name, { at: Date.now(), present: false });
+      return removed;
+    },
+  };
+}
+
 export function openSecretStore(preference: SecretStorePreference = "auto", platform: NodeJS.Platform = process.platform): SecretStore {
   if (preference === "file") return fileStore(secretFileDirectory());
-  if (platform === "darwin") return keychainStore();
-  if (platform === "win32") return credentialManagerStore();
+  if (platform === "darwin") return withPresenceCache(keychainStore());
+  if (platform === "win32") return withPresenceCache(credentialManagerStore());
   return fileStore(secretFileDirectory());
 }
 

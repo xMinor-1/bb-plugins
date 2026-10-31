@@ -11,15 +11,26 @@ interface FakePlugin {
   source: string;
   version: string;
   enabled: boolean;
+  provenance?: "builtin" | "direct";
   schema: Record<string, { type: string; secret?: boolean }>;
   values: Record<string, unknown>;
   update?: string;
 }
 
+const SELF_SOURCE = "git:https://git.example.test/plugins.git@semver:fleet-kit/:^0.1.0";
+const NOTES_SOURCE = "git:https://git.example.test/plugins.git@semver:notes/:^1.0.0";
+
+/** The id a fake source installs: the word after "plugins.git@semver:" or a marker in the source. */
+function idFor(source: string): string {
+  if (source.includes("wrong")) return "wrong";
+  if (source.includes("notes")) return "notes";
+  return "other";
+}
+
 function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { telemetryEnabled: true, streamerMode: false }) {
   const plugins = new Map(initial.map((plugin) => [plugin.id, clone(plugin)]));
   const calls: string[] = [];
-  const view = (plugin: FakePlugin) => ({ id: plugin.id, source: plugin.source, version: plugin.version, enabled: plugin.enabled });
+  const view = (plugin: FakePlugin) => ({ id: plugin.id, source: plugin.source, version: plugin.version, enabled: plugin.enabled, provenance: plugin.provenance ?? "direct" });
   const schemaFor = (id: string): FakePlugin["schema"] =>
     id === "notes" ? { greeting: { type: "string" }, token: { type: "string", secret: true }, allowedProviders: { type: "string" } } : {};
   const sdk = {
@@ -31,12 +42,15 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
         Object.assign(general, next);
       },
     },
-    hosts: { providerCliStatus: async () => ({}) },
     plugins: {
       marketplaces: { list: async () => [], add: async () => ({}) },
       list: async () => ({ plugins: [...plugins.values()].map(view) }),
       install: async ({ source }: { source: string; plugin?: string }) => {
-        const id = source.includes("notes") ? "notes" : "other";
+        if (source.includes("broken")) {
+          calls.push(`install-failed ${source}`);
+          throw new Error("could not clone");
+        }
+        const id = idFor(source);
         calls.push(`install ${id}`);
         const plugin: FakePlugin = { id, source, version: "1.0.0", enabled: true, schema: schemaFor(id), values: {} };
         plugins.set(id, plugin);
@@ -55,7 +69,12 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
       },
       checkUpdates: async ({ pluginId }: { pluginId: string }) => {
         const plugin = plugins.get(pluginId);
-        return [{ id: pluginId, outcome: plugin?.update ? "update-available" : "current" }];
+        if (pluginId === "fleet-kit") calls.push("check fleet-kit");
+        return [
+          plugin?.update
+            ? { id: pluginId, outcome: "update-available", candidate: { version: plugin.update, label: plugin.update, display: plugin.update } }
+            : { id: pluginId, outcome: "current" },
+        ];
       },
       applyUpdate: async ({ pluginId }: { pluginId: string }) => {
         const plugin = plugins.get(pluginId)!;
@@ -95,7 +114,7 @@ async function setup(manifest: Record<string, unknown>, initial: FakePlugin[], m
   const deps: SyncDeps = {
     sdk: fake.sdk as unknown as SyncDeps["sdk"],
     log: { info() {}, warn() {}, error() {}, debug() {} } as unknown as SyncDeps["log"],
-    settings: { manifestUrl: path, manifestToken: undefined, syncIntervalMinutes: 30, opencodeConfigDir: "", paused: false },
+    settings: { manifestUrl: path, manifestToken: undefined, syncIntervalMinutes: 30, opencodeConfigDir: "", allowDevSources: false, paused: false },
     store,
     managed,
     signal: new AbortController().signal,
@@ -104,105 +123,122 @@ async function setup(manifest: Record<string, unknown>, initial: FakePlugin[], m
   return { ...fake, deps, store, path };
 }
 
-const self: FakePlugin = { id: "fleet-kit", source: "git:https://git.example.test/plugins.git", version: "0.1.0", enabled: true, schema: {}, values: {} };
+const self = (): FakePlugin => ({ id: "fleet-kit", source: SELF_SOURCE, version: "0.1.0", enabled: true, schema: {}, values: {} });
+const notes = (overrides: Partial<FakePlugin> = {}): FakePlugin => ({
+  id: "notes",
+  source: NOTES_SOURCE,
+  version: "1.0.0",
+  enabled: true,
+  schema: { greeting: { type: "string" }, token: { type: "string", secret: true }, allowedProviders: { type: "string" } },
+  values: { greeting: "hello", allowedProviders: "corp" },
+  ...overrides,
+});
+const pluginCalls = (calls: string[]) => calls.filter((call) => !call.startsWith("settings") && call !== "check fleet-kit");
 
 describe("sync", () => {
-  it("installs, configures, removes, and holds bb settings on a fresh bb", async () => {
+  it("installs, configures, removes what removePlugins lists, and holds bb settings", async () => {
     const old: FakePlugin = { id: "old-thing", source: "npm:old-thing", version: "1.0.0", enabled: true, schema: {}, values: {} };
-    const { deps, calls, general } = await setup(sampleManifest(), [self, old]);
+    const { deps, calls, general } = await setup(sampleManifest(), [self(), old]);
     const outcome = await runSync(deps, "start");
-    expect(calls).toContain("install notes");
-    expect(calls).toContain("config notes allowedProviders,greeting");
-    expect(calls).toContain("remove old-thing");
+    expect(pluginCalls(calls)).toEqual(["install notes", "config notes allowedProviders,greeting", "remove old-thing"]);
     expect(general.telemetryEnabled).toBe(false);
     expect(general.streamerMode).toBe(false);
-    expect(outcome.managed.plugins.notes).toEqual({
-      manifestSource: "git:https://git.example.test/plugins.git@semver:notes/:^1.0.0",
-      bbSource: "git:https://git.example.test/plugins.git@semver:notes/:^1.0.0",
-    });
+    expect(outcome.managed.plugins.notes).toEqual({ manifestSource: NOTES_SOURCE, bbSource: NOTES_SOURCE });
     const kinds = outcome.report.steps.map((step) => `${step.area}:${step.item}:${step.outcome}`);
     expect(kinds).toContain("plugin:later:skipped");
     expect(kinds).toContain("secret:gateway-key:warning");
     expect(kinds).toContain("opencode:OpenCode:warning");
     expect(outcome.report.build).toEqual({ name: "Example build", version: "1.2.0" });
+    expect(outcome.selfUpdate).toBe(false);
   });
 
   it("is quiet on a second pass and applies an update the source offers", async () => {
-    const first = await setup(sampleManifest(), [self]);
+    const first = await setup(sampleManifest(), [self()]);
     const outcome = await runSync(first.deps, "start");
     first.calls.length = 0;
     first.plugins.get("notes")!.update = "1.1.0";
     const second = await runSync({ ...first.deps, managed: outcome.managed }, "schedule");
-    expect(first.calls).toEqual(["update notes"]);
+    expect(pluginCalls(first.calls)).toEqual(["update notes"]);
     expect(second.report.steps.find((step) => step.item === "notes")?.message).toBe("Updated to 1.1.0.");
   });
 
   it("reinstalls on a source change, keeps plain settings, and asks for secrets again", async () => {
-    const existing: FakePlugin = {
-      id: "notes",
-      source: "git:https://git.example.test/plugins.git@semver:notes/:^0.9.0",
-      version: "0.9.3",
-      enabled: false,
-      schema: { greeting: { type: "string" }, token: { type: "string", secret: true }, allowedProviders: { type: "string" } },
-      values: { greeting: "custom", token: "t" },
-    };
-    const { deps, calls, plugins } = await setup(sampleManifest(), [self, existing]);
+    const existing = notes({ source: "git:https://git.example.test/plugins.git@semver:notes/:^0.9.0", version: "0.9.3", enabled: false, values: { greeting: "custom", token: "t" } });
+    const { deps, calls, plugins } = await setup(sampleManifest(), [self(), existing]);
     const outcome = await runSync(deps, "manual");
     // Restore the old plain settings first, then apply the manifest's values.
-    expect(calls.filter((call) => !call.startsWith("settings"))).toEqual([
-      "remove notes",
-      "install notes",
-      "config notes greeting",
-      "config notes allowedProviders,greeting",
-    ]);
+    expect(pluginCalls(calls)).toEqual(["remove notes", "install notes", "config notes greeting", "config notes allowedProviders,greeting"]);
     expect(plugins.get("notes")!.values.greeting).toBe("hello");
     expect(outcome.notices.map((notice) => notice.kind)).toEqual(["reinstalled"]);
   });
 
-  it("enables a disabled plugin and resolves secret settings from the store", async () => {
+  it("puts the previous source back when the new one does not install", async () => {
     const manifest = clone(sampleManifest()) as Record<string, any>;
-    manifest.plugins[1].config = { token: "{secret:gateway-key}" };
-    const existing: FakePlugin = {
-      id: "notes",
-      source: manifest.plugins[1].source,
-      version: "1.0.0",
-      enabled: false,
-      schema: { token: { type: "string", secret: true } },
-      values: {},
-    };
-    const { deps, calls, store, plugins } = await setup(manifest, [self, existing]);
-    let outcome = await runSync(deps, "manual");
-    expect(calls).toContain("enable notes");
-    expect(outcome.report.steps.some((step) => step.message.includes("waits for the secret gateway-key"))).toBe(true);
-    await store.set("gateway-key", "s3");
-    calls.length = 0;
-    outcome = await runSync({ ...deps, managed: outcome.managed }, "manual");
-    expect(calls).toEqual(["config notes token"]);
-    expect(plugins.get("notes")!.values.token).toBe("s3");
-    calls.length = 0;
-    await runSync({ ...deps, managed: outcome.managed }, "manual");
-    expect(calls).toEqual([]);
-    expect(JSON.stringify(outcome)).not.toContain("s3");
+    manifest.plugins[1].source = "git:https://git.example.test/broken-notes.git@semver:notes/:^2.0.0";
+    const previous = "git:https://git.example.test/plugins.git@semver:notes/:^0.9.0";
+    const { deps, calls, plugins } = await setup(manifest, [self(), notes({ source: previous, values: { greeting: "custom" } })]);
+    const outcome = await runSync(deps, "manual");
+    expect(pluginCalls(calls).slice(0, 3)).toEqual(["remove notes", `install-failed ${manifest.plugins[1].source}`, "install notes"]);
+    expect(plugins.get("notes")!.source).toBe(previous);
+    expect(plugins.get("notes")!.values.greeting).toBe("custom");
+    const step = outcome.report.steps.find((entry) => entry.item === "notes" && entry.outcome === "error");
+    expect(step?.message).toContain("the previous source is back");
+    expect(outcome.notices).toEqual([]);
   });
 
-  it("removes plugins it installed when the build drops them", async () => {
-    const first = await setup(sampleManifest(), [self]);
+  it("enables a disabled plugin and never writes its secret settings", async () => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    manifest.plugins[1].config = { greeting: "hello", token: "plain" };
+    const { deps, calls } = await setup(manifest, [self(), notes({ enabled: false })]);
+    const outcome = await runSync(deps, "manual");
+    expect(pluginCalls(calls)).toEqual(["enable notes"]);
+    expect(outcome.report.steps.some((step) => step.message.includes('"token" is a secret setting'))).toBe(true);
+  });
+
+  it("keeps a plugin the build no longer lists unless removePlugins names it", async () => {
+    const first = await setup(sampleManifest(), [self()]);
     const outcome = await runSync(first.deps, "start");
     const manifest = clone(sampleManifest()) as Record<string, any>;
     manifest.plugins = manifest.plugins.filter((plugin: any) => plugin.id !== "notes");
     await writeFile(first.path, JSON.stringify(manifest));
     first.calls.length = 0;
     const second = await runSync({ ...first.deps, managed: outcome.managed }, "schedule");
-    expect(first.calls).toEqual(["remove notes"]);
-    expect(second.managed.plugins.notes).toBeUndefined();
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(second.report.steps.find((step) => step.item === "notes")?.message).toContain("kept");
+    expect(first.plugins.has("notes")).toBe(true);
+
+    manifest.removePlugins = ["notes"];
+    await writeFile(first.path, JSON.stringify(manifest));
+    await runSync({ ...first.deps, managed: second.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual(["remove notes"]);
+  });
+
+  it("never removes a plugin bundled with bb", async () => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    manifest.removePlugins = ["bb-guide"];
+    const bundled: FakePlugin = { id: "bb-guide", source: "builtin:bb-guide", version: "0.1.0", enabled: true, provenance: "builtin", schema: {}, values: {} };
+    const { deps, calls } = await setup(manifest, [self(), notes(), bundled]);
+    const outcome = await runSync(deps, "manual");
+    expect(calls).not.toContain("remove bb-guide");
+    expect(outcome.report.steps.find((step) => step.item === "bb-guide")?.outcome).toBe("warning");
+  });
+
+  it("removes a plugin a source installs under another id and reports it", async () => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    manifest.plugins[1].source = "git:https://git.example.test/wrong.git@semver:notes/:^1.0.0";
+    const { deps, calls, plugins } = await setup(manifest, [self()]);
+    const outcome = await runSync(deps, "manual");
+    expect(pluginCalls(calls)).toEqual(["install wrong", "remove wrong"]);
+    expect(plugins.has("wrong")).toBe(false);
+    expect(outcome.report.steps.find((step) => step.item === "notes")?.message).toContain('installs the plugin "wrong"');
   });
 
   it("applies nothing from a manifest with errors", async () => {
     const manifest = clone(sampleManifest()) as Record<string, any>;
     manifest.allowedProviders = ["other"];
-    const { deps, calls } = await setup(manifest, [self]);
+    const { deps, calls } = await setup(manifest, [self()]);
     const outcome = await runSync(deps, "manual");
-    expect(calls).toEqual([]);
+    expect(pluginCalls(calls)).toEqual([]);
     expect(outcome.report.outcome).toBe("error");
     expect(outcome.manifest).toBeNull();
   });
@@ -210,9 +246,51 @@ describe("sync", () => {
   it("reports an unknown bb setting instead of sending it", async () => {
     const manifest = clone(sampleManifest()) as Record<string, any>;
     manifest.bb.settings = { noSuchSetting: true };
-    const { deps, calls } = await setup(manifest, [self]);
+    const { deps, calls } = await setup(manifest, [self()]);
     const outcome = await runSync(deps, "manual");
     expect(calls.some((call) => call.startsWith("settings"))).toBe(false);
     expect(outcome.report.steps.find((step) => step.item === "noSuchSetting")?.outcome).toBe("error");
+  });
+});
+
+describe("Fleet Kit's own update", () => {
+  it("still updates itself from a manifest in a newer format, and applies nothing else", async () => {
+    const manifest = { ...clone(sampleManifest()), schema: 2, newSection: { anything: true } };
+    const { deps, calls } = await setup(manifest, [{ ...self(), update: "0.2.0" }]);
+    const outcome = await runSync(deps, "start");
+    expect(outcome.selfUpdate).toBe(true);
+    expect(outcome.report.fleetKitOutdated).toBe(true);
+    expect(pluginCalls(calls)).toEqual([]);
+    expect(outcome.managed.selfUpdate).toMatchObject({ version: "0.2.0", attempts: 1 });
+  });
+
+  it("tries the same version at most twice a day", async () => {
+    let now = Date.parse("2026-10-31T10:00:00Z");
+    const first = await setup(sampleManifest(), [{ ...self(), update: "0.2.0" }]);
+    const deps = { ...first.deps, now: () => now };
+    const one = await runSync(deps, "start");
+    expect(one.selfUpdate).toBe(true);
+    // The update rolled back: the old version runs again and is offered the same one.
+    now += 60_000;
+    const two = await runSync({ ...deps, managed: one.managed }, "start");
+    expect(two.selfUpdate).toBe(true);
+    now += 60_000;
+    const three = await runSync({ ...deps, managed: two.managed }, "start");
+    expect(three.selfUpdate).toBe(false);
+    expect(three.report.steps.find((step) => step.item === "fleet-kit")?.message).toContain("did not install after 2 tries");
+    now += 25 * 60 * 60 * 1000;
+    const nextDay = await runSync({ ...deps, managed: three.managed }, "schedule");
+    expect(nextDay.selfUpdate).toBe(true);
+    expect(nextDay.managed.selfUpdate?.attempts).toBe(1);
+  });
+
+  it("does not update itself from a source without @semver: or @ref:", async () => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    manifest.plugins[0].source = "git:https://git.example.test/plugins.git";
+    const { deps, calls } = await setup(manifest, [{ ...self(), source: manifest.plugins[0].source, update: "0.2.0" }]);
+    const outcome = await runSync(deps, "start");
+    expect(outcome.selfUpdate).toBe(false);
+    expect(calls).not.toContain("check fleet-kit");
+    expect(outcome.report.steps.find((step) => step.item === "fleet-kit")?.message).toContain("not pinned");
   });
 });

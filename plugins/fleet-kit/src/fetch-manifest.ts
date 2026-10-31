@@ -17,6 +17,11 @@ export type ManifestLocation =
   | { kind: "file"; path: string; display: string }
   | { kind: "https"; url: URL; display: string };
 
+/** The address with any `user:password@` hidden, for display. */
+export function maskManifestUrl(value: string): string {
+  return value.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/?#]*@/i, "$1***@");
+}
+
 export function parseManifestLocation(value: string): ManifestLocation {
   const trimmed = value.trim();
   if (trimmed === "") throw new Error("manifestUrl is empty");
@@ -55,6 +60,11 @@ export async function fetchManifestText(
   if (options.token) headers.authorization = `Bearer ${options.token}`;
   const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
   const response = await fetch(location.url, { headers, signal, redirect: "follow" });
+  // A redirect may not leave https: the manifest decides which code runs here.
+  if (response.url !== "" && new URL(response.url).protocol !== "https:") {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error("the manifest server redirected to a non-https address");
+  }
   if (!response.ok) throw new Error(`the manifest server answered ${response.status} ${response.statusText}`.trim());
   const reader = response.body?.getReader();
   if (reader === undefined) return "";

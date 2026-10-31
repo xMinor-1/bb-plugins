@@ -15,12 +15,13 @@ sidebar shows the same information as the commands below.
 ```bash
 bb fleet-kit status [--json]     # build version, last sync, OpenCode protection, secrets
 bb fleet-kit sync [--json]       # sync now and wait; exit 1 when the sync had errors
-printf '%s\n' "$VALUE" | bb fleet-kit secret set <name> --value-stdin
 bb fleet-kit secret clear <name>
 ```
 
-- Never pass a secret as an argument or print it. Ask the user to paste it in
-  the Fleet Kit panel, or pipe it with `--value-stdin`.
+- Never handle a secret value yourself: do not ask for it in chat, put it in a
+  command, a file or a variable, or print it. Ask the user to enter it in the
+  Fleet Kit panel. A person at a terminal can pipe it from a file they own:
+  `bb fleet-kit secret set <name> --value-stdin < key.txt`.
 - Secret names come from the manifest's `secrets` list (`bb fleet-kit status`
   lists them).
 
@@ -38,6 +39,8 @@ changes one and triggers a sync.
   `OPENCODE_CONFIG_DIR`; the sync warns until it does.
 - `secretStore`: `auto` (OS credential store) or `file` (0600 file).
 - `paused`: stop syncing.
+- `allowDevSources`: test machines only; allows `path:`, `npm:` and local git
+  plugin sources and `http://localhost` gateways. Never turn it on for a person.
 
 ## What not to do
 
@@ -47,4 +50,5 @@ changes one and triggers a sync.
 - Do not edit `plugins/fleet-kit-secrets.js` in the OpenCode configuration
   directory; Fleet Kit rewrites it.
 - Do not install or remove plugins that the manifest lists; change the
-  manifest instead.
+  manifest instead. Fleet Kit removes a plugin only when the manifest lists it
+  in `removePlugins`; dropping it from `plugins` leaves it installed.

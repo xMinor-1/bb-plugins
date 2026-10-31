@@ -17,6 +17,8 @@ export const syncReportSchema = z.object({
   finishedAt: z.string(),
   outcome: z.enum(["ok", "changed", "warning", "error"]),
   build: z.object({ name: z.string(), version: z.string() }).nullable(),
+  /** The manifest uses a format this Fleet Kit does not read; only its own update applied. */
+  fleetKitOutdated: z.boolean().optional(),
   steps: z.array(stepSchema),
 });
 export type SyncReport = z.infer<typeof syncReportSchema>;

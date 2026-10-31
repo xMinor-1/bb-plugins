@@ -12,7 +12,8 @@
 // Secrets: `{secret:name}` is accepted only as the whole `settings.apiKey`
 // (sent as `Authorization: Bearer <secret>`) or inside `settings.headers.<H>`.
 // Those entries are left out of the file; the resolver plugin adds the headers
-// to each request from the operating system's credential store.
+// from the operating system's credential store, and only to requests that go to
+// the origin of the provider's `settings.baseURL` in the manifest.
 //
 // Writes follow the shared bb-config-lock protocol (see config-lock.ts): lock,
 // read, patch, write a temporary file, back up the original once, re-read and
@@ -25,6 +26,7 @@ import { lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { applyEdits, findNodeAtLocation, modify, parseTree, type Node, type ParseError } from "jsonc-parser/lib/esm/main.js";
 import { acquireConfigLock, type LockOptions } from "./config-lock.js";
+import { baseUrlProblem, OPENCODE_KEYS } from "../manifest.js";
 
 export const WRITER = "fleet-kit";
 
@@ -44,11 +46,17 @@ export interface ResolverHeader {
   template: string;
 }
 
+export interface ResolverProvider {
+  /** The only origin that receives the headers: the manifest's baseURL. */
+  origin: string;
+  headers: ResolverHeader[];
+}
+
 export interface OpenCodePlan {
   /** JSON paths Fleet Kit sets, with their values. */
   entries: { path: string[]; value: unknown }[];
   /** Headers the resolver plugin adds per provider. */
-  resolver: Record<string, ResolverHeader[]>;
+  resolver: Record<string, ResolverProvider>;
   /** Secret names the plan needs. */
   secrets: string[];
 }
@@ -72,7 +80,7 @@ function findSecretRefs(value: unknown, path: string[], found: string[][]): void
 }
 
 /** Turn the manifest block into owned paths plus resolver headers. */
-export function planOpenCode(block: Record<string, unknown>, allowedProviders: string[]): OpenCodePlan {
+export function planOpenCode(block: Record<string, unknown>, allowedProviders: string[], options: { allowDevSources?: boolean } = {}): OpenCodePlan {
   const entries: OpenCodePlan["entries"] = [];
   const resolver: OpenCodePlan["resolver"] = {};
   const secrets = new Set<string>();
@@ -111,13 +119,19 @@ export function planOpenCode(block: Record<string, unknown>, allowedProviders: s
     if (leftovers.length > 0) {
       throw new Error(`${leftovers[0]!.join(".")}: {secret:...} is supported only in settings.apiKey and settings.headers`);
     }
-    if (headers.length > 0) resolver[providerId] = headers;
+    if (headers.length > 0) {
+      const baseURL = settings?.baseURL;
+      const problem = baseUrlProblem(baseURL, options.allowDevSources === true);
+      if (problem !== null) throw new Error(`providers.${providerId}: ${problem}`);
+      resolver[providerId] = { origin: new URL(baseURL as string).origin, headers };
+    }
     entries.push({ path: ["providers", providerId], value: provider });
   }
 
   for (const [key, value] of Object.entries(block)) {
-    if (key === "providers" || key === "$schema") continue;
+    if (key === "providers") continue;
     if (key === "enabled_providers") throw new Error("opencode.enabled_providers: use allowedProviders at the manifest root");
+    if (!(OPENCODE_KEYS as readonly string[]).includes(key)) throw new Error(`opencode.${key}: a build may set only ${OPENCODE_KEYS.join(", ")}`);
     const leftovers: string[][] = [];
     findSecretRefs(value, [key], leftovers);
     if (leftovers.length > 0) throw new Error(`opencode.${leftovers[0]!.join(".")}: {secret:...} is supported only in provider settings`);

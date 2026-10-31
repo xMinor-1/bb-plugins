@@ -10,7 +10,7 @@ import { z } from "zod";
 import { rpcContract, STATUS_CHANNEL, type Notice, type OpenCodeStatus, type Status, type SyncReport } from "./contract.js";
 import { checkSecretValue, openSecretStore, SECRET_NAME, type SecretStore, type SecretStorePreference } from "./src/secret-store.js";
 import { emptyManaged, runSync, SELF_ID, type FleetKitSettings, type ManagedState } from "./src/sync.js";
-import { parseManifestLocation } from "./src/fetch-manifest.js";
+import { maskManifestUrl, parseManifestLocation } from "./src/fetch-manifest.js";
 import { opencodeConfigDirSchema } from "./src/shared/settings.js";
 import { resolveOpenCodeLocation } from "./src/host/opencode-location.js";
 import { lockState, resetStuckLock } from "./src/host/lock-state.js";
@@ -56,6 +56,11 @@ export default async function plugin(bb: BbPluginApi) {
       default: "auto",
     },
     paused: { type: "boolean", label: "Pause syncing", default: false },
+    allowDevSources: {
+      type: "boolean",
+      label: "Development only: allow path:, npm: and local git plugin sources and http://localhost gateways",
+      default: false,
+    },
   });
 
   const kv = bb.storage.kv;
@@ -64,6 +69,8 @@ export default async function plugin(bb: BbPluginApi) {
   let rerun: SyncReport["trigger"] | null = null;
   let wake: (() => void) | null = null;
   let nextSyncAt: string | null = null;
+  /** When the last sync started; the schedule counts from it. */
+  let lastSyncAt = 0;
   const controller = new AbortController();
   bb.onDispose(() => controller.abort());
 
@@ -74,6 +81,7 @@ export default async function plugin(bb: BbPluginApi) {
       manifestToken: typeof value.manifestToken === "string" && value.manifestToken !== "" ? value.manifestToken : undefined,
       syncIntervalMinutes: value.syncIntervalMinutes,
       opencodeConfigDir: value.opencodeConfigDir.trim(),
+      allowDevSources: value.allowDevSources,
       paused: value.paused,
       secretStore: value.secretStore as SecretStorePreference,
     };
@@ -104,7 +112,8 @@ export default async function plugin(bb: BbPluginApi) {
     try {
       if (manifestUrl !== "") manifestUrl = parseManifestLocation(manifestUrl).display;
     } catch {
-      // Show the raw value; the sync reports why it is invalid.
+      // Show the value without credentials; the sync reports why it is invalid.
+      manifestUrl = maskManifestUrl(manifestUrl);
     }
     const opencode = (await kv.get<OpenCodeStatus>("opencode")) ?? null;
     if (opencode?.configFile) opencode.lock = await lockState(opencode.configFile).catch(() => null);
@@ -124,6 +133,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function syncOnce(trigger: SyncReport["trigger"]): Promise<void> {
+    lastSyncAt = Date.now();
     const current = await readSettings();
     if (current.manifestUrl.trim() === "") return;
     const managed = (await kv.get<ManagedState>("managed")) ?? emptyManaged();
@@ -191,9 +201,11 @@ export default async function plugin(bb: BbPluginApi) {
       next.opencodeConfigDir !== previous.opencodeConfigDir ||
       next.syncIntervalMinutes !== previous.syncIntervalMinutes ||
       next.paused !== previous.paused ||
-      next.secretStore !== previous.secretStore;
+      next.secretStore !== previous.secretStore ||
+      next.allowDevSources !== previous.allowDevSources;
     if (!relevant) return;
     if (!next.paused) void requestSync("settings");
+    // Only reschedule: the loop waits for this sync instead of starting another.
     wake?.();
     publish();
   });
@@ -216,9 +228,17 @@ export default async function plugin(bb: BbPluginApi) {
       let trigger: SyncReport["trigger"] = "start";
       while (!signal.aborted) {
         const current = await readSettings();
-        if (!current.paused) await requestSync(trigger);
+        const interval = current.syncIntervalMinutes * 60_000;
+        if (current.paused) {
+          trigger = "schedule";
+          nextSyncAt = null;
+          await sleep(interval);
+          continue;
+        }
+        if (syncing !== null) await syncing;
+        else if (trigger === "start" || Date.now() - lastSyncAt >= interval) await requestSync(trigger);
         trigger = "schedule";
-        const delay = current.syncIntervalMinutes * 60_000;
+        const delay = Math.max(1_000, interval - (Date.now() - lastSyncAt));
         nextSyncAt = new Date(Date.now() + delay).toISOString();
         await sleep(delay);
       }
@@ -331,14 +351,18 @@ export default async function plugin(bb: BbPluginApi) {
           },
         }),
         "secret set": cliCommand({
-          summary: "Store a build secret in the operating system's credential store",
+          summary: "Store a build secret in the credential store; pipe the value: bb fleet-kit secret set <name> --value-stdin < file",
           positionals: [{ name: "name", description: "Secret name from the manifest's secrets list", required: true }],
           options: {
+            // bb's CLI turns --value-stdin into this option before the plugin
+            // runs, so it cannot be removed; it is hidden and documented only
+            // through --value-stdin.
             value: {
               type: "string",
               stdin: true,
+              hidden: true,
               required: true,
-              description: "The secret value; pipe it with --value-stdin so it stays out of process arguments",
+              description: "Pipe the value with --value-stdin; never type it on the command line",
             },
           },
           async run(input) {

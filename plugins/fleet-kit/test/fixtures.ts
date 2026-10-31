@@ -9,7 +9,7 @@ export function sampleManifest(): Record<string, unknown> {
     bb: { minVersion: "0.48.0", settings: { telemetryEnabled: false } },
     marketplaces: [],
     plugins: [
-      { id: "fleet-kit", source: "git:https://git.example.test/plugins.git", plugin: "fleet-kit", status: "required" },
+      { id: "fleet-kit", source: "git:https://git.example.test/plugins.git@semver:fleet-kit/:^0.1.0", plugin: "fleet-kit", status: "required" },
       { id: "notes", source: "git:https://git.example.test/plugins.git@semver:notes/:^1.0.0", plugin: "notes", status: "required", config: { greeting: "hello" } },
       { id: "later", source: null, status: "planned", note: "not built yet" },
     ],

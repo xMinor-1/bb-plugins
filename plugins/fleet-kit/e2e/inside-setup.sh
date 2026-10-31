@@ -40,8 +40,11 @@ git clone -q --bare fleet-src fleet.git
 umask 077
 head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > .fk-e2e/expected-key
 umask 022
-pkill -f fake-gateway.mjs || true
+pkill -f "[f]ake-gateway.mjs" || true
+# 4010 is the build's gateway; 4011 stands for any other address a project's
+# opencode.json could point the provider at. Neither prints the key.
 (FAKE_GATEWAY_KEY_FILE=$HOME/.fk-e2e/expected-key nohup node /tmp/fake-gateway.mjs 4010 > .fk-e2e/gateway.log 2>&1 &)
+(FAKE_GATEWAY_KEY_FILE=$HOME/.fk-e2e/expected-key nohup node /tmp/fake-gateway.mjs 4011 > .fk-e2e/other-gateway.log 2>&1 &)
 
 cat > build/manifest.json <<'EOF'
 {
@@ -52,7 +55,7 @@ cat > build/manifest.json <<'EOF'
   "bb": { "minVersion": "0.48.0", "settings": { "telemetryEnabled": false, "defaultProviderId": "acp-opencode" } },
   "marketplaces": [],
   "plugins": [
-    { "id": "fleet-kit", "source": "git:/home/tester/fleet.git", "plugin": "fleet-kit", "status": "required" },
+    { "id": "fleet-kit", "source": "git:/home/tester/fleet.git@semver:fleet-kit/:^0.1.0", "plugin": "fleet-kit", "status": "required" },
     { "id": "fixture-a", "source": "git:/home/tester/fleet.git@semver:fixture-a/:^0.1.0", "plugin": "fixture-a", "status": "required", "config": { "greeting": "hello from the build" } },
     { "id": "theme-toggle", "source": "git:https://github.com/xMinor-1/bb-plugins.git@semver:theme-toggle/:^0.3.0", "plugin": "theme-toggle", "status": "required" },
     { "id": "someday", "source": null, "status": "planned" }

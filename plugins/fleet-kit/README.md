@@ -7,8 +7,8 @@ brings bb to that description and keeps it there.
 
 - **Plugins**: installs what the build lists, updates it when its source offers
   a newer release, re-enables it if someone turned it off, reinstalls it when
-  the build moves it to another source, and removes what the build drops.
-  bb itself does not update plugins on its own; Fleet Kit does.
+  the build moves it to another source, and removes what the build lists in
+  `removePlugins`. bb itself does not update plugins on its own; Fleet Kit does.
 - **bb settings**: holds the general settings the build sets (telemetry,
   default provider and so on).
 - **OpenCode**: merges the build's OpenCode 2 block into `opencode.json` —
@@ -24,9 +24,12 @@ brings bb to that description and keeps it there.
 ## Install
 
 ```sh
-bb plugin install git:https://github.com/xMinor-1/bb-plugins.git --plugin fleet-kit --yes
+bb plugin install "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:^0.1.0" --plugin fleet-kit --yes
 bb plugin config fleet-kit set manifestUrl https://builds.example.com/manifest.json
 ```
+
+Install Fleet Kit with exactly the `source` its manifest entry names: Fleet Kit
+updates itself only when the installed source matches.
 
 Fleet Kit syncs fifteen seconds after bb starts, every 30 minutes after that,
 whenever a setting changes, and on **Sync now**. Until `manifestUrl` is set it
@@ -42,6 +45,7 @@ does nothing.
 | `opencodeConfigDir` | Keep this bb's OpenCode configuration in its own directory (see [A separate OpenCode directory](#a-separate-opencode-directory)). Empty: OpenCode's default, or `OPENCODE_CONFIG_DIR` if bb runs with it. |
 | `secretStore` | `auto` (the OS credential store) or `file` (a 0600 file). |
 | `paused` | Stop syncing. |
+| `allowDevSources` | Test machines only, set by hand; a manifest cannot turn it on. Allows `path:`, `npm:` and local git plugin sources and `http://localhost` gateways. |
 
 ## Commands
 
@@ -52,14 +56,18 @@ bb fleet-kit secret set <name> --value-stdin < key.txt
 bb fleet-kit secret clear <name>
 ```
 
-Secrets are entered in the panel's password field or piped on stdin. There is
-no way to pass one as an argument, and no command prints one.
+Secrets are entered in the panel's password field or piped on stdin with
+`--value-stdin`. bb's CLI hands a piped value to the plugin as `--value`, so
+that option exists, but it is hidden and should never be typed: a value on the
+command line lands in shell history. No command prints a secret.
 
 ## The manifest
 
 One JSON file describes the build. Fleet Kit refuses to apply a manifest with
-errors — nothing changes on the machine until the manifest is fixed — and
-applies one with warnings.
+errors — nothing changes on the machine until the manifest is fixed, except
+Fleet Kit's own update — and applies one with warnings. Fields Fleet Kit does
+not know at the root and in `plugins[]` are warnings, so a manifest written for
+a newer Fleet Kit can still deliver it.
 
 ```json
 {
@@ -69,9 +77,9 @@ applies one with warnings.
   "install": { "bb": "0.48.1", "opencode": "2.2.5" },
   "bb": { "minVersion": "0.48.0", "settings": { "telemetryEnabled": false } },
   "plugins": [
-    { "id": "fleet-kit", "source": "git:https://github.com/xMinor-1/bb-plugins.git", "plugin": "fleet-kit", "status": "required" },
+    { "id": "fleet-kit", "source": "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:^0.1.0", "plugin": "fleet-kit", "status": "required" },
     { "id": "notes", "source": "git:https://git.example.com/plugins.git@semver:notes/:^1.0.0", "plugin": "notes", "status": "required",
-      "config": { "greeting": "hello", "token": "{secret:gateway-key}" } },
+      "config": { "greeting": "hello" } },
     { "id": "later", "source": null, "status": "planned" }
   ],
   "removePlugins": ["old-thing"],
@@ -93,28 +101,36 @@ applies one with warnings.
 }
 ```
 
-- `schema` — the manifest format. A manifest newer than this Fleet Kit is
-  refused with "Update Fleet Kit".
+- `schema` — the manifest format. From a manifest newer than this Fleet Kit,
+  only Fleet Kit's own update applies; the panel says a newer Fleet Kit is
+  needed.
 - `install` — the versions an installer should put on a new machine. Fleet Kit
   only checks that `install.bb` is not below `bb.minVersion`.
 - `bb.minVersion` — Fleet Kit stops with an error on an older bb.
 - `bb.settings` — keys of bb's general settings (`bb settings general`). An
   unknown key or a value of the wrong type is an error, not a silent skip.
 - `marketplaces` — bb marketplaces to add if missing.
-- `plugins` — `source` is a bb plugin source string. For one plugin from a
+- `plugins` — `source` is a `git:https://` source. For one plugin from a
   monorepo with tags like `notes/v1.2.0`, write the tag prefix into the source:
-  `git:<url>@semver:notes/:^1.0.0`. `config` sets plugin settings; a
-  `{secret:name}` value is taken from the credential store. `planned` entries
-  are shown and skipped. Fleet Kit itself must be listed as `required`.
-- `removePlugins` — plugins to remove if present.
+  `git:<url>@semver:notes/:^1.0.0`; `@ref:<branch or tag>` pins a ref. `plugin`,
+  when given, must equal `id`. `config` sets plain plugin settings; secret
+  settings are left to the person. `planned` entries are shown and skipped.
+  Fleet Kit itself must be listed as `required`, and updates itself only from a
+  source pinned with `@semver:` or `@ref:`.
+- `removePlugins` — the only way to remove a plugin. A plugin dropped from
+  `plugins` stays installed; Fleet Kit never removes plugins bundled with bb.
 - `secrets` — every `{secret:name}` the manifest uses must be declared here.
 - `allowedProviders` — the only OpenCode providers people may use. Fleet Kit
   writes it to `enabled_providers`, and passes it to installed plugins that
   declare a setting of that name.
-- `opencode` — a native OpenCode 2 configuration fragment, merged as is.
-  `providers` and `model` are required; every provider and the provider of
-  `model` must be in `allowedProviders`. `{secret:name}` is allowed only as a
-  provider's whole `settings.apiKey` or inside `settings.headers`.
+- `opencode` — a native OpenCode 2 configuration fragment, merged as is. Only
+  `providers`, `model`, `small_model` and `update` are allowed; `providers` and
+  `model` are required, and every provider and the providers of the models must
+  be in `allowedProviders`. `{secret:name}` is allowed only as a provider's whole
+  `settings.apiKey` or inside `settings.headers`, and such a provider needs an
+  `https://` `settings.baseURL`. OpenCode's own `{env:...}` and `{file:...}` are
+  refused anywhere in the manifest: OpenCode would send the client's value to
+  the manifest's address.
 - `mcp`, `skills` — validated; this version does not apply them yet.
 
 A manifest whose remote MCP server has no URL yet, or that names a pre-release
@@ -133,14 +149,18 @@ When the build moves a plugin to another source, bb cannot switch it in place.
 Fleet Kit saves the plugin's plain settings, removes it, installs it from the
 new source, puts the settings back, and applies the manifest's `config`. Secret
 settings cannot be read back, so the panel shows a notice asking to enter them
-again.
+again. If the new source does not install, Fleet Kit puts the previous one back
+and reports the error. A source that installs a plugin with another id is
+removed again and reported.
 
-Fleet Kit updates itself the same way: when its source offers a newer
-release, it finishes the current sync and then asks bb to install it.
+Fleet Kit's own update is the first step of every sync and reads only its own
+entry, before the rest of the manifest is checked. When its source offers a
+newer release, Fleet Kit finishes the sync and asks bb to install it. If the
+new version does not come up, bb rolls back; Fleet Kit tries the same version at
+most twice a day.
 
-Fleet Kit removes only plugins listed in `removePlugins` and plugins it
-installed itself that the build no longer lists. Plugins a person installed by
-hand stay.
+Fleet Kit removes only plugins listed in `removePlugins`, never one bundled
+with bb. A plugin dropped from `plugins` stays and the sync says so once.
 
 ### opencode.json
 
@@ -176,15 +196,18 @@ configuration and shows "Update OpenCode to 2.x".
 | Linux | `~/.local/share/fleet-kit/secrets/<name>`, file 0600 in a 0700 directory |
 
 Values travel on stdin or in a child process's environment, never in a
-command line. `opencode.json` gets no key at all: the provider entry is written
+command line; on Windows the helper clears the variable before it starts the C#
+compiler. `opencode.json` gets no key at all: the provider entry is written
 without `apiKey`, and Fleet Kit installs a small OpenCode plugin,
-`plugins/fleet-kit-secrets.js` in the OpenCode configuration directory, that
-reads the key from the same store and sets the `Authorization` header (or the
-headers the manifest names) on each request to that provider. A changed key
-takes effect within a minute without restarting anything.
-
-Plugin settings with `{secret:name}` are filled from the store and rewritten
-only when the secret changes.
+`plugins/fleet-kit-secrets.js` in the OpenCode configuration directory. Its
+`http.request` hook sees each outgoing request to the build's provider and adds
+the `Authorization` header (or the headers the manifest names) only when the
+request goes to the origin of the provider's `baseURL` in the manifest. A
+project's `opencode.json` can override a provider's address; the key does not
+follow it there. A wrong address or a missing key leaves the header out and
+writes a warning, without the value, to `fleet-kit.log` in OpenCode's log
+directory (`~/.local/share/opencode/log/`, next to `opencode.log`). A changed key takes
+effect within a minute without restarting anything.
 
 ### Is OpenCode limited to the build's models?
 
@@ -249,7 +272,8 @@ and limits:
 
 ```sh
 e2e/run.sh                                     # build the image, start the container, prepare a fixture build
-e2e/x.sh 'bb plugin install git:/home/tester/fleet.git --plugin fleet-kit --yes'
+e2e/x.sh 'bb plugin install "git:/home/tester/fleet.git@semver:fleet-kit/:^0.1.0" --plugin fleet-kit --yes'
+e2e/x.sh 'bb plugin config fleet-kit set allowDevSources true'   # local git source, gateway on 127.0.0.1
 e2e/x.sh 'bb plugin config fleet-kit set manifestUrl file:///home/tester/build/manifest.json'
 e2e/x.sh 'bb fleet-kit sync'                  # the first sync learns the build's secrets
 e2e/x.sh 'bb fleet-kit secret set gateway-key --value-stdin < ~/.fk-e2e/expected-key'
@@ -261,7 +285,9 @@ plugin, sets bb settings, and points OpenCode at a fake OpenAI-compatible
 gateway on `127.0.0.1:4010`. The gateway answers "Pong" and logs whether each
 request carried the expected key (`~/.fk-e2e/gateway.log`), never the key
 itself, so a thread on `acp-opencode` with `corp/model-large` shows the whole
-path. `e2e/run.sh --build-arg OPENCODE_PACKAGE=opencode-ai@1.19.5` checks the
+path. A second gateway on `127.0.0.1:4011` (`~/.fk-e2e/other-gateway.log`)
+stands in for another address: a project `opencode.json` that points
+`providers.corp.settings.baseURL` there must reach it without the key. `e2e/run.sh --build-arg OPENCODE_PACKAGE=opencode-ai@1.19.5` checks the
 OpenCode 1.x path.
 
 `e2e/panel-smoke.mjs` clicks through the panel in headless Chromium inside the

@@ -223,6 +223,12 @@ function FleetKitPage() {
       ) : null}
 
       <div className="mt-4 flex flex-col gap-4">
+        {last?.fleetKitOutdated ? (
+          <div role="alert" className="flex items-center gap-2 rounded-lg border border-amber-500/40 px-4 py-2.5 text-sm">
+            <Icon name="AlertTriangle" className="size-4 text-amber-600 dark:text-amber-400" />
+            <span className="flex-1">This build needs a newer Fleet Kit. Until it installs, nothing else from the build is applied.</span>
+          </div>
+        ) : null}
         {status.notices.map((notice) => (
           <div key={notice.id} className="flex items-center gap-2 rounded-lg border border-amber-500/40 px-4 py-2.5 text-sm">
             <Icon name="Info" className="size-4 text-amber-600 dark:text-amber-400" />

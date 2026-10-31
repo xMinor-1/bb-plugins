@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse } from "jsonc-parser";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openCodeMajor, patchOpenCodeConfig, planOpenCode, writeOpenCodeConfig } from "../src/host/opencode-config.js";
 import { RESOLVER_FILE, syncResolverPlugin } from "../src/host/opencode-resolver.js";
 import { normalizeVersion } from "../src/host/find-opencode.js";
@@ -39,7 +39,7 @@ describe("OpenCode plan", () => {
     const provider = plan.entries.find((entry) => entry.path.join(".") === "providers.corp")!.value as Record<string, any>;
     expect(provider.settings).toEqual({ baseURL: "https://llm.example.test/v1" });
     expect(JSON.stringify(plan.entries)).not.toContain("secret:");
-    expect(plan.resolver).toEqual({ corp: [{ header: "Authorization", template: "Bearer {secret:gateway-key}" }] });
+    expect(plan.resolver).toEqual({ corp: { origin: "https://llm.example.test", headers: [{ header: "Authorization", template: "Bearer {secret:gateway-key}" }] } });
     expect(plan.secrets).toEqual(["gateway-key"]);
     expect(plan.entries.map((entry) => entry.path.join("."))).toEqual(["providers.corp", "model", "update", "enabled_providers"]);
     expect(plan.entries.at(-1)!.value).toEqual(["corp"]);
@@ -50,14 +50,25 @@ describe("OpenCode plan", () => {
     (withHeader.providers as any).corp.settings.headers = { "X-Team": "ops", "X-Token": "Token {secret:gateway-key}" };
     const plan = planOpenCode(withHeader, ["corp"]);
     expect((plan.entries[0]!.value as any).settings.headers).toEqual({ "X-Team": "ops" });
-    expect(plan.resolver.corp).toContainEqual({ header: "X-Token", template: "Token {secret:gateway-key}" });
+    expect(plan.resolver.corp!.headers).toContainEqual({ header: "X-Token", template: "Token {secret:gateway-key}" });
 
     const misplaced = block();
     (misplaced.providers as any).corp.settings.baseURL = "https://{secret:gateway-key}.example.test";
     expect(() => planOpenCode(misplaced, ["corp"])).toThrow("only in settings.apiKey and settings.headers");
-    const topLevel = { ...block(), share: "{secret:gateway-key}" };
+    const topLevel = { ...block(), model: "{secret:gateway-key}" };
     expect(() => planOpenCode(topLevel, ["corp"])).toThrow("only in provider settings");
     expect(() => planOpenCode({ ...block(), enabled_providers: ["x"] }, ["corp"])).toThrow("allowedProviders");
+    expect(() => planOpenCode({ ...block(), share: "auto" }, ["corp"])).toThrow("a build may set only");
+  });
+
+  it("binds the key to an https baseURL, or loopback only for development", () => {
+    const plain = block();
+    (plain.providers as any).corp.settings.baseURL = "http://llm.example.test/v1";
+    expect(() => planOpenCode(plain, ["corp"])).toThrow("https://");
+    const loopback = block();
+    (loopback.providers as any).corp.settings.baseURL = "http://127.0.0.1:4010/v1";
+    expect(() => planOpenCode(loopback, ["corp"])).toThrow("allowDevSources");
+    expect(planOpenCode(loopback, ["corp"], { allowDevSources: true }).resolver.corp!.origin).toBe("http://127.0.0.1:4010");
   });
 });
 
@@ -158,34 +169,59 @@ describe("secret store (file)", () => {
 });
 
 describe("resolver plugin", () => {
-  it("adds headers from the store per provider and leaves them out when the secret is missing", async () => {
-    const root = await tempDir();
-    const store = openFileSecretStore(join(root, "secrets"));
-    const configDir = join(root, "opencode");
-    const providers = { corp: [{ header: "Authorization", template: "Bearer {secret:gateway-key}" }] };
-    expect(await syncResolverPlugin(configDir, { providers, store })).toBe(true);
-    expect(await syncResolverPlugin(configDir, { providers, store })).toBe(false);
-
-    const file = join(configDir, "plugins", RESOLVER_FILE);
-    const module = (await import(`${pathToFileURL(file).href}?v=${Date.now()}`)) as { default: { id: string; setup: (ctx: unknown) => Promise<void> } };
-    const hooks: { name: string; options: { providerID: string }; callback: (request: { headers: Record<string, string> }) => Promise<void> }[] = [];
+  type Hook = { name: string; options: { providerID: string }; callback: (event: { request: Request }) => Promise<void> };
+  const providers = { corp: { origin: "https://llm.example.test", headers: [{ header: "Authorization", template: "Bearer {secret:gateway-key}" }] } };
+  async function loadHooks(file: string, version: number): Promise<Hook[]> {
+    const module = (await import(`${pathToFileURL(file).href}?v=${version}`)) as { default: { id: string; setup: (ctx: unknown) => Promise<void> } };
+    const hooks: Hook[] = [];
     await module.default.setup({
       session: { hook: async (name: string, callback: any, options: any) => { hooks.push({ name, callback, options }); return { dispose: async () => {} }; } },
     });
-    expect(hooks.map((hook) => [hook.name, hook.options.providerID])).toEqual([["model.request", "corp"]]);
+    return hooks;
+  }
+  const call = (url: string) => ({ request: new Request(url, { method: "POST", headers: { "User-Agent": "test" }, body: "{}" }) });
 
-    const missing = { headers: {} as Record<string, string> };
-    await hooks[0]!.callback(missing);
-    expect(missing.headers).toEqual({});
+  it("adds the key only to the build's origin and warns without the value otherwise", async () => {
+    const root = await tempDir();
+    const store = openFileSecretStore(join(root, "secrets"));
+    const configDir = join(root, "opencode");
+    expect(await syncResolverPlugin(configDir, { providers, store })).toBe(true);
+    expect(await syncResolverPlugin(configDir, { providers, store })).toBe(false);
+    const file = join(configDir, "plugins", RESOLVER_FILE);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const dataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = join(root, "data");
+    try {
+      const missingHooks = await loadHooks(file, Date.now());
+      expect(missingHooks.map((hook) => [hook.name, hook.options.providerID])).toEqual([["http.request", "corp"]]);
+      const missing = call("https://llm.example.test/v1/chat/completions");
+      await missingHooks[0]!.callback(missing);
+      expect(missing.request.headers.get("Authorization")).toBeNull();
+      expect(warn.mock.calls.flat().join(" ")).toContain("gateway-key is not in the credential store");
 
-    await store.set("gateway-key", "k-123");
-    // A miss is cached for five seconds; load a fresh module copy instead of waiting.
-    const fresh = (await import(`${pathToFileURL(file).href}?v=${Date.now() + 1}`)) as typeof module;
-    const freshHooks: typeof hooks = [];
-    await fresh.default.setup({ session: { hook: async (name: string, callback: any, options: any) => { freshHooks.push({ name, callback, options }); return { dispose: async () => {} }; } } });
-    const request = { headers: { "User-Agent": "test" } as Record<string, string> };
-    await freshHooks[0]!.callback(request);
-    expect(request.headers).toEqual({ "User-Agent": "test", Authorization: "Bearer k-123" });
+      await store.set("gateway-key", "k-123");
+      // A miss is cached for five seconds; load a fresh module copy instead of waiting.
+      const hooks = await loadHooks(file, Date.now() + 1);
+      const good = call("https://llm.example.test/v1/chat/completions");
+      await hooks[0]!.callback(good);
+      expect(good.request.headers.get("Authorization")).toBe("Bearer k-123");
+      expect(good.request.headers.get("User-Agent")).toBe("test");
+
+      const elsewhere = call("https://collector.example.test/v1/chat/completions");
+      await hooks[0]!.callback(elsewhere);
+      expect(elsewhere.request.headers.get("Authorization")).toBeNull();
+      const logged = warn.mock.calls.flat().join(" ");
+      expect(logged).toContain("https://collector.example.test");
+      expect(logged).not.toContain("k-123");
+      const logFile = await readFile(join(root, "data", "opencode", "log", "fleet-kit.log"), "utf8");
+      expect(logFile).toContain("level=WARN service=fleet-kit");
+      expect(logFile).toContain("https://collector.example.test");
+      expect(logFile).not.toContain("k-123");
+    } finally {
+      warn.mockRestore();
+      if (dataHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = dataHome;
+    }
 
     expect(await syncResolverPlugin(configDir, null)).toBe(true);
     expect(await stat(file).catch(() => null)).toBeNull();
@@ -197,6 +233,6 @@ describe("resolver plugin", () => {
     await mkdir(join(configDir, "plugins"), { recursive: true });
     await writeFile(join(configDir, "plugins", RESOLVER_FILE), "export default {};\n");
     const store = openFileSecretStore(join(root, "secrets"));
-    await expect(syncResolverPlugin(configDir, { providers: { corp: [] }, store })).rejects.toThrow("not written by Fleet Kit");
+    await expect(syncResolverPlugin(configDir, { providers, store })).rejects.toThrow("not written by Fleet Kit");
   });
 });
