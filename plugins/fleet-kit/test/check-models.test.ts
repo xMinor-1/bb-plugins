@@ -46,6 +46,17 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+/** The process has exited (an unreaped zombie counts: containers leave orphans to PID 1), within `ms`. */
+async function gone(pid: number, ms = 3_000): Promise<boolean> {
+  const zombie = () =>
+    process.platform === "linux" && readFile(`/proc/${pid}/stat`, "utf8").then((value) => /^\d+ \(.*\) Z /.test(value)).catch(() => false);
+  for (const until = Date.now() + ms; ; ) {
+    if (!alive(pid) || (await zombie())) return true;
+    if (Date.now() > until) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 describe("OpenCode configuration runner", () => {
   it("passes the ACP environment and absolute project cwd and waits for process exit", async () => {
     const options = await fixture();
@@ -88,10 +99,9 @@ describe("OpenCode configuration runner", () => {
     expect((await checkOpenCodeConfiguration(options)).state).toBe("blocked");
     const observed = JSON.parse(await readFile(join(options.projectDirectory, "observed.json"), "utf8"));
     const serverPid = Number(await readFile(join(options.projectDirectory, "server.pid"), "utf8"));
-    expect(alive(observed.pid)).toBe(false);
-    // Containers may leave an exited orphan as a zombie until PID 1 reaps it.
-    const zombie = process.platform === "linux" && await readFile(`/proc/${serverPid}/stat`, "utf8").then((value) => /^\d+ \(.*\) Z /.test(value)).catch(() => false);
-    expect(alive(serverPid) && !zombie).toBe(false);
+    // Killed processes leave a moment later on a loaded machine: wait up to 3 s.
+    expect(await gone(observed.pid)).toBe(true);
+    expect(await gone(serverPid)).toBe(true);
   });
 
   it("blocks missing executables and cancellation; personal mode does not spawn", async () => {

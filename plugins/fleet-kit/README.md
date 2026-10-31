@@ -26,6 +26,11 @@ brings bb to that description and keeps it there.
   the last sync changed, any errors, whether OpenCode is limited to the build's
   models, and a **Sync now** button. The panel is in English and Russian, with
   a switch in its header.
+- **First run**: a **First run** page lists the build's setup steps (the gateway
+  key, mail, reports and so on), each done or still to do, with a button to the
+  plugin's own page or the key's field right on the page. Until every step is
+  done or skipped, the sidebar entry shows how many are left and the Fleet Kit
+  page shows a reminder. An installer can open bb on `/plugins/fleet-kit/setup`.
 
 ## Install
 
@@ -61,6 +66,7 @@ does nothing.
 ```sh
 bb fleet-kit status [--json]      # build, last sync, OpenCode protection, secrets
 bb fleet-kit sync [--json]        # sync now and wait; exits 1 when the sync had errors
+bb fleet-kit setup [--json]       # the First run steps and which are done
 bb fleet-kit secret set <name> --value-stdin < key.txt
 bb fleet-kit secret clear <name>
 ```
@@ -107,7 +113,12 @@ a newer Fleet Kit can still deliver it.
     "model": "corp/big-model",
     "update": "disable"
   },
-  "mcp": []
+  "mcp": [],
+  "onboarding": [
+    { "id": "key", "title": "Gateway key", "secret": "gateway-key" },
+    { "id": "notes", "title": "Notes", "hint": "Sign in once", "plugin": "notes" },
+    { "id": "later", "title": "Later", "plugin": "later", "optional": true }
+  ]
 }
 ```
 
@@ -153,6 +164,13 @@ a newer Fleet Kit can still deliver it.
   of OpenCode's own, `@opencode/ai/providers/<name>`; any other package is
   accepted only on a machine with `allowDevSources`.
 - `mcp`, `skills` — validated; this version does not apply them yet.
+- `onboarding` — the First run steps, in order: `id`, `title`, `hint`,
+  `optional`, and exactly one of `secret` (a name from `secrets`) or `plugin`
+  (an id from `plugins`). `path` (`/plugins/<id>/<panel>`) is where a plugin
+  step's button leads when the plugin cannot report its state. A step that
+  names an unknown secret or plugin, or repeats an id, is left out with a
+  warning; the rest of the build still applies. Fleet Kit 0.2.x ignores the
+  block with a warning.
 
 A manifest whose remote MCP server has no URL yet, or that names a pre-release
 bb, gets a warning.
@@ -315,6 +333,39 @@ the picker keeps showing the default configuration's models. Start that bb with
 `OPENCODE_CONFIG_DIR` set to the same directory; Fleet Kit warns until it is.
 When bb already runs with `OPENCODE_CONFIG_DIR`, the setting can stay empty —
 Fleet Kit uses the variable.
+
+### First run
+
+The page reads the steps the last sync saved and asks, every time it opens and
+every 15 seconds while it is open:
+
+- a **secret** step: is the secret in the credential store. The page has the
+  password field itself.
+- a **plugin** step: the plugin, through `bb.sdk.plugins.callRpc`, method
+  `setupStatus`. A plugin with a setup step registers it with
+  `experimental_discoverable` and answers from what it has saved, without
+  network calls, within a few seconds:
+
+  ```ts
+  setupStatus: {
+    input: z.object({ lang: z.enum(["en", "ru"]).optional(), hostId: z.string().optional() }).strict(),
+    output: z.object({
+      state: z.enum(["done", "todo", "problem"]),
+      summary: z.string().max(200),          // one line in `lang`, no addresses, logins or passwords
+      path: z.string().regex(/^\/plugins\//).optional(), // the page where the person does the step
+    }).strict(),
+  }
+  ```
+
+  Without `hostId` the plugin picks the machine itself (the one its page used
+  last, else bb's primary machine). Fleet Kit always sends `lang`. Exchange
+  Mail and Qlik Sense answer it.
+
+A plugin without `setupStatus` gets **Mark as done**; one that is not installed
+or enabled yet shows as installing; one the manifest lists as `planned` shows as
+coming later and does not count. An optional step can be skipped. Passwords and
+tokens of plugins never pass through Fleet Kit: the person types them in the
+plugin's own form. **Start working** on the finished page opens a new thread.
 
 ## Known limits
 

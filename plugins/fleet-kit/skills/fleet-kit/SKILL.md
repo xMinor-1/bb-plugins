@@ -16,6 +16,7 @@ sidebar shows the same information as the commands below.
 ```bash
 bb fleet-kit status [--json]     # build version, last sync, OpenCode protection, secrets
 bb fleet-kit sync [--json]       # sync now and wait; exit 1 when the sync had errors
+bb fleet-kit setup [--json]      # First run steps: done, todo, problem, installing, later
 bb fleet-kit secret clear <name>
 ```
 
