@@ -174,6 +174,14 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
   `CreateItem` with `SaveOnly` (drafts only), `SendItem` with the change key,
   `DeleteItem` (to Deleted Items), `UpdateItem` (marks a message read when you
   open it in the panel; agents' reads do not).
+- **Setup status for other plugins.** `setupStatus` is the one RPC method other
+  plugins may call (a build's onboarding page, such as Fleet Kit's, asks it).
+  Input `{ lang?: "en" | "ru", hostId?: string }`; without `hostId` it asks the
+  machine the Mail page used last, else bb's own machine. Output
+  `{ state: "done" | "todo" | "problem", summary, path }`: `done` once the saved
+  connection passed its last check, `summary` is one line in `lang` with no
+  address, login or password, `path` is the Mail page. It reads the saved
+  connection only and sends nothing to Exchange.
 - On the host, the plugin's data folder keeps the connection settings, short
   message refs (`m…` → Exchange ids), refused sign-ins per login (times only)
   and the list of drafts made in bb with the text you or the agent wrote, until

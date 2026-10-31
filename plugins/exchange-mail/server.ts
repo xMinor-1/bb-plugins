@@ -29,6 +29,7 @@ import { z } from "zod";
 import { connectionStatusSchema, draftInputSchema, draftSchema, folderSchema, hostContract, langSchema, listInputSchema, listOutputSchema, messageSchema, saveConnectionInputSchema, sendResultSchema, type ToolInput } from "./contract";
 import { groupModels } from "./src/shared/models";
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
+import { setupFromStatus, setupStatusContract, setupStep } from "./src/shared/setup";
 
 const hostId = z.string().min(1).max(200);
 /** The panel names a machine; a draft card in a thread names the thread, whose machine is looked up. */
@@ -64,6 +65,8 @@ export const rpcContract = defineRpcContract({
 const SKILL = "exchange-mail";
 const TOOL_TIMEOUT_MS = 120_000;
 const MODELS_TIMEOUT_MS = 15_000;
+/** The setup page waits on this answer; the host reads only its own files. */
+const SETUP_TIMEOUT_MS = 10_000;
 /** Send waits for the person in the system window (src/host/confirm.ts gives up after 4 minutes). */
 const SEND_TIMEOUT_MS = 6 * 60_000;
 /** Fork chains longer than this are not walked; such a thread counts as holding mail. */
@@ -400,6 +403,36 @@ export default async function plugin(bb: BbPluginApi) {
     },
   };
   bb.rpc.register(rpcContract, ownCallers(handlers));
+
+  // ---------- The onboarding step (src/shared/setup.ts) ----------
+
+  /** The machine the person set mail up on: named by the caller, else the panel's last machine, else bb's own machine. */
+  async function setupMachine(requested: string | undefined): Promise<string | null> {
+    if (requested) return requested;
+    const hosts = (await bb.sdk.hosts.list()).filter((candidate) => candidate.lifecycle.phase !== "destroyed");
+    const last = await kv.get<string>("ui:lastHost");
+    if (last && hosts.some((candidate) => candidate.id === last)) return last;
+    const { primaryHostId } = await bb.sdk.system.config();
+    return primaryHostId ?? hosts[0]?.id ?? null;
+  }
+
+  // Open to other plugins, unlike the panel's methods: the answer holds no mail, address or login.
+  bb.rpc.register(
+    setupStatusContract,
+    {
+      setupStatus: async ({ lang = "en", hostId: requested }) => {
+        const machine = await setupMachine(requested);
+        if (!machine) return setupStep("problem", "noMachine", lang);
+        try {
+          return setupFromStatus(await call("status", machine, {}, SETUP_TIMEOUT_MS), lang);
+        } catch (error) {
+          bb.log.info(`setupStatus: ${machine} did not answer: ${error instanceof Error ? error.message : String(error)}`);
+          return setupStep("problem", "offline", lang);
+        }
+      },
+    },
+    { experimental_discoverable: true, experimental_description: "Exchange Mail setup state for a bb build's onboarding page." },
+  );
 }
 
 const TOOL_NAMES = ["mail_list", "mail_search", "mail_read", "mail_draft"];
