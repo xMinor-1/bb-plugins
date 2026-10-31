@@ -55,7 +55,8 @@ not work on another machine.
    on its own line in your answer: bb shows the draft there with its Send
    button. Then say in one sentence what the draft says and who gets it.
 5. To change the draft, call `mail_draft` again with `replaces` = the draft id
-   and the full new text. The user's Send button always sends the latest
+   and the full new text. Recipients and subject you leave out stay as they
+   were in that draft, forwards included. The user's Send button always sends the latest
    version they saw, after they confirm it in a system window on their
    computer; if you change a draft while they look at it, bb asks them to
    review it again. Never try to send or confirm a draft yourself.

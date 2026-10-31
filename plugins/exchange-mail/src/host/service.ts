@@ -522,13 +522,17 @@ export class MailService {
     }
     if (!previous && entries.length >= MAX_DRAFTS) throw new UserError("Too many drafts are waiting. Send or discard some in Mail → Settings in the bb sidebar first.");
 
-    const to = input.to?.map(parseRecipient);
-    const cc = input.cc?.map(parseRecipient);
+    // A revision keeps what it does not change: the recipients and subject of the version it replaces.
+    // Not across kinds: a reply turned into reply-all gets the recipients Exchange picks for it.
+    const kept = previous && previous.kind === input.kind && (input.to === undefined || input.cc === undefined || input.subject === undefined) ? await this.recipientsOf(client, previous, signal) : null;
+    const to = input.to?.map(parseRecipient) ?? kept?.to;
+    const cc = input.cc?.map(parseRecipient) ?? kept?.cc;
+    const subject = input.subject ?? kept?.subject;
     let replyTo: DraftEntry["replyTo"] = null;
     let reference: ItemRef | undefined;
     if (input.kind === "new") {
       if (!to?.length) throw new UserError("A new message needs at least one recipient in to");
-      if (!input.subject?.trim()) throw new UserError("A new message needs a subject");
+      if (!subject?.trim()) throw new UserError("A new message needs a subject");
     } else {
       if (input.kind === "forward" && !to?.length) throw new UserError("A forward needs at least one recipient in to");
       const replyRef = input.replyTo ?? previous?.replyTo?.ref;
@@ -542,7 +546,7 @@ export class MailService {
     }
 
     const created = await client.createDraft(
-      { kind: input.kind, reference, to, cc, subject: input.subject?.trim() || undefined, body: input.body },
+      { kind: input.kind, reference, to, cc, subject: subject?.trim() || undefined, body: input.body },
       signal,
     );
     const entry: DraftEntry = {
@@ -564,6 +568,17 @@ export class MailService {
     const draft = await this.view(client, entry, signal);
     if (!draft) throw new EwsError("ErrorItemNotFound", "Exchange lost the draft right after saving it");
     return draft;
+  }
+
+  /** Who an earlier version of a draft goes to, and its subject; null when Exchange no longer has it. */
+  private async recipientsOf(client: EwsClient, entry: DraftEntry, signal?: AbortSignal): Promise<{ to: Address[]; cc: Address[]; subject: string } | null> {
+    try {
+      const item = await client.get({ id: entry.itemId }, signal);
+      return { to: item.to, cc: item.cc, subject: item.subject };
+    } catch (error) {
+      if (error instanceof EwsError && error.code === "ErrorItemNotFound") return null;
+      throw error;
+    }
   }
 
   async discardDraft(id: string, signal?: AbortSignal, threadId?: string): Promise<{ ok: boolean }> {
@@ -669,7 +684,7 @@ export class MailService {
         }
         case "attachment": {
           const file = await this.fileAttachment(input.ref, input.index, signal);
-          const text = await attachmentText(file.name, file.contentType, file.content);
+          const text = await attachmentText(file.name, file.contentType, file.content, { signal });
           return { text: formatAttachment(input.ref, input.index, file.name, text, input.maxChars ?? 30_000), isError: false, draftId: null };
         }
         case "conversation": {

@@ -328,7 +328,7 @@ export default async function plugin(bb: BbPluginApi) {
       cc: recipients.optional().describe("Copy recipients"),
       subject: z.string().max(500).optional().describe('Replies: omit to keep "RE: …"'),
       body: z.string().min(1).max(100_000).describe("The text you write. For replies the quoted original is added below it"),
-      replaces: z.string().max(64).optional().describe("Id of your earlier draft (d_…) this version replaces"),
+      replaces: z.string().max(64).optional().describe("Id of your earlier draft (d_…) this version replaces. Recipients and subject you leave out stay as in that draft"),
     }),
     execute: ({ reply_to, reply_all, forward, to, cc, subject, body, replaces }, ctx) =>
       runTool(ctx.threadId, { tool: "draft", threadId: ctx.threadId, replyTo: reply_to, replyAll: reply_all, forward, to, cc, subject, body, replaces }, ctx.signal),

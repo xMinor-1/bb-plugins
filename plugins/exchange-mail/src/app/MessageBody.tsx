@@ -45,7 +45,7 @@ export function MessageText({ text }: { text: string }) {
 }
 
 const RASTER = /^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,/i;
-const DROPPED_TAGS = ["script", "form", "input", "button", "select", "textarea", "iframe", "frame", "frameset", "object", "embed", "applet", "link", "meta", "base", "audio", "video", "source", "track", "portal", "svg", "math"];
+const DROPPED_TAGS = ["script", "form", "area", "map", "input", "button", "select", "textarea", "iframe", "frame", "frameset", "object", "embed", "applet", "link", "meta", "base", "audio", "video", "source", "track", "portal", "svg", "math"];
 
 const cidKey = (value: string) => value.replace(/^cid:/i, "").replace(/^<|>$/g, "").trim().toLowerCase();
 
@@ -67,7 +67,7 @@ export function sanitizeMail(html: string, options: { images: ReadonlyMap<string
         element.setAttribute("target", "_blank");
         element.setAttribute("rel", "noopener noreferrer");
       } else element.removeAttribute("href");
-    }
+    } else if (element.hasAttribute("href")) element.removeAttribute("href");
     if (element.tagName === "IMG") {
       const src = (element.getAttribute("src") ?? "").trim();
       if (/^cid:/i.test(src)) {

@@ -210,6 +210,10 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
 - Attachment text is extracted on the host — PDF with pdf.js (`unpdf`, no
   fonts loaded), text as UTF-8, UTF-16 or Windows-1251 — and only the text
   goes to the agent. Files go to the panel only when you open or save them.
+  A PDF is read up to 200 pages and for one minute, and stops with the tool
+  call; HTML is turned into text from its first 2 MB. Mail is written by
+  strangers, so all text handling takes time in proportion to the length of
+  the text: no message can make the host or the panel hang.
 - On the host, the plugin's data folder keeps the connection settings, short
   message refs (`m…` → Exchange ids), refused sign-ins per login (times only)
   and the list of drafts made in bb with the text you or the agent wrote, until

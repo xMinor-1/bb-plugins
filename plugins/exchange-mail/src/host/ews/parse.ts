@@ -230,22 +230,79 @@ export function parseGetItem(xmlText: string): ParsedMessage {
   };
 }
 
-/** A rough text of an HTML body, for servers without TextBody: block tags become line breaks. */
-export function htmlToText(html: string): string {
-  return normalizeText(
-    html
-      .replace(/<(script|style|head)\b[\s\S]*?<\/\1\s*>/gi, "")
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/(p|div|tr|li|h[1-6]|blockquote|table)\s*>/gi, "\n")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&nbsp;/gi, " ")
-      .replace(/&lt;/gi, "<")
-      .replace(/&gt;/gi, ">")
-      .replace(/&quot;/gi, '"')
-      .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
-      .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
-      .replace(/&amp;/gi, "&"),
+/** HTML longer than this is cut before it becomes text, so one message or attachment cannot keep the machine busy. */
+export const HTML_TEXT_MAX = 2_000_000;
+
+/** Elements whose content is not text a person reads. */
+const HIDDEN = new Set(["script", "style", "head", "title", "template"]);
+/** Elements that end a line. */
+const BLOCKS = new Set(["p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "table"]);
+const NAMED: Record<string, string> = { nbsp: " ", lt: "<", gt: ">", quot: '"', apos: "'", amp: "&" };
+const ENTITY = /&(?:#(\d+)|#x([0-9a-f]+)|(nbsp|lt|gt|quot|apos|amp));/gi;
+
+/** A character reference as text; one outside Unicode (or a lone surrogate, or NUL) becomes U+FFFD. */
+function character(code: number): string {
+  return Number.isInteger(code) && code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : "\uFFFD";
+}
+
+export function decodeEntities(text: string): string {
+  return text.replace(ENTITY, (_, decimal: string | undefined, hex: string | undefined, name: string | undefined) =>
+    decimal !== undefined ? character(Number(decimal)) : hex !== undefined ? character(parseInt(hex, 16)) : NAMED[name!.toLowerCase()]!,
   );
+}
+
+const isTagStart = (code: number) => (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 47 || code === 33 || code === 63;
+const isNameChar = (code: number) => (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
+
+/**
+ * A rough text of an HTML body, for servers without TextBody and for HTML
+ * attachments: block tags become line breaks. One pass from left to right,
+ * each search starting where the previous one ended, so the time grows with
+ * the length of the HTML and nothing an email holds can make it hang.
+ */
+export function htmlToText(input: string): string {
+  const html = input.length > HTML_TEXT_MAX ? input.slice(0, HTML_TEXT_MAX) : input;
+  // Lower case for finding closing tags; ASCII only, so every index stays the same.
+  const lower = html.replace(/[A-Z]+/g, (run) => run.toLowerCase());
+  const out: string[] = [];
+  let at = 0;
+  while (at < html.length) {
+    const open = html.indexOf("<", at);
+    if (open < 0) {
+      out.push(html.slice(at));
+      break;
+    }
+    out.push(html.slice(at, open));
+    if (!isTagStart(html.charCodeAt(open + 1))) {
+      out.push("<");
+      at = open + 1;
+      continue;
+    }
+    if (html.startsWith("<!--", open)) {
+      const end = html.indexOf("-->", open + 4);
+      if (end < 0) break;
+      at = end + 3;
+      continue;
+    }
+    const close = html.indexOf(">", open + 1);
+    // A tag that never ends: what follows is inside it, not text.
+    if (close < 0) break;
+    let name = open + 1;
+    const ending = html.charCodeAt(name) === 47;
+    if (ending) name++;
+    let nameEnd = name;
+    while (nameEnd < close && isNameChar(html.charCodeAt(nameEnd))) nameEnd++;
+    const tag = lower.slice(name, nameEnd);
+    at = close + 1;
+    if (!ending && HIDDEN.has(tag) && html.charCodeAt(close - 1) !== 47) {
+      const end = lower.indexOf(`</${tag}`, at);
+      if (end < 0) break;
+      const endClose = html.indexOf(">", end);
+      if (endClose < 0) break;
+      at = endClose + 1;
+    } else if (tag === "br" || (ending && BLOCKS.has(tag))) out.push("\n");
+  }
+  return normalizeText(decodeEntities(out.join("")));
 }
 
 export interface ParsedAttachmentContent {

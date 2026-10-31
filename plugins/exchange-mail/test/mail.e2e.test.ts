@@ -306,10 +306,13 @@ describe("reading made readable", () => {
     const refused = await service.tool({ tool: "draft", threadId: "thr_1", forward: ref, body: "FYI" });
     expect(refused).toMatchObject({ isError: true, text: expect.stringMatching(/needs at least one recipient/) });
 
-    const saved = await service.tool({ tool: "draft", threadId: "thr_1", forward: ref, to: ["Dave Example <dave@example.test>"], body: "FYI, see the agenda." });
-    expect(saved.isError).toBe(false);
+    const first = await service.tool({ tool: "draft", threadId: "thr_1", forward: ref, to: ["Dave Example <dave@example.test>"], cc: ["eve@example.test"], body: "FYI." });
+    expect(first.isError).toBe(false);
+    // A revision without to keeps the recipients of the version it replaces.
+    const saved = await service.tool({ tool: "draft", threadId: "thr_1", replaces: first.draftId!, body: "FYI, see the agenda." });
+    expect(saved).toMatchObject({ isError: false, draftId: first.draftId });
     const [draft] = (await service.drafts()).drafts;
-    expect(draft).toMatchObject({ kind: "forward", subject: "FW: Встреча в четверг", to: [{ email: "dave@example.test" }] });
+    expect(draft).toMatchObject({ kind: "forward", subject: "FW: Встреча в четверг", text: "FYI, see the agenda.", to: [{ email: "dave@example.test" }], cc: [{ email: "eve@example.test" }] });
     expect(draft!.attachments.map((a) => a.name)).toEqual(["agenda.pdf", "notes.txt", "slides.pptx"]);
     expect((await service.send(draft!.id, draft!.revision)).status).toBe("sent");
     expect(asked[0]).toMatchObject({ kind: "forward", attachments: [{ name: "agenda.pdf" }, { name: "notes.txt" }, { name: "slides.pptx" }] });

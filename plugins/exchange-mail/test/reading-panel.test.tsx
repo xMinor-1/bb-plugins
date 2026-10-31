@@ -41,6 +41,16 @@ describe("sanitizing HTML mail", () => {
     expect(body).toMatch(/<a>bad<\/a>/);
   });
 
+  it("keeps no link outside <a>: image maps go, and no other element keeps an href", () => {
+    const { body } = sanitizeMail(
+      '<img src="cid:Chart1@Example.test" usemap="#m"><map name="m"><area shape="rect" coords="0,0,9,9" href="tel:+100"><area href="sms:1"><area href="ftp://x.test/f"></map>' +
+        '<p href="https://evil.test/p">x</p><a href="ftp://x.test/f">ftp</a>',
+      { images, remote: false },
+    );
+    expect(body).not.toMatch(/<area|<map|tel:|sms:|ftp:|usemap|evil\.test/i);
+    expect(body).toContain("<a>ftp</a>");
+  });
+
   it("loads pictures from the internet only when asked", () => {
     const { body, blocked } = sanitizeMail(HTML, { images, remote: true });
     expect(blocked).toBe(0);

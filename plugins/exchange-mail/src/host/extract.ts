@@ -31,26 +31,62 @@ export function decodeText(content: Buffer): string {
   }
 }
 
-async function pdfText(content: Buffer): Promise<string> {
-  const { extractText, getDocumentProxy } = await import("unpdf");
+/** A PDF is read up to this many pages and for this long; the agent is told where it stopped. */
+export const PDF_MAX_PAGES = 200;
+export const PDF_MAX_MS = 60_000;
+
+export interface ReadLimits {
+  /** The tool call's signal: a stopped turn stops the reading between pages. */
+  readonly signal?: AbortSignal;
+  readonly maxPages?: number;
+  readonly maxMs?: number;
+  /** For tests: the clock. */
+  readonly now?: () => number;
+}
+
+/** Not the file's fault: the reading was stopped from outside. */
+class Stopped extends Error {}
+
+async function pdfText(content: Buffer, limits: ReadLimits): Promise<string> {
+  const { getDocumentProxy } = await import("unpdf");
+  const now = limits.now ?? Date.now;
+  const deadline = now() + (limits.maxMs ?? PDF_MAX_MS);
+  const maxPages = limits.maxPages ?? PDF_MAX_PAGES;
   // unpdf's pdf.js build has no eval path for fonts; fonts are not loaded at all, only text is read.
   const pdf = await getDocumentProxy(new Uint8Array(content), { disableFontFace: true, useSystemFonts: false, verbosity: 0 });
   try {
-    const { text } = await extractText(pdf, { mergePages: false });
-    return (Array.isArray(text) ? text : [text]).map((page, n) => `[page ${n + 1}]\n${page.trim()}`).join("\n\n");
+    const total = pdf.numPages;
+    const pages: { number: number; text: string }[] = [];
+    let note = total > maxPages ? `(Only the first ${maxPages} of ${total} pages were read.)` : "";
+    for (let number = 1; number <= Math.min(total, maxPages); number++) {
+      if (limits.signal?.aborted) throw new Stopped("stopped");
+      if (number > 1 && now() > deadline) {
+        note = `(Reading stopped after ${number - 1} of ${total} pages: the file takes too long to read.)`;
+        break;
+      }
+      const page = await pdf.getPage(number);
+      const { items } = await page.getTextContent();
+      page.cleanup();
+      const text = items.map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : "") : "")).join("");
+      pages.push({ number, text: text.trim() });
+    }
+    const body = pages.some((page) => page.text)
+      ? pages.map((page) => `[page ${page.number}]\n${page.text}`).join("\n\n")
+      : "(The PDF has no text layer: it is probably a scan. Ask the user to read it.)";
+    return note ? `${body}\n\n${note}` : body;
   } finally {
-    await pdf.cleanup().catch(() => undefined);
+    // Frees the parsed document; cleanup() alone keeps it in memory.
+    await pdf.loadingTask.destroy().catch(() => undefined);
   }
 }
 
-export async function attachmentText(name: string, contentType: string | null, content: Buffer): Promise<string> {
+export async function attachmentText(name: string, contentType: string | null, content: Buffer, limits: ReadLimits = {}): Promise<string> {
   const as = readableAs(name, contentType);
   if (as === "pdf") {
-    const text = await pdfText(content).catch(() => {
+    return pdfText(content, limits).catch((error: unknown) => {
+      if (error instanceof Stopped) throw new UserError(`Reading ${name} was stopped.`);
       throw new UserError(`${name} could not be read as PDF: it may be damaged or protected with a password.`);
     });
-    if (!text.replace(/\[page \d+\]/g, "").trim()) return "(The PDF has no text layer: it is probably a scan. Ask the user to read it.)";
-    return text;
   }
   if (as === "html") return htmlToText(decodeText(content));
   if (as === "text") return normalizeText(decodeText(content));
