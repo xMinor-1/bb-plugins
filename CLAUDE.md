@@ -6,11 +6,12 @@
 ## Новый плагин
 
 ```sh
-scripts/new-plugin.sh <имя> [--app]
+scripts/new-plugin.sh <имя>
 ```
 
 Скрипт создаёт `plugins/<имя>` через `bb plugin new` и регистрирует его в
-`.bb/plugins.json`. Дальше руками:
+`.bb/plugins.json`. С bb 0.48 флагов у `bb plugin new` нет: каркас всегда с
+фронтендом, `bb.host` добавляется руками. Дальше руками:
 
 1. `npm install` в директории плагина.
 2. Заполнить в `package.json` → `bb`: `name`, `description`, `branding.icon` —

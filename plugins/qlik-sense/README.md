@@ -1,187 +1,123 @@
-# Qlik Sense
+# Qlik Sense for bb
 
-Connect agents to Qlik Sense Enterprise reports using the user's own account.
-Plugin ID: `qlik-sense`.
+Agents read Qlik Sense Enterprise reports — sheets, tables, charts, pivots and
+KPIs — with filters, recalculated by the Qlik engine on every call. Read-only:
+nothing in Qlik changes.
 
-**Development in progress. Not ready for installation or release.** The setup
-and report catalog UX is awaiting owner approval. This branch publishes reusable
-modules for fleet-kit; it is not an installable plugin release. Authentication,
-MCP activation and the UI are not included in this module snapshot. No company
-connection is made during development.
+Setup is one page in the bb sidebar:
 
-## Fleet preconfiguration
+1. **Sign in.** Qlik address, `DOMAIN\user` login and password → *Save and check
+   sign-in*.
+2. **Reports agents may use.** Tick the apps agents may read — they are the
+   boundary, every other app is refused. Inside an app, tick the sheets to
+   start from and say what each one answers. The agent gets these notes and
+   links to open the sheets in the browser. *Can't find a report?* — paste its
+   link: the plugin checks whether your account can open it and, if not,
+   writes an access request for the app owner.
+3. **Agents that may read Qlik data.** Tick the provider/model pairs your
+   company approved for its data. Nothing is ticked at first.
 
-The plugin declares these settings, writable through `bb plugin config`:
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `url` | empty | HTTPS Qlik base URL, including a virtual-proxy prefix if needed. No embedded credentials, query or fragment. |
-| `allowedProviders` | empty | Explicit OpenCode provider IDs separated by commas or whitespace. No wildcards. Empty means provider restrictions are disabled; setup must visibly warn before connecting. |
-| `opencodeConfigDir` | empty | Absolute OpenCode config directory set by the fleet. Overrides ACP's `OPENCODE_CONFIG_DIR` for both writes and model checks. Empty follows ACP's configured directory, then the standard XDG/home directory. |
-
-Example for a fleet's private manifest (the public repository contains no company addresses):
+## Install
 
 ```sh
-bb plugin config qlik-sense set url https://qlik.example/proxy
+bb plugin install git:github.com/xMinor-1/bb-plugins --plugin qlik-sense --yes
 ```
+
+## Who gets the data
+
+Company data should reach only the models the company approved. The plugin
+enforces that in bb, not in the agent:
+
+- The Qlik tools and the `qlik-sense` skill are offered only to sessions whose
+  provider and model match the allow-list. Other agents never see them.
+- Every tool call re-checks the model the thread is running *now*, so switching
+  models mid-thread does not keep the tools working.
+- A thread that has received Qlik answers is marked. bb refuses to send that
+  thread — or a fork of it — to a model outside the list, because the whole
+  history, Qlik answers included, would go to that model.
+
+The allow-list is one rule per line, `<provider-id> <model-glob>`:
+
+```text
+acp-opencode corp/*
+```
+
+Set it in the panel or with
+`bb plugin config qlik-sense set allowedModels "acp-opencode corp/*"`.
+A pre-configured install can also set `url`, the Qlik address suggested in the
+panel, so people only type their login and password.
+
+What this does not cover: an agent with shell access running as the same OS
+user can read anything that user can, including the password store. The guard
+keeps Qlik data from reaching models by accident; it is not a sandbox. bb's own
+AI services (thread titles, commit messages) send thread text to their
+service — turn them off in Settings → AI services when threads hold company data.
+
+## The password
+
+The password stays on the machine where agents run, never on the bb server:
+
+| OS | Store |
+| --- | --- |
+| macOS | login Keychain (`security`, service `bb-qlik-sense`) |
+| Windows | encrypted with the Windows account (DPAPI through PowerShell, cmdlets allowed in Constrained Language Mode) |
+| Linux, or when the OS store refuses | a file readable only by the user |
+
+The password never appears on a command line. If Qlik rejects the login or
+password, the plugin stops signing in — across restarts — until you enter the
+password again or press *Try once more*. Every new agent session would
+otherwise retry a stale password, and a domain locks the account after a few
+failures.
+
+## Agent tools
+
+| Tool | What it does |
+| --- | --- |
+| `qlik_reports` | the enabled apps, recommended sheets, notes and links — called first |
+| `qlik_list_sheets` | sheets of an enabled app |
+| `qlik_sheet_objects` | objects of a sheet: ids, dimensions, measures, filter fields |
+| `qlik_list_fields` | data model fields, master dimensions, master measures with formulas |
+| `qlik_field_values` | values of a field, with what remains possible under filters |
+| `qlik_get_data` | data of a sheet object with filters, as a table |
+| `qlik_query` | a custom breakdown: fields or master dimensions × master measures or formulas |
+
+Filters: `{ "Region": "North" }`, `{ "Region": ["North", "East"] }`, or Qlik
+search strings (`"*Nor*"`, `">=01.10.2026<=31.10.2026"`). Each call starts from
+clean selections, in the agent's own engine session, so the person's open
+Qlik tab never moves.
+
+## How it works
+
+```
+bb server (server.ts)                     machine where agents run (src/host.ts)
+  allow-list, tool gating, dispatch hook ──► Qlik sign-in, engine WebSocket,
+  panel RPC                                  password store, report catalog
+```
+
+- `server.ts` registers the tools, selects them per session with
+  `bb.agents.configure`, records each turn's model and refuses tainted turns in
+  the `message.dispatch` hook, and relays panel calls. It stores no company
+  data: only the allow-list and per-thread markers.
+- `src/host.ts` runs on the machine where the thread runs — the one that can
+  reach Qlik, often only inside a corporate network or VPN. It signs in through
+  the standard Qlik form (`internal_forms_authentication`), keeps the proxy
+  session cookie, re-signs in once when the session expires, and talks to the
+  engine (Engine API, JSON-RPC over WebSocket). State lives in the plugin's
+  data directory on that machine.
+- bb runs its processes with `--use-system-ca`, so corporate certificate
+  authorities trusted by the OS are trusted here too.
+
+## Development
 
 ```sh
-bb plugin config qlik-sense set allowedProviders x5
+npm install
+npm run typecheck
+npm test            # unit tests, no Qlik needed
+npm run test:e2e    # starts Qlik Core in docker (test/engine.sh) and runs the engine suite
+bb plugin build .
 ```
 
-```sh
-bb plugin config qlik-sense set opencodeConfigDir /absolute/isolated/opencode
-```
-
-Passwords must never be passed through these settings or written into
-OpenCode's MCP configuration. The planned credential stores are macOS Keychain
-and Windows Credential Manager. Windows Node is supplied by the fleet
-installer (22.19+); the MCP launcher must pass `--use-system-ca`.
-
-## OpenCode configuration ownership
-
-The config writer in `src/host/opencode-config.ts` is host-local. Its caller
-must determine the installed version using `opencode --version`; it refuses
-unknown versions instead of guessing the configuration format.
-
-- OpenCode 2 (fleet baseline: **2.2.5**): owns only `mcp.servers.qlik-sense`.
-- OpenCode 1 (including 1.18.x): owns only `mcp.qlik-sense`.
-- A manually configured `mcp.qlik` is preserved. The writer reports its presence
-  so setup can explain the potential duplicate and let the person handle it.
-- Providers, default models, remote MCP servers and policy belong to the fleet
-  manager and are never modified by this plugin.
-
-The high-level `writeQlikMcpConfig` wrapper and configuration runner share
-`src/host/opencode-location.ts`. Resolution order is the explicit
-`opencodeConfigDir` setting, ACP's `OPENCODE_CONFIG_DIR`,
-`XDG_CONFIG_HOME/opencode`, then `os.homedir()/.config/opencode`. This convention
-also applies on Windows; APPDATA is not used. Relative paths and control
-characters are refused; Windows paths must include a drive or UNC share.
-Only `opencode.json` in that directory is written;
-the directory's `plugins/fleet-kit-*` files are never read, changed or removed.
-The gateway key is supplied by fleet-kit's provider hook and is not part of
-this plugin's configuration or MCP entry.
-
-The writer accepts JSON and JSONC, preserves unrelated text and comments,
-refuses invalid/duplicate keys, and copies an existing file once to
-`<config-path>.before-qlik-sense.bak`. The backup is never overwritten. Updates
-use a temporary file in the same directory, flushed before atomic rename.
-An existing file retains its permissions; new files request mode 0600.
-
-**Shared writer lock:** every writer, including fleet-kit, must acquire a
-lock by creating the directory `<config-path>.bb-config-lock` before reading
-and hold it through replacement. Immediately write `owner.json` inside it:
-`{plugin, pid, host, createdAt}` (the Qlik implementation adds a release token).
-Wait 0.2, 0.5, 1, 2 seconds, then 5 seconds between attempts. After two minutes,
-report the busy plugin and its start time. Waiting is cancellable.
-
-A lock older than 60 seconds may be recovered only when its owner process is
-dead on the same host, or when it has no owner file. Live processes, owners on
-other hosts, malformed owner metadata and recent locks are preserved. Recovery
-renames the stale directory before deleting it and acquiring a fresh lock.
-Recoverers serialize through `<config-path>.bb-config-lock.recovery`. This
-short-lived guard is not automatically recovered: if a process crashes inside
-recovery, setup must offer an explicit **Reset configuration lock** action,
-enabled only after verifying that the owner processes are dead. That UI action
-is pending; employees must not be asked to diagnose lock directories manually.
-The recovery guard records its own owner metadata for that check. Reaping it
-automatically would reintroduce the race where a second recoverer removes a
-new writer's lock.
-
-Right before replacement, compare the current file's SHA-256 with the original.
-If it changed, release the lock and repeat the read/merge/write cycle, up to
-five attempts. Atomic rename alone cannot prevent lost updates between
-uncoordinated writers: a small race remains for editors that ignore the lock.
-Keep backups private: an existing OpenCode config may contain other services'
-credentials.
-
-This module does not enable MCP by itself. Activation must first pass the
-OpenCode configuration check.
-If that cannot be verified, corporate mode must refuse activation and tool
-calls. No corporate MCP may be registered with other agents. The provider
-MCP activation and launcher integration remain to be implemented.
-
-The primary guard (`src/shared/available-models.ts`) validates the output of
-`opencode models`, run without a provider filter with the ACP environment and
-project directory. OpenCode 2.2.5 applies its policies before
-returning this list. Success requires exit code zero, a nonempty valid list,
-and every model's provider ID in `allowedProviders`. Failed, empty, oversized
-or unrecognized output is denied. Never log unparsed output or whole provider
-API responses. The host runner is `src/host/check-models.ts`; activation/tool-call
-wiring is pending.
-`provider-policy.ts` is a secondary conservative check for already effective,
-ordered rules, not an implementation of OpenCode's config merging.
-
-Verified against the official 2.2.5
-[models CLI](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/src/commands/handlers/models.ts),
-[model API](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/server/src/handlers/model.ts)
-and [policy filter](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/config/plugin/policy.ts).
-
-The runner calls `--version`, then `models --standalone` with an absolute
-project directory as cwd. Its `environment` argument must be the environment
-used to launch acp-opencode, including the same `OPENCODE_*` and `XDG_*` values;
-it does not merge in the plugin server's environment. A caller must resolve
-that host environment before invoking the check.
-
-This is a **configuration check**, not a proof about an already running agent.
-OpenCode's provider restrictions prevent use of external providers: the fleet
-sets `enabled_providers`, and installs system policy where admin rights permit.
-The model-list check observes the result in either case. Standalone mode avoids leaving a shared background
-server behind. OpenCode additionally applies its saved service environment to
-the standalone server; this check does not attest an existing ACP process.
-The runner waits for process close, bounds stdout, discards stderr, and kills
-the process tree on timeout or cancellation (POSIX process group; Windows
-`taskkill /T /F`). Default timeout is 20 seconds per command.
-
-`command` defaults to `["opencode"]`. For an npm Windows installation, pass
-`[absoluteNodePath, absolutePathToAtOpencodeCliBinOpencodeCjs]`, resolving the
-installed `@opencode/cli/bin/opencode.cjs`. This avoids cmd.exe, shell quoting
-and .cmd shim execution. A native executable path is also accepted.
-
-When `allowedProviders` is nonempty, OpenCode 1.x is refused before the model
-probe with an upgrade-to-2.x message. The manually configured legacy MCP remains
-untouched during migration. Empty `allowedProviders` returns an explicit
-unrestricted warning without starting a process.
-
-Standalone lifecycle verified against the official
-[implementation](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/src/services/standalone.ts)
-and [tests](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/test/standalone.test.ts).
-
-OpenCode 2 also supports managed system policy to restrict provider use. The
-configuration check uses the resulting model list in either installation mode.
-See the official
-[config guide](https://opencode.ai/v2/docs/config/) and
-[policy guide](https://opencode.ai/v2/docs/policies/).
-
-## Verification
-
-The writer imports `jsonc-parser/lib/esm/main.js` explicitly. The package's UMD
-main entry may build successfully but fail to load after BB bundles a managed
-Git installation (`Cannot find module './impl/format'`). Unit tests and a green
-build alone do not cover this. Verify bundle loading and Git installation in a
-separate test BB with production dependencies; do not install regression fixtures
-into the user's running BB.
-
-Verified on 2026-10-31 in fresh Docker (Node 24, BB 0.48.1): two minimal Git
-plugins copied the production writer modules. The UMD fixture built but failed
-activation and bundle import; the ESM fixture was running, executed its CLI,
-and imported with a function default export. Neither installation included the
-development SDK. This verifies the reusable module bundle, not a complete Qlik
-plugin release.
-
-Fleet-kit can copy these module files and focused tests, preserving their relative
-layout. Runtime dependencies are `jsonc-parser` (^3.3.1) and `zod` (^4.6.5);
-tests use Vitest, TypeScript and Node types. Keep `config-lock.ts` synchronized
-between both plugins. The focused tests use temporary local fixtures only:
-
-```sh
-npx vitest run test/opencode-config.test.ts test/provider-policy.test.ts test/available-models.test.ts test/check-models.test.ts test/opencode-location.test.ts
-```
-
-```sh
-npx tsc -p test/tsconfig.modules.json
-```
-
-Before a release, the complete plugin still requires typecheck, plugin build,
-Qlik Core integration tests, and macOS/Windows credential-store validation.
-Releases use tags named `qlik-sense/vX.Y.Z`.
+The end-to-end suite seeds a test app in a local Qlik Core engine
+(`test/helpers/seed.ts`) and also runs through a stand-in proxy with forms
+sign-in (`test/helpers/mock-proxy.ts`). The Qlik Core image's licence has
+expired, so `test/engine.sh` fakes the engine's clock with libfaketime.
