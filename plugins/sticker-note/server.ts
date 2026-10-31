@@ -52,7 +52,10 @@ export const rpcContract = defineRpcContract({
       .strict(),
     output: z.object({
       parse: parseResultSchema,
+      /** The first card created, changed or opened. */
       card: cardSchema.nullable(),
+      /** Every card the phrase touched, as it is now (as it was, if deleted). */
+      cards: z.array(cardSchema),
       undoToken: z.string().nullable(),
     }),
   },
@@ -297,8 +300,13 @@ export default async function plugin(bb: BbPluginApi) {
 
   // ---------- phrases ----------
 
+  /** Applies a command to every card it names. */
   function applyCommand(cards: Card[], parse: Extract<ParseResult, { type: "command" }>): Card[] {
-    const card = cards.find((c) => c.id === parse.targetId) ?? notFound(parse.targetId);
+    return parse.targetIds.reduce((list, id) => applyOne(list, parse, id), cards);
+  }
+
+  function applyOne(cards: Card[], parse: Extract<ParseResult, { type: "command" }>, id: string): Card[] {
+    const card = cards.find((c) => c.id === id) ?? notFound(id);
     switch (parse.action) {
       case "done":
         setDone(card, true);
@@ -338,9 +346,10 @@ export default async function plugin(bb: BbPluginApi) {
       serial(async () => {
         const cards = await readCards();
         const parse = parsePhrase({ text, now, cards, contextId: contextId ?? null });
-        if (parse.type === "ambiguous" || parse.type === "notFound") return { parse, card: null, undoToken: null };
+        if (parse.type === "ambiguous" || parse.type === "notFound") return { parse, card: null, cards: [], undoToken: null };
         if (parse.type === "command" && parse.action === "open") {
-          return { parse, card: cards.find((c) => c.id === parse.targetId) ?? null, undoToken: null };
+          const card = cards.find((c) => c.id === parse.targetId) ?? null;
+          return { parse, card, cards: card ? [card] : [], undoToken: null };
         }
         if (parse.type === "create") {
           const card = newCard({
@@ -351,14 +360,16 @@ export default async function plugin(bb: BbPluginApi) {
           });
           const token = remember(cards, [card.id]);
           await writeCards([...cards, card]);
-          return { parse, card, undoToken: token };
+          return { parse, card, cards: [card], undoToken: token };
         }
-        const token = remember(cards, [parse.targetId]);
-        const target = cards.find((c) => c.id === parse.targetId) ?? null;
-        const before = target ? structuredClone(target) : null;
+        const token = remember(cards, parse.targetIds);
+        const before = cards.filter((c) => parse.targetIds.includes(c.id)).map((c) => structuredClone(c));
         const next = applyCommand(cards, parse);
         await writeCards(next);
-        return { parse, card: next.find((c) => c.id === parse.targetId) ?? before, undoToken: token };
+        const touched = parse.targetIds
+          .map((id) => next.find((c) => c.id === id) ?? before.find((c) => c.id === id))
+          .filter((c): c is Card => c !== undefined);
+        return { parse, card: touched[0] ?? null, cards: touched, undoToken: token };
       }),
 
     card_update: ({ id, patch }) =>

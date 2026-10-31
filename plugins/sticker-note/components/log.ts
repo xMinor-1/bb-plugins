@@ -39,9 +39,14 @@ export function addedText(m: Messages, card: Card, today: string, lang: Lang): s
   return m.logAdded(columnName(m, column), when, cardRef(card, lang));
 }
 
-/** `after` is the card once changed; for "delete" pass the card as it was. */
-export function commandText(m: Messages, action: Action, after: Card, today: string, lang: Lang): string {
-  const title = cardRef(after, lang);
+/**
+ * `after` is the card once changed (for "delete", as it was), or every card a
+ * command touched: "Закрыто: #6 «…», #1 «…»".
+ */
+export function commandText(m: Messages, action: Action, touched: Card | Card[], today: string, lang: Lang): string {
+  const list = Array.isArray(touched) ? touched : [touched];
+  const after = list[0]!;
+  const title = list.map((card) => cardRef(card, lang, list.length > 1 ? 30 : TITLE_MAX)).join(", ");
   switch (action) {
     case "done":
       return m.logDone(title);

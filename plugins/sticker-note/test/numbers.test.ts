@@ -42,6 +42,35 @@ describe("stickers by number", () => {
     expect(parse("закрой стикер 999 презентация")).toMatchObject({ type: "command", targetId: "a" });
   });
 
+  it.each([
+    ["закрыть задачи 12 и 112", ["a", "b"]],
+    ["закрой 12 и 112", ["a", "b"]],
+    ["закрыть аздачи 12 и 112", ["a", "b"]],
+    ["закрой стикеры 112, 12", ["b", "a"]],
+    ["close cards 12 and 112", ["a", "b"]],
+    ["закрой #12 и #112", ["a", "b"]],
+  ])("several numbers: %s", (text, ids) => {
+    expect(parse(text)).toMatchObject({ type: "command", action: "done", targetId: ids[0], targetIds: ids });
+  });
+
+  it("several numbers move together", () => {
+    expect(parse("перенеси задачи 12 и 112 на завтра в 16 15")).toMatchObject({
+      type: "command",
+      action: "move",
+      targetIds: ["a", "b"],
+      due: { date: "2026-11-01", time: "16:15" },
+    });
+  });
+
+  it("several titles in one command", () => {
+    expect(parse("закрой презентацию и посылку")).toMatchObject({ type: "command", action: "done", targetIds: ["a", "b"] });
+  });
+
+  it("a bare number is not a card when a noun follows", () => {
+    expect(parse("убери 12 книг с полки").type).not.toBe("command");
+    expect(parse("Убрать 12 книг с полки")).toMatchObject({ type: "create" });
+  });
+
   it("a new task that mentions a number keeps it in the title", () => {
     const r = parse("Купить 2 билета на концерт");
     expect(r.type === "create" && r.draft.title).toBe("Купить 2 билета на концерт");

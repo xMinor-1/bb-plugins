@@ -1,0 +1,26 @@
+Connect your company's MCP servers to bb's agents and see whether each one
+works — made for platforms where every person creates their own server
+instance with its own address and token.
+
+## What you get
+
+- An **MCP** page in the sidebar: your servers with an on/off switch, their
+  health (works, not answering, token not accepted) and since when, the number
+  of tools and a per-server call timeout.
+- **Connect by pasting**: copy the client settings the platform gives you
+  (OpenCode, `mcpServers` or VS Code shape) and press Add — several servers at
+  once. A new token is pasted the same way.
+- A **catalog** of the servers your company offers, with a button that opens
+  the platform page where you create yours.
+- **From a chat**, agents on the models you approve list your servers and
+  switch them on or off; the change shows in a new thread.
+
+## How it works
+
+Everything runs on the machine where the agent runs. Tokens go to the macOS
+Keychain or Windows Credential Manager and never into bb. For servers that are
+on, the plugin writes OpenCode 2's `opencode.json` — only its own
+`mcp.servers` entries, under Fleet Kit's write lock — and the token is
+referenced from a private file (`{file:…}`) rather than written as text. Each
+server is checked with an MCP handshake every few minutes, without following
+redirects. Interface in English and Russian.
