@@ -3,11 +3,18 @@
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
+/** A text from src/shared/texts.ts: the panel shows it in the person's language; `message` is the English copy. */
+const textFields = {
+  message: z.string(),
+  code: z.string().optional(),
+  params: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+};
+
 export const stepSchema = z.object({
-  area: z.enum(["manifest", "bb", "marketplace", "plugin", "opencode", "secret"]),
+  area: z.enum(["manifest", "bb", "ai", "agent", "marketplace", "plugin", "opencode", "secret"]),
   item: z.string(),
   outcome: z.enum(["ok", "changed", "skipped", "warning", "error"]),
-  message: z.string(),
+  ...textFields,
 });
 export type Step = z.infer<typeof stepSchema>;
 
@@ -25,9 +32,9 @@ export type SyncReport = z.infer<typeof syncReportSchema>;
 
 export const noticeSchema = z.object({
   id: z.string(),
-  kind: z.enum(["reinstalled"]),
-  message: z.string(),
+  kind: z.enum(["reinstalled", "agent-disabled"]),
   at: z.string(),
+  ...textFields,
 });
 export type Notice = z.infer<typeof noticeSchema>;
 
