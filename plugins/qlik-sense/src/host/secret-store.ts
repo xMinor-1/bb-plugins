@@ -8,7 +8,7 @@
 // password from another program running as the same user — they keep it out of
 // plain files, backups and sync folders.
 import { spawn } from "node:child_process";
-import { chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PasswordStoreKind } from "../../contract.js";
 
@@ -16,7 +16,17 @@ export interface PasswordStore {
   readonly kind: PasswordStoreKind;
   save(password: string): Promise<void>;
   read(): Promise<string | null>;
+  /** Whether a password is saved, without reading it: the panel and the setup page ask this often. */
+  has(): Promise<boolean>;
   clear(): Promise<void>;
+}
+
+async function nonEmptyFile(file: string): Promise<boolean> {
+  try {
+    return (await stat(file)).size > 0;
+  } catch {
+    return false;
+  }
 }
 
 const SERVICE = "bb-qlik-sense";
@@ -68,6 +78,10 @@ function keychainStore(): PasswordStore {
       if (result.code !== 0) return null;
       return decode(result.stdout);
     },
+    async has() {
+      // Without -w, security reads only the item's attributes, not the password.
+      return (await run("/usr/bin/security", ["find-generic-password", "-s", SERVICE, "-a", ACCOUNT], "")).code === 0;
+    },
     async clear() {
       await run("/usr/bin/security", ["delete-generic-password", "-s", SERVICE, "-a", ACCOUNT], "");
     },
@@ -108,6 +122,7 @@ function dpapiStore(dataDir: string): PasswordStore {
       if (result.code !== 0 || result.stdout.trim() === "") return null;
       return decode(result.stdout);
     },
+    has: () => nonEmptyFile(file),
     async clear() {
       await rm(file, { force: true });
     },
@@ -129,6 +144,7 @@ function fileStore(dataDir: string): PasswordStore {
         return null;
       }
     },
+    has: () => nonEmptyFile(file),
     async clear() {
       await rm(file, { force: true });
     },

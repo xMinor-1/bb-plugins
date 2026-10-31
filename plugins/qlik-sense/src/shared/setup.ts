@@ -43,6 +43,7 @@ const TEXT = {
     failed: "The last sign-in check failed, see the Qlik page",
     noReports: "Signed in; now pick the reports agents may read",
     offline: "The machine with Qlik is not reachable",
+    unreadable: "The plugin could not read its state on that machine",
     noMachine: "No machine is connected to bb",
   },
   ru: {
@@ -54,6 +55,7 @@ const TEXT = {
     failed: "Последняя проверка входа не прошла, подробности на странице Qlik",
     noReports: "Вход есть, теперь выберите отчёты для агентов",
     offline: "Машина с Qlik не на связи",
+    unreadable: "Плагин не смог прочитать своё состояние на этой машине",
     noMachine: "К bb не подключена ни одна машина",
   },
 } satisfies Record<SetupLang, Record<string, string | ((apps: number) => string)>>;

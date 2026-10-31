@@ -113,7 +113,13 @@ bb server (server.ts)                     machine where agents run (src/host.ts)
   `{ state: "done" | "todo" | "problem", summary, path }`: `done` once the
   sign-in passed its last check and at least one report is enabled for agents.
   `summary` is one line in `lang` with no address, login or report names,
-  `path` is the Qlik page. It reads the saved state only and sends nothing to Qlik.
+  `path` is the Qlik page. It reads the saved state only and sends nothing to Qlik;
+  a machine's answer serves for 5 seconds, and a change on the panel drops it.
+  It is the only RPC method other plugins may call: the panel's methods refuse
+  any caller but the panel, the bb CLI and agents.
+- The password store is asked whether a password is there without reading it
+  (Keychain item attributes, the DPAPI or private file's presence), so frequent
+  status checks do not touch the password.
 - bb runs its processes with `--use-system-ca`, so corporate certificate
   authorities trusted by the OS are trusted here too.
 

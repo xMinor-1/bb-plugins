@@ -11,9 +11,12 @@
 //   3. A thread that has received Qlik answers is marked; the dispatch hook
 //      refuses to send such a thread to a model outside the allow-list, because
 //      the whole history — Qlik answers included — would go to that model.
-import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
+//   4. The panel's RPC methods answer the panel, the bb CLI and agents (bb shows
+//      them all as `client`), never another plugin. Other plugins get only
+//      `setupStatus`, which holds no company data.
+import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { catalogSchema, checkLinkResultSchema, checkSignInResultSchema, connectionStatusSchema, hostContract, MAX_ROWS, qlikAppSummarySchema, qlikSheetSummarySchema, type ToolInput } from "./contract";
+import { catalogSchema, checkLinkResultSchema, checkSignInResultSchema, connectionStatusSchema, hostContract, MAX_ROWS, qlikAppSummarySchema, qlikSheetSummarySchema, type ConnectionStatus, type ToolInput } from "./contract";
 import { normalizeBaseUrl } from "./src/shared/links";
 import { groupModels } from "./src/shared/models";
 import { createPolicy, formatRules, parseRules, PolicyError, type Policy } from "./src/shared/policy";
@@ -66,6 +69,8 @@ const DATA_TIMEOUT_MS = 300_000;
 const MODELS_TIMEOUT_MS = 15_000;
 /** The setup page waits on this answer; the host reads only its own files. */
 const SETUP_TIMEOUT_MS = 10_000;
+/** How long a host's answer serves the setup page. */
+const SETUP_FRESH_MS = 5_000;
 
 const appParam = z.string().max(300).optional().describe("App id or name from qlik_reports. May be omitted when only one app is enabled.");
 const filtersParam = z
@@ -292,12 +297,34 @@ export default async function plugin(bb: BbPluginApi) {
 
   // ---------- The setup panel ----------
 
+  /** Recent host answers for setupStatus, by machine. */
+  const setupAnswers = new Map<string, { at: number; status: Promise<ConnectionStatus> }>();
+
   const call = <M extends keyof typeof hostContract & string>(method: M, hostId: string, input: Parameters<typeof host.call<M>>[1], timeoutMs = 60_000) =>
     host.call(method, input, { hostId, timeoutMs });
 
   const policyView = () => ({ rules: [...policy.rules], error: policyError });
 
-  bb.rpc.register(rpcContract, {
+  type RpcHandlers = Parameters<typeof bb.rpc.register<typeof rpcContract>>[1];
+  type Handler = (input: unknown, context: Parameters<RpcHandlers["status"]>[1]) => unknown;
+  /** The connection, the catalog and the agent list are for this plugin's own panel and people, not for other plugins. */
+  const ownCallers = (handlers: RpcHandlers): RpcHandlers =>
+    Object.fromEntries(
+      Object.entries(handlers as Record<string, Handler>).map(([name, handler]) => [
+        name,
+        ((input, context) => {
+          if (context.experimental_caller.kind !== "client") {
+            throw new experimental_PluginRpcRefusal({ code: "forbidden", message: "Qlik Sense does not answer other plugins." });
+          }
+          return handler(input, context);
+        }) satisfies Handler,
+      ]),
+    ) as unknown as RpcHandlers;
+
+  /** A change on the panel: the setup page should see it at once, not after the cache below expires. */
+  const changed = <T>(answer: Promise<T>): Promise<T> => answer.finally(() => setupAnswers.clear());
+
+  const handlers: RpcHandlers = {
     machines: async () => {
       const hosts = await bb.sdk.hosts.list();
       const machines = hosts
@@ -310,13 +337,13 @@ export default async function plugin(bb: BbPluginApi) {
       await kv.set("ui:lastHost", hostId);
       return call("status", hostId, {});
     },
-    saveConnection: ({ hostId, url, user, password }) => call("saveConnection", hostId, { url, user, ...(password ? { password } : {}) }),
-    forget: ({ hostId }) => call("forget", hostId, {}),
-    checkSignIn: ({ hostId, retry }) => call("checkSignIn", hostId, { retry }, 120_000),
+    saveConnection: ({ hostId, url, user, password }) => changed(call("saveConnection", hostId, { url, user, ...(password ? { password } : {}) })),
+    forget: ({ hostId }) => changed(call("forget", hostId, {})),
+    checkSignIn: ({ hostId, retry }) => changed(call("checkSignIn", hostId, { retry }, 120_000)),
     listApps: ({ hostId }) => call("listApps", hostId, {}, 120_000),
     listSheets: ({ hostId, appId }) => call("listSheets", hostId, { appId }, 120_000),
     getCatalog: ({ hostId }) => call("getCatalog", hostId, {}),
-    saveCatalog: ({ hostId, catalog }) => call("saveCatalog", hostId, catalog),
+    saveCatalog: ({ hostId, catalog }) => changed(call("saveCatalog", hostId, catalog)),
     checkLink: ({ hostId, link }) => call("checkLink", hostId, { link }, 120_000),
     policy: () => policyView(),
     savePolicy: async ({ rules }) => {
@@ -342,7 +369,8 @@ export default async function plugin(bb: BbPluginApi) {
       // Agents not installed on that machine have nothing to tick.
       return { providers: out.filter((provider) => provider.groups.length > 0) };
     },
-  });
+  };
+  bb.rpc.register(rpcContract, ownCallers(handlers));
 
   // ---------- The onboarding step (src/shared/setup.ts) ----------
 
@@ -356,19 +384,35 @@ export default async function plugin(bb: BbPluginApi) {
     return primaryHostId ?? hosts[0]?.id ?? null;
   }
 
-  // Other plugins may ask: the answer holds no report, address or login.
+  /**
+   * The step on a machine. A host's answer serves for a few seconds: the setup
+   * page asks every 15 s, and the host checks the password store each time.
+   */
+  async function setupOn(machine: string, lang: "en" | "ru") {
+    const host = (await bb.sdk.hosts.list()).find((candidate) => candidate.id === machine);
+    if (!host || host.lifecycle.phase === "destroyed" || host.status !== "connected") return setupStep("problem", "offline", lang);
+    let cached = setupAnswers.get(machine);
+    if (!cached || Date.now() - cached.at > SETUP_FRESH_MS) {
+      const status = call("status", machine, {}, SETUP_TIMEOUT_MS);
+      cached = { at: Date.now(), status };
+      setupAnswers.set(machine, cached);
+      status.catch(() => setupAnswers.delete(machine));
+    }
+    try {
+      return setupFromStatus(await cached.status, lang);
+    } catch (error) {
+      bb.log.info(`setupStatus: ${machine} could not read its state: ${error instanceof Error ? error.message : String(error)}`);
+      return setupStep("problem", "unreadable", lang);
+    }
+  }
+
+  // The one method other plugins may call (the panel's methods above refuse them): the answer holds no report, address or login.
   bb.rpc.register(
     setupStatusContract,
     {
       setupStatus: async ({ lang = "en", hostId: requested }) => {
         const machine = await setupMachine(requested);
-        if (!machine) return setupStep("problem", "noMachine", lang);
-        try {
-          return setupFromStatus(await call("status", machine, {}, SETUP_TIMEOUT_MS), lang);
-        } catch (error) {
-          bb.log.info(`setupStatus: ${machine} did not answer: ${error instanceof Error ? error.message : String(error)}`);
-          return setupStep("problem", "offline", lang);
-        }
+        return machine ? setupOn(machine, lang) : setupStep("problem", "noMachine", lang);
       },
     },
     { experimental_discoverable: true, experimental_description: "Qlik Sense setup state for a bb build's onboarding page." },
