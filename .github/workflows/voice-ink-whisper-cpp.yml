@@ -31,7 +31,7 @@ jobs:
       matrix:
         include:
           - target: mac-arm64
-            os: macos-14
+            os: macos-15
           - target: win-x64
             os: windows-2022
           - target: linux-x64
