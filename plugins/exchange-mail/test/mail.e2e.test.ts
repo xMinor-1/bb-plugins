@@ -132,6 +132,24 @@ describe("sign-in", () => {
     expect(after.refused).toBe(1);
   });
 
+  it("stops a burst at the first refusal right after a sign-in worked (the password changed elsewhere)", async () => {
+    await connect();
+    expect((await service.check()).ok).toBe(true);
+    await fetch(`${STUB}/__password`, { method: "POST", body: "changed in the domain" });
+    const before = await state();
+    clock += 1000;
+    const answers = await Promise.all([
+      service.list({ folder: "inbox" }).then(() => "ok", (error: Error) => error.message),
+      service.list({ folder: "sent" }).then(() => "ok", (error: Error) => error.message),
+      service.tool({ tool: "search", query: "budget" }).then((answer) => answer.text),
+      service.check().then((check) => check.message),
+    ]);
+    const after = await state();
+    expect(after.refused - before.refused).toBe(1);
+    expect(after.signIns - before.signIns).toBe(1);
+    for (const text of answers) expect(text).toMatch(/did not accept|paused/);
+  });
+
   it("explains a failed automatic sign-in (no Kerberos ticket here)", async () => {
     await service.saveConnection({ url: EWS, auth: "negotiate" });
     const check = await service.check();

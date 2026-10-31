@@ -28,6 +28,7 @@
     "components",
     "lib",
     "hooks",
-    "test"
+    "test",
+    "vitest.setup.ts"
   ]
 }

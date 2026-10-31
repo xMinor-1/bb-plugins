@@ -36,6 +36,10 @@
       "source": "./plugins/server-status"
     },
     {
+      "name": "sticker-note",
+      "source": "./plugins/sticker-note"
+    },
+    {
       "name": "theme-toggle",
       "source": "./plugins/theme-toggle"
     },

@@ -1,0 +1,83 @@
+// Data model shared by the server (zod schemas at the RPC boundary) and the
+// app (types only: app code imports this file with `import type`).
+import { z } from "zod";
+
+export const importanceSchema = z.enum(["high", "normal", "low"]);
+export const kindSchema = z.enum(["work", "personal"]);
+export const columnSchema = z.enum(["today", "soon", "later", "done"]);
+
+export const dueSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  time: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+});
+
+export const chatSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  threadId: z.string().nullable(),
+  error: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export const cardSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  notes: z.array(z.string()),
+  links: z.array(z.string()),
+  importance: importanceSchema,
+  kind: kindSchema,
+  due: dueSchema.nullable(),
+  remind: z.boolean(),
+  done: z.boolean(),
+  doneAt: z.string().nullable(),
+  said: z.string().nullable(),
+  chats: z.array(chatSchema),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type Importance = z.infer<typeof importanceSchema>;
+export type Kind = z.infer<typeof kindSchema>;
+export type Column = z.infer<typeof columnSchema>;
+export type Due = z.infer<typeof dueSchema>;
+export type Chat = z.infer<typeof chatSchema>;
+export type Card = z.infer<typeof cardSchema>;
+
+/** What a phrase was understood as. Offsets point into the original text. */
+export const spanSchema = z.object({
+  start: z.number().int().nonnegative(),
+  end: z.number().int().nonnegative(),
+  kind: z.enum(["when", "importance", "work", "link", "action", "target"]),
+});
+export type Span = z.infer<typeof spanSchema>;
+
+export const draftSchema = z.object({
+  title: z.string(),
+  due: dueSchema.nullable(),
+  importance: importanceSchema,
+  kind: kindSchema,
+  links: z.array(z.string()),
+});
+export type Draft = z.infer<typeof draftSchema>;
+
+export const actionSchema = z.enum(["done", "undone", "move", "importance", "delete"]);
+export type Action = z.infer<typeof actionSchema>;
+
+export const parseResultSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("create"), draft: draftSchema, spans: z.array(spanSchema) }),
+  z.object({
+    type: z.literal("command"),
+    action: actionSchema,
+    targetId: z.string(),
+    /** For "move": the new due date; null clears it. */
+    due: dueSchema.nullable().optional(),
+    /** For "importance". */
+    importance: importanceSchema.optional(),
+    spans: z.array(spanSchema),
+  }),
+  z.object({ type: z.literal("ambiguous"), action: actionSchema, candidateIds: z.array(z.string()), spans: z.array(spanSchema) }),
+  z.object({ type: z.literal("notFound"), action: actionSchema, spans: z.array(spanSchema) }),
+]);
+export type ParseResult = z.infer<typeof parseResultSchema>;
+
+export { columnOf } from "./board";

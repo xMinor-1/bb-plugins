@@ -12,8 +12,9 @@ import { Input } from "@/components/ui/input";
 import { intlLocale, useLang, useMessages } from "@/lib/i18n";
 import { messages } from "../messages";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { whileConfirming } from "./draft-sync";
+import { arrived } from "./draft-sync";
 import { Notice, errorText } from "./ui";
+import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
 
 type Texts = (typeof messages)["en"];
@@ -87,6 +88,7 @@ function Envelope({ draft }: { draft: Draft }) {
 export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; target: DraftTarget; id: string; initial?: Draft; onDone?: () => void }) {
   const navigate = useBbNavigate();
   const t = useMessages(messages);
+  const explain = useExplain();
   const lang = useLang();
   const [draft, setDraft] = useState<Draft | null | undefined>(initial);
   const [hostId, setHostId] = useState<string | null>("hostId" in target ? target.hostId : null);
@@ -100,45 +102,60 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
   shownRef.current = draft;
   const confirmingRef = useRef(confirming);
   confirmingRef.current = confirming;
+  // The ref changes with the state, not a render later: a load answering in between must see the dialog as it is.
+  const open = (which: "send" | "discard") => {
+    confirmingRef.current = which;
+    setConfirming(which);
+  };
+  const close = useCallback(() => {
+    confirmingRef.current = null;
+    setConfirming(null);
+  }, []);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showQuote, setShowQuote] = useState(false);
 
+  /**
+   * Every version that reaches the card goes through here, read against the
+   * dialog state at the moment it arrives — a load started before the dialog
+   * opened cannot change what the dialog shows.
+   */
+  const take = useCallback((latest: Draft | null) => {
+    // Sending right now: the host checks the version itself and answers "changed" if it moved.
+    if (acting.current) return;
+    const next = arrived(shownRef.current, confirmingRef.current !== null, latest);
+    if (next.action === "keep") return;
+    if (next.action === "reopen") {
+      close();
+      setOutcome({ tone: "warn", text: (tt) => (next.why === "changed" ? tt.changedWhileConfirming : tt.goneWhileConfirming) });
+    }
+    shownRef.current = next.draft;
+    setDraft(next.draft);
+  }, [close]);
+
   const load = useCallback(() => {
     rpc.call("draft", { ...target, id }).then(
       (result) => {
-        setDraft(result.draft);
         setHostId(result.hostId);
         setError(null);
+        take(result.draft);
       },
       (cause) => setError(errorText(cause)),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rpc, id, "hostId" in target ? target.hostId : target.threadId]);
+  }, [rpc, id, take, "hostId" in target ? target.hostId : target.threadId]);
 
   useEffect(() => {
     if (initial === undefined) load();
-  }, [load, initial]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load]);
+  // The list this card sits in reloaded with a newer version: same rules as a load.
+  useEffect(() => {
+    if (initial && shownRef.current && initial.revision !== shownRef.current.revision) take(initial);
+  }, [initial, take]);
   useRealtime("drafts-changed", (payload) => {
     if ((payload as { id?: string } | null)?.id !== id || acting.current || outcome?.tone === "ok") return;
-    if (!confirmingRef.current) {
-      load();
-      return;
-    }
-    // A dialog is open: what it shows must not change under the person's eyes.
-    // If the draft moved on, the dialog closes and the new version is shown instead.
-    const asked = confirmingRef.current;
-    rpc.call("draft", { ...target, id }).then(
-      (result) => {
-        const next = whileConfirming(shownRef.current ?? null, result.draft);
-        if (next.action === "keep" || confirmingRef.current !== asked || acting.current) return;
-        setConfirming(null);
-        setDraft(result.draft);
-        setHostId(result.hostId);
-        setOutcome({ tone: "warn", text: (tt) => (next.why === "changed" ? tt.changedWhileConfirming : tt.goneWhileConfirming) });
-      },
-      () => undefined,
-    );
+    load();
   });
 
   const subject = draft?.subject ?? "";
@@ -151,7 +168,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
     try {
       // The machine with the mailbox writes the system window in the panel's language.
       const result = await rpc.call("sendDraft", { ...target, id, revision: draft.revision, lang });
-      setConfirming(null);
+      close();
       if (result.status === "sent") {
         const at = result.at;
         setOutcome({ tone: "ok", text: (tt) => named(tt, tt.sentAt(new Date(at).toLocaleTimeString(intlLocale(lang)))) });
@@ -174,7 +191,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
     acting.current = true;
     try {
       await rpc.call("discardDraft", { ...target, id });
-      setConfirming(null);
+      close();
       setOutcome({ tone: "ok", text: (tt) => named(tt, tt.discarded) });
       onDone?.();
     } catch (cause) {
@@ -186,7 +203,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
     }
   };
 
-  if (error) return <Notice tone="error">{t.draftError(id, error)}</Notice>;
+  if (error) return <Notice tone="error">{t.draftError(id, explain(error))}</Notice>;
   if (outcome?.tone === "ok") return <Notice tone="ok">{outcome.text(t)}</Notice>;
   if (draft === undefined) return <Notice tone="info">{t.loadingDraft}</Notice>;
   if (draft === null) return <Notice tone="info">{t.draftGone(id)}</Notice>;
@@ -237,15 +254,15 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
               {showQuote ? <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">{quote}</div> : null}
             </div>
           ) : null}
-          {outcome ? <Notice tone={outcome.tone}>{outcome.text(t)}</Notice> : null}
+          {outcome ? <Notice tone={outcome.tone}>{explain(outcome.text(t))}</Notice> : null}
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => setConfirming("send")} disabled={busy || draft.to.length === 0}>
+            <Button onClick={() => open("send")} disabled={busy || draft.to.length === 0}>
               {t.sendButton}
             </Button>
             <Button variant="outline" onClick={() => setEditing(true)} disabled={busy || !hostId}>
               {t.edit}
             </Button>
-            <Button variant="ghost" onClick={() => setConfirming("discard")} disabled={busy}>
+            <Button variant="ghost" onClick={() => open("discard")} disabled={busy}>
               {t.discard}
             </Button>
           </div>
@@ -260,7 +277,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
         busyLabel={t.confirmInWindow}
         busy={busy}
         onConfirm={() => void send()}
-        onCancel={() => setConfirming(null)}
+        onCancel={close}
       >
         <Envelope draft={draft} />
         <p className="text-xs text-muted-foreground">{t.sendSummary(draft.to.length + draft.cc.length + draft.bcc.length, shown.trim().length, Boolean(quote))}</p>
@@ -274,7 +291,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
         busy={busy}
         destructive
         onConfirm={() => void discard()}
-        onCancel={() => setConfirming(null)}
+        onCancel={close}
       />
     </div>
   );
@@ -282,6 +299,7 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
 
 function DraftEditor({ rpc, hostId, draft, onSaved, onCancel }: { rpc: Rpc; hostId: string; draft: Draft; onSaved: (draft: Draft) => void; onCancel: () => void }) {
   const t = useMessages(messages);
+  const explain = useExplain();
   const [to, setTo] = useState(formatList(draft.to));
   const [cc, setCc] = useState(formatList(draft.cc));
   const [subject, setSubject] = useState(draft.subject);
@@ -331,7 +349,7 @@ function DraftEditor({ rpc, hostId, draft, onSaved, onCancel }: { rpc: Rpc; host
         <span className="text-muted-foreground">{draft.kind === "new" ? t.textNew : t.textAbove}</span>
         <textarea className={textareaClass} rows={10} value={text} onChange={(event) => setText(event.target.value)} />
       </label>
-      {error ? <Notice tone="error">{error}</Notice> : null}
+      {error ? <Notice tone="error">{explain(error)}</Notice> : null}
       <div className="flex gap-2">
         <Button onClick={() => void save()} disabled={saving || text.trim() === ""}>
           {saving ? t.saving : t.saveDraft}

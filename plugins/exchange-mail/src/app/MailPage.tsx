@@ -13,6 +13,7 @@ import { ConnectionSection } from "./ConnectionSection";
 import { DraftCard } from "./DraftCard";
 import { Mailbox } from "./Mailbox";
 import { Notice, errorText } from "./ui";
+import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
 
 type Machine = { id: string; name: string; connected: boolean };
@@ -28,6 +29,7 @@ const TABS: { id: Tab; label: "tabInbox" | "tabWaiting" | "tabSent" | "tabSettin
 export function MailPage() {
   const rpc = useRpc<typeof rpcContract>();
   const t = useMessages(messages);
+  const explain = useExplain();
   const [machines, setMachines] = useState<Machine[] | null>(null);
   const [hostId, setHostId] = useState<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
@@ -94,7 +96,7 @@ export function MailPage() {
           </label>
         ) : null}
 
-        {error ? <Notice tone="error">{error}</Notice> : null}
+        {error ? <Notice tone="error">{explain(error)}</Notice> : null}
 
         {hostId && status ? (
           <>
@@ -121,6 +123,7 @@ export function MailPage() {
 /** Drafts prepared in bb that wait for the person's Send. */
 function Waiting({ rpc, hostId }: { rpc: Rpc; hostId: string }) {
   const t = useMessages(messages);
+  const explain = useExplain();
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -140,13 +143,14 @@ function Waiting({ rpc, hostId }: { rpc: Rpc; hostId: string }) {
     if (!drafts?.some((draft) => draft.id === id)) load();
   });
 
-  if (error) return <Notice tone="error">{error}</Notice>;
+  if (error) return <Notice tone="error">{explain(error)}</Notice>;
   if (drafts === null) return <Notice tone="info">{t.loadingDrafts}</Notice>;
   if (drafts.length === 0) return <Notice tone="info">{t.nothingWaiting}</Notice>;
   return (
     <div className="max-w-3xl space-y-3">
       {drafts.map((draft) => (
-        <DraftCard key={`${draft.id}:${draft.revision}`} rpc={rpc} target={{ hostId }} id={draft.id} initial={draft} />
+        // Keyed by id only: a newer version from the list goes through the card, which keeps an open dialog intact.
+        <DraftCard key={draft.id} rpc={rpc} target={{ hostId }} id={draft.id} initial={draft} />
       ))}
     </div>
   );

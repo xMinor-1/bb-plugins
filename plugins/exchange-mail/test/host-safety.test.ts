@@ -1,16 +1,16 @@
 // The host's guards without Exchange: the password stays with its address and
 // login, sign-in after a refusal is rate-limited and single-flight, and the
 // system window that confirms a send names everything that goes.
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { answerOf, confirmationText, macScript, oneAtATime, systemConfirmer, windowsScript, type SendConfirmer, type SendSummary } from "../src/host/confirm";
+import { answerOf, confirmationText, macScript, oneAtATime, systemConfirmer, windowsScript, ZENITY, type SendConfirmer, type SendSummary } from "../src/host/confirm";
 import type { HttpRequest, HttpResponse, Transport } from "../src/host/curl";
 import { normalizeEwsUrl } from "../src/host/ews/client";
 import { openFileSecretStore, type SecretStore } from "../src/host/secret-store";
 import { MailService } from "../src/host/service";
-import { accountName, RETRY_AFTER_MS, TRUST_MS } from "../src/host/signin";
+import { accountName, RETRY_AFTER_MS } from "../src/host/signin";
 
 const URL_A = "https://mail-a.example.test/EWS/Exchange.asmx";
 const URL_B = "https://mail-b.example.test/EWS/Exchange.asmx";
@@ -24,6 +24,7 @@ const ok = (op: string, inner: string) =>
 /** Exchange that accepts one password for any login, counts sign-ins and can hold answers back. */
 function fakeExchange() {
   const state = { attempts: 0, refused: 0, inFlight: 0, maxInFlight: 0 };
+  let accepted = GOOD;
   let hold: Promise<void> | null = null;
   let release: () => void = () => undefined;
   const transport: Transport = {
@@ -34,7 +35,7 @@ function fakeExchange() {
       state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
       try {
         if (hold) await hold;
-        if (request.auth.kind !== "ntlm" || request.auth.password !== GOOD) {
+        if (request.auth.kind !== "ntlm" || request.auth.password !== accepted) {
           state.refused++;
           return { status: 401, body: "" };
         }
@@ -58,6 +59,10 @@ function fakeExchange() {
     },
     reset() {
       Object.assign(state, { attempts: 0, refused: 0, inFlight: 0, maxInFlight: 0 });
+    },
+    /** The domain stops taking the password bb has: it expired, or someone changed it elsewhere. */
+    changePassword(next: string) {
+      accepted = next;
     },
   };
 }
@@ -212,32 +217,43 @@ describe("one sign-in at a time", () => {
     for (const message of [inbox, sent, search.text, check.message]) expect(message).toMatch(/did not accept|paused/);
   });
 
-  it("lets calls run together only once a sign-in worked, and checks alone again after a quiet minute", async () => {
+  it("keeps going one at a time after a sign-in worked", async () => {
     const service = open();
     await service.saveConnection({ url: URL_A, auth: "password", user: "STUB\\alice", password: GOOD });
+    expect((await service.check()).ok).toBe(true);
+    exchange.reset();
     exchange.hold();
-    let calls: Promise<unknown> = Promise.all([service.list({ folder: "inbox" }), service.list({ folder: "sent" }), service.list({ folder: "deleted" })]);
+    const calls = Promise.all([service.list({ folder: "inbox" }), service.list({ folder: "sent" }), service.tool({ tool: "search", query: "budget" })]);
     await settle();
     expect(exchange.state.inFlight).toBe(1);
     exchange.release();
     await calls;
+    expect(exchange.state.attempts).toBeGreaterThan(3);
+    expect(exchange.state.maxInFlight).toBe(1);
+  });
 
+  it("stops everyone else at the first refusal, even a second after a sign-in worked", async () => {
+    const service = open();
+    await service.saveConnection({ url: URL_A, auth: "password", user: "STUB\\alice", password: GOOD });
+    expect((await service.check()).ok).toBe(true);
+    clock += 1000;
+    exchange.changePassword("changed elsewhere");
     exchange.reset();
     exchange.hold();
-    calls = Promise.all([service.list({ folder: "inbox" }), service.list({ folder: "sent" })]);
-    await settle();
-    expect(exchange.state.inFlight).toBeGreaterThan(1);
-    exchange.release();
-    await calls;
-
-    clock += TRUST_MS + 1;
-    exchange.reset();
-    exchange.hold();
-    calls = Promise.all([service.list({ folder: "inbox" }), service.list({ folder: "sent" })]);
+    const calls = Promise.all([
+      service.list({ folder: "inbox" }).catch((error: Error) => error.message),
+      service.list({ folder: "sent" }).catch((error: Error) => error.message),
+      service.tool({ tool: "search", query: "budget" }),
+      service.check(),
+    ]);
     await settle();
     expect(exchange.state.inFlight).toBe(1);
     exchange.release();
-    await calls;
+    const [inbox, sent, search, check] = await calls;
+    expect(exchange.state.refused).toBe(1);
+    expect(exchange.state.attempts).toBe(1);
+    for (const message of [inbox, sent, search.text, check.message]) expect(message).toMatch(/did not accept|paused/);
+    expect((await service.status()).retryAt).toBe(clock + RETRY_AFTER_MS);
   });
 });
 
@@ -264,8 +280,17 @@ describe("the system window that confirms a send", () => {
     expect(message).toContain("Bcc (1): Hidden Watcher <watcher@example.test>");
     expect(message).toContain("Attachments (1): numbers.xlsx");
     expect(message).toMatch(/Format: HTML/);
-    expect(message).toContain("Привет, Боб! Цифры проверю к пятнице.");
+    expect(message).toContain("Text (37 characters):\nПривет, Боб! Цифры проверю к пятнице.");
+    expect(message).not.toContain("Only the start");
     expect(message).toContain("quoted message (120 characters)");
+  });
+
+  it("asks the person to check, and promises nothing about who can press the button", () => {
+    for (const lang of ["en", "ru"] as const) {
+      const { message } = confirmationText(summary, lang);
+      expect(message).not.toMatch(/agent|агент/i);
+      expect(message.split("\n").at(-1)).toBe(lang === "en" ? "Check the recipients and the text. Send this message?" : "Проверьте получателей и текст. Отправить письмо?");
+    }
   });
 
   it("speaks the panel's language, buttons included", () => {
@@ -285,8 +310,12 @@ describe("the system window that confirms a send", () => {
     expect(message).toContain("Bcc (40): p0@example.test");
     expect(message).toContain("and 15 more");
     expect(message).toContain("Attachments: none");
-    expect(message).toMatch(/x…/);
+    expect(message).toContain("Text (5000 characters):\nxxx");
+    expect(message).toMatch(/x…\n\[Only the start is shown here: 700 of 5000 characters\. The whole text is in the draft card in bb\.\]/);
     expect(message.length).toBeLessThan(3000);
+    const ru = confirmationText({ ...summary, text: "ж".repeat(1234) }, "ru").message;
+    expect(ru).toContain("Текст (символов: 1234):");
+    expect(ru).toContain("[Здесь только начало: 700 из 1234 символов. Весь текст — в карточке черновика в bb.]");
   });
 
   it("keeps mail out of process arguments: scripts carry it as ASCII on stdin", () => {
@@ -316,6 +345,19 @@ describe("the system window that confirms a send", () => {
 
   it("refuses when there is no desktop to show it on", async () => {
     expect(await systemConfirmer("linux", {}).confirm(summary)).toMatchObject({ ok: false, reason: "unavailable" });
+  });
+
+  it("calls zenity by its absolute path, never the one PATH points to", async () => {
+    expect(ZENITY).toBe("/usr/bin/zenity");
+    // A "zenity" that answers Send, first in PATH: what an agent's shell could set up.
+    const bin = join(dir, "bin");
+    const marker = join(dir, "fake-zenity-ran");
+    await mkdir(bin);
+    await writeFile(join(bin, "zenity"), `#!/bin/sh\ntouch '${marker}'\nexit 0\n`, { mode: 0o755 });
+    const outcome = await systemConfirmer("linux", { DISPLAY: ":99", PATH: bin }).confirm(summary);
+    await expect(stat(marker)).rejects.toThrow();
+    // Here there is no /usr/bin/zenity, or no display at :99: either way, nothing confirms the send.
+    expect(outcome.ok).toBe(false);
   });
 
   it("opens one window at a time", async () => {

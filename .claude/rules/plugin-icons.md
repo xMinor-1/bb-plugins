@@ -15,3 +15,8 @@ paths:
   `ArrowReloadHorizontal`, `Loading`, `ListTodo`, `AlertTriangle`, `CircleX`, `Bot`.
 - Своя картинка — `./icon.svg` в `bb.branding.icon`.
 - Проверять глазами на снимке панели: тест и сборка неверное имя не ловят.
+- Цветной значок (градиенты, несколько цветов) `bb.branding.icon` не даст: это маска
+  `currentColor`. Для навигации и кнопки в футере — React-компонент через
+  `app.experimental_icons.register({ name, component })` и это имя в `navPanel.icon`
+  и `experimental_sidebarFooter.register({ icon })`. id градиентов — через `useId()`,
+  иначе два экземпляра значка делят одни `<defs>` (sticker-note 0.1.0, 31.10.2026).
