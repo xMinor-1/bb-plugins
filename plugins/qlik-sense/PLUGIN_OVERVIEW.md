@@ -11,6 +11,7 @@ check them.
   table, chart, pivot or KPI as a table with the filters the agent passes.
 - *Can't find a report?* — paste a link, see whether your account can open it,
   and copy a ready access request for the app owner.
+- The page is in English and Russian, with an EN | RU switch at the top.
 
 ## Company data stays with approved models
 
