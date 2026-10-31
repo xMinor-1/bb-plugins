@@ -57,3 +57,6 @@ export const todayStore = createStore<TodayStats>(
   { count: 0, overdue: 0 },
   (a, b) => a.count === b.count && a.overdue === b.overdue,
 );
+
+/** A card to open once the board shows it: set from a chat's "To sticker". */
+export const openCardStore = createStore<{ id: string; at: number } | null>(null);

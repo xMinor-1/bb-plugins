@@ -1,9 +1,10 @@
 # Sticker Note
 
-A personal sticky-note board inside bb, for your own small tasks rather than
-agents' work. Say a task out loud right on the board; it lands as a card with
-its date, time, importance and links filled in. Commands work by voice too, so
-the board rarely needs the mouse.
+A personal sticky-note board inside bb, for your own small tasks. Say a task
+out loud right on the board; it lands as a card with its date, time, importance
+and links filled in. Commands work by voice too, so the board rarely needs the
+mouse. A job for an agent said on the board or in a card starts an agent chat
+that the card follows, and any chat message can become a sticker.
 
 The interface is in English and Russian, with a switch in the board's title bar.
 
@@ -39,9 +40,38 @@ The interface is in English and Russian, with a switch in the board's title bar.
 - **An open card** with editable title, date and time, importance, kind
   (work or personal), links, notes and what you originally said. At the bottom
   is a second dictation bar: details go into the notes ("add that the code is
-  4417"), requests go to an agent ("ask the agent to compare the prices"), and
-  commands act on this card ("close it", "move to Monday at 10"). A request
-  starts an ordinary bb thread with the card as context, and the card links to it.
+  4417"), jobs go to an agent ("find the letter about the rates and draft a
+  reply"), and commands act on this card ("close it", "move to Monday at 10").
+
+## Cards and agent chats, both ways
+
+- **From the board to a chat.** A job said on the board ("ask the agent to
+  compare the insurance rates", or a longer phrase that starts with "find",
+  "prepare", "write"…) makes a card and starts an agent chat about it. So does a
+  job said inside a card. Chats run in your personal threads, in a personal
+  workspace, so no repository is copied for them.
+- **The card follows the chat.** Its chip says *Agent at work*, *Agent
+  answered* or *Agent is waiting for you*, and the agent's last answer is on the
+  card. Cards with a fresh answer or a question count in the navigation badge.
+- **Talk to the agent from the card.** Once a card has a chat, what you say in
+  it goes to that chat; "note that …" still makes a note and "close" or "move to
+  Monday" still act on the card. "In a new chat …" starts another one. The
+  *Chat* tab of an open card shows the whole conversation, with *To notes* on
+  every message.
+- **From a chat to the board.** Every message in a bb chat has a *To sticker*
+  action; on selected text it takes just that text, with its date and time. The
+  sticker keeps the message in its notes and links back to the chat.
+- **Agents use the board too.** Agents in any thread get the
+  `sticker_note_add`, `sticker_note_list` and `sticker_note_update` tools, the
+  `bb sticker-note` command and a skill, so "make a sticker about this" works in
+  any chat, and an agent working on a job puts its results on the card.
+
+```sh
+bb sticker-note add "Пройти ассессмент" --when "в пятницу в 12" --note "2 часа"
+bb sticker-note list
+bb sticker-note update 12 --note "Черновик готов" --done
+bb sticker-note say "закрой задачи 6 и 1"
+```
 - **A badge** with today's open cards on the navigation item, red when something
   is overdue, and a glass sticker button with the same count in the sidebar footer.
 - Typing works everywhere dictation does: Enter submits.
@@ -62,9 +92,10 @@ works by typing and says how to turn dictation on.
 - **Dictation hotkey.** Default Alt+S. Examples: Ctrl+Shift+Space, Cmd+J, F2.
   Letters follow the physical key, so the keyboard layout does not matter.
   Empty turns it off.
-- **Project for agent chats.** Where a request said inside a card starts its
-  thread. Empty: a project named *Personal* (or *Личное*) if there is one,
-  otherwise the first project.
+- **Project for agent chats.** Where a job starts its chat, in that project's
+  default environment. Empty: your personal threads, in a personal workspace.
+- **Project for agent chats about work.** Jobs on cards marked Work start here,
+  for example a project on the machine that reaches your work mail.
 
 ## How it works
 
@@ -81,8 +112,13 @@ works by typing and says how to turn dictation on.
   guessed. Numbers are never reused.
 - Undo keeps the last 30 actions in the server's memory, each with only the
   cards it touched, so undoing one never reverts later edits to other cards.
-- Inside a card, `src/compose.ts` decides between a note and an agent request
-  by the verb: "find", "compare", "prepare", "check", "ask the agent" start a chat.
+- Inside a card, `src/compose.ts` decides between a note and a job by the verb
+  (imperatives such as "найди", "подготовь", "напиши" start a chat; infinitives
+  like "написать в телеграм" are your own plan and stay notes).
+- Cards follow their chats through bb's `thread.active`, `thread.idle`,
+  `thread.failed` and `interaction.pending` events. An answer that ends with a
+  question marks the card *waiting*. Agents' "tomorrow at 10" is read on your
+  clock, which the board learns from the phrases it sends.
 
 ## Development
 

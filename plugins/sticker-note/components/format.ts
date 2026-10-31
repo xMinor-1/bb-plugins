@@ -3,6 +3,7 @@ import type { Lang } from "@/lib/i18n";
 
 import { addDays, fullDay, localNow, shortDay, type LocalNow } from "../src/dates";
 import type { messages } from "../src/messages";
+import type { AgentState } from "../src/agent-state";
 import type { Column, Due, Importance } from "../src/model";
 
 export type Messages = (typeof messages)["en"];
@@ -54,4 +55,22 @@ export function linkLabel(link: string): string {
 
 export function shorten(text: string, max = 34): string {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+/** "Агент работает", "Агент ответил", …: the agent chip on a card and the state in an open one. */
+export function agentLabel(m: Messages, state: AgentState): string {
+  switch (state) {
+    case "waiting":
+      return m.agentWaiting;
+    case "answered":
+      return m.agentAnswered;
+    case "working":
+      return m.agentWorking;
+    case "failed":
+      return m.agentFailed;
+    case "seen":
+      return m.chatTag;
+    case "linked":
+      return m.agentLinked;
+  }
 }

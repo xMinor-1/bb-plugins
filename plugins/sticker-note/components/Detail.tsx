@@ -1,20 +1,24 @@
-// An open card: fields, notes, agent chats, and a composer at the bottom that
-// turns a phrase into a note or an agent chat.
+// An open card: fields, notes, its agent chats with their answers, and a
+// composer at the bottom that turns a phrase into a note, a command, a job for
+// an agent, or the next message in the card's chat. The Chat tab shows that
+// chat itself, so the conversation goes on without leaving the board.
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useBbNavigate } from "@get-bb/plugin-sdk/app";
+import { Markdown, ThreadChat, useBbNavigate, type ThreadChatMessageAction } from "@get-bb/plugin-sdk/app";
 
 import { messagesNow, useLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 import type { CardsRpc } from "../hooks/useCards";
+import { agentView, liveChat } from "../src/agent-state";
 import { columnOf } from "../src/board";
-import { decide, isExplicitNote } from "../src/compose";
+import { decide, isExplicitNote, wantsNewChat } from "../src/compose";
 import { addDays, fullDay, localNow, type LocalNow } from "../src/dates";
 import { messages } from "../src/messages";
-import type { Card, Due, Importance, Kind } from "../src/model";
+import type { Card, Chat, Due, Importance, Kind } from "../src/model";
+import { clip, plainText } from "../src/text";
 import { CaptureBar } from "./CaptureBar";
-import { columnName, linkHref, linkLabel, shorten, whenText } from "./format";
+import { agentLabel, columnName, linkHref, linkLabel, shorten, whenText, type Messages } from "./format";
 import { Icon } from "./icons";
 import { commandText, type LogLine } from "./log";
 
@@ -45,8 +49,25 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
   const [title, setTitle] = useState(card.title);
   const [link, setLink] = useState("");
   const [footLog, setFootLog] = useState<LogLine | null>(null);
+  const [tab, setTab] = useState<"card" | "chat">("card");
+  const [chatThread, setChatThread] = useState<string | null>(null);
 
   useEffect(() => setTitle(card.title), [card.id, card.title]);
+  useEffect(() => {
+    setTab("card");
+    setChatThread(null);
+  }, [card.id]);
+
+  // Opening the card is seeing the agent's answer.
+  const unread = card.chats.some((chat) => chat.unread);
+  useEffect(() => {
+    if (unread) void rpc.call("card_seen", { id: card.id }).catch(() => undefined);
+  }, [rpc, card.id, unread]);
+
+  const live = liveChat(card);
+  const shownThread = chatThread ?? live?.threadId ?? card.chats.find((chat) => chat.threadId)?.threadId ?? null;
+  const agentAsks = live?.status === "waiting";
+  const chatLive = live?.follow === true;
 
   // Escape closes the card unless a field is being edited.
   useEffect(() => {
@@ -113,11 +134,26 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
         ? commandText(t, result.action!, result.card ?? result.before, at.date, lang)
         : result.decision === "chat"
           ? t.logChat(shorten(result.text, 80))
-          : t.logNote(shorten(result.text, 80));
+          : result.decision === "sent"
+            ? t.logSent(shorten(result.text, 80))
+            : t.logNote(shorten(result.text, 80));
     setFootLog({ text: line, tone: "ok", undoToken: result.undoToken, at: Date.now() });
     onChanged(line, result.undoToken);
     return null;
   };
+
+  const chatActions: ThreadChatMessageAction[] = [
+    {
+      id: "to-notes",
+      title: m.toNotes,
+      icon: "Pin",
+      run: (message) => {
+        const note = clip(plainText(message.text), 8000);
+        if (!note) return;
+        void update({ notes: [...card.notes, note] }, messagesNow(messages).notedFromChat);
+      },
+    },
+  ];
 
   const column = columnOf(card, now.date);
   const where = card.due ? whenText(m, card.due, now.date, lang) : m.noDate;
@@ -125,7 +161,28 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
   return (
     <>
       <div className="sn-scrim" onClick={onClose} />
-      <aside ref={rootRef} className="sn-drawer" tabIndex={-1} aria-label={card.title}>
+      <aside ref={rootRef} className={cn("sn-drawer", tab === "chat" && "wide")} tabIndex={-1} aria-label={card.title}>
+        {shownThread ? (
+          <div className="sn-d-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected={tab === "card"} onClick={() => setTab("card")}>
+              {m.tabCard}
+            </button>
+            <button type="button" role="tab" aria-selected={tab === "chat"} onClick={() => setTab("chat")}>
+              <Icon name="chat" size={13} />
+              {m.tabChat}
+              {unread || agentAsks ? <span className="sn-dot" aria-hidden="true" /> : null}
+            </button>
+            <button type="button" className="sn-icon-btn" aria-label={m.close} title={m.close} onClick={onClose}>
+              <Icon name="x" />
+            </button>
+          </div>
+        ) : null}
+        {tab === "chat" && shownThread ? (
+          <div className="sn-d-chat">
+            <ThreadChat key={shownThread} threadId={shownThread} variant="compact" layout="contained" messageActions={chatActions} />
+          </div>
+        ) : (
+        <>
         <div className="sn-d-scroll">
           <div className="sn-d-top">
             <span className="sn-d-where">
@@ -133,9 +190,11 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
               {columnName(m, column)}
               {column !== "done" ? <span className="sn-faint">· {where}</span> : null}
             </span>
-            <button type="button" className="sn-icon-btn" aria-label={m.close} title={m.close} onClick={onClose}>
-              <Icon name="x" />
-            </button>
+            {!shownThread ? (
+              <button type="button" className="sn-icon-btn" aria-label={m.close} title={m.close} onClick={onClose}>
+                <Icon name="x" />
+              </button>
+            ) : null}
           </div>
 
           <textarea
@@ -273,26 +332,17 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
           {card.chats.length ? (
             <section className="sn-blk">
               <div className="sn-lbl">{m.chats}</div>
-              {card.chats.map((chat) => (
-                <div key={chat.id} className="sn-chatb">
-                  <div className="sn-chatb-head">
-                    <Icon name="chat" size={14} />
-                    <b>{m.chatTag}</b>
-                    <span className={cn("sn-pill", chat.error && "err")}>
-                      {chat.threadId ? m.chatRunning : chat.error ? m.chatFailedShort : m.chatStarting}
-                    </span>
-                  </div>
-                  <p>{chat.text}</p>
-                  {chat.error ? <div className="sn-chat-err">{m.chatFailed(chat.error)}</div> : null}
-                  {chat.threadId ? (
-                    <div className="sn-row">
-                      <button type="button" className="sn-btn sm" onClick={() => navigate.toThread(chat.threadId!)}>
-                        {m.chatOpen}
-                        <Icon name="arrow" size={13} />
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
+              {[...card.chats].reverse().map((chat) => (
+                <AgentBlock
+                  key={chat.id}
+                  chat={chat}
+                  m={m}
+                  onShow={() => {
+                    setChatThread(chat.threadId);
+                    setTab("chat");
+                  }}
+                  onOpen={() => navigate.toThread(chat.threadId!)}
+                />
               ))}
             </section>
           ) : null}
@@ -343,9 +393,15 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
           <CaptureBar
             key={card.id}
             variant="composer"
-            placeholder={m.composer}
+            placeholder={chatLive ? m.composerChat : m.composer}
             busyLabel={(text) =>
-              isExplicitNote(text) ? m.decNotes : decide(text).type === "chat" ? m.decChat : m.understanding
+              isExplicitNote(text)
+                ? m.decNotes
+                : decide(text, { agentAsks, chatLive }).type === "chat"
+                  ? live && !wantsNewChat(text)
+                    ? m.decSend
+                    : m.decChat
+                  : m.understanding
             }
             hotkeyTarget
             hotkeyLabel={null}
@@ -357,10 +413,62 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
               <span className="sn-log-text">{footLog.text}</span>
             </div>
           ) : (
-            <div className="sn-cmp-foot">{m.composerHint}</div>
+            <div className="sn-cmp-foot">{agentAsks ? m.agentWaitingHint : chatLive ? m.chatLiveHint : m.composerHint}</div>
           )}
         </div>
+        </>
+        )}
       </aside>
     </>
+  );
+}
+
+/** One agent chat on the card: what was asked, where it stands, the last answer. */
+function AgentBlock({
+  chat,
+  m,
+  onShow,
+  onOpen,
+}: {
+  chat: Chat;
+  m: Messages;
+  onShow: () => void;
+  onOpen: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const view = agentView({ chats: [chat] })!;
+  const long = (chat.reply?.length ?? 0) > 420;
+  return (
+    <div className={cn("sn-chatb", `ag-${view.state}`)}>
+      <div className="sn-chatb-head">
+        {view.state === "working" ? <span className="sn-pulse" aria-hidden="true" /> : <Icon name="chat" size={14} />}
+        <b>{chat.status === "starting" && !chat.threadId ? m.agentStarting : agentLabel(m, view.state)}</b>
+      </div>
+      <p className="sn-chatb-ask">{chat.text}</p>
+      {chat.reply && chat.follow ? (
+        <div className={cn("sn-reply", long && !expanded && "clamped")}>
+          <Markdown content={chat.reply} />
+        </div>
+      ) : null}
+      {long && chat.follow ? (
+        <button type="button" className="sn-more" onClick={() => setExpanded(!expanded)}>
+          {expanded ? m.showLess : m.showMore}
+        </button>
+      ) : null}
+      {view.state === "waiting" ? <div className="sn-chat-ask">{m.agentWaitingHint}</div> : null}
+      {chat.error ? <div className="sn-chat-err">{m.chatFailed(chat.error)}</div> : null}
+      {chat.threadId ? (
+        <div className="sn-row">
+          <button type="button" className="sn-btn sm" onClick={onShow}>
+            <Icon name="chat" size={13} />
+            {m.chatHere}
+          </button>
+          <button type="button" className="sn-btn sm ghost" onClick={onOpen}>
+            {m.chatOpen}
+            <Icon name="arrow" size={13} />
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
