@@ -74,6 +74,10 @@ const en = {
 
   agentsNoneHere: (p: { allowed: string }) => `None of the allowed agents (${p.allowed}) exists in this bb, so no agent was turned off.`,
   agentAllowedMissing: () => "Allowed by the build, but this bb has no such agent.",
+  agentUnavailable: () => "Allowed by the build, but bb cannot run it here: its program is not installed or not found.",
+  agentPluginOff: () => "Allowed by the build, but its plugin is turned off in bb.",
+  agentsNoneReady: (p: { allowed: string }) =>
+    `None of the allowed agents (${p.allowed}) is on and ready in this bb, so no other agent was turned off. Install it or turn its plugin on.`,
   agentEnabled: () => "Turned on: the build allows it.",
   agentDisabled: (p: { allowed: string }) => `Turned off: the build allows only ${p.allowed}.`,
   agentDisabledAgain: (p: { allowed: string }) => `Was turned on by hand; turned off again: the build allows only ${p.allowed}.`,
@@ -174,6 +178,10 @@ const ru: Catalog = {
 
   agentsNoneHere: (p) => `Ни одного из разрешённых агентов (${p.allowed}) в этом bb нет, поэтому ни один агент не выключен.`,
   agentAllowedMissing: () => "Разрешён сборкой, но такого агента в этом bb нет.",
+  agentUnavailable: () => "Разрешён сборкой, но bb не может его запустить: программа не установлена или не найдена.",
+  agentPluginOff: () => "Разрешён сборкой, но его плагин в bb выключен.",
+  agentsNoneReady: (p) =>
+    `Ни один из разрешённых агентов (${p.allowed}) не включён и не готов в этом bb, поэтому другие агенты не выключены. Установите его или включите его плагин.`,
   agentEnabled: () => "Включён: сборка его разрешает.",
   agentDisabled: (p) => `Выключен: сборка разрешает только ${p.allowed}.`,
   agentDisabledAgain: (p) => `Был включён вручную и снова выключен: сборка разрешает только ${p.allowed}.`,

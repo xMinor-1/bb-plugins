@@ -30,12 +30,15 @@ brings bb to that description and keeps it there.
 ## Install
 
 ```sh
-bb plugin install "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:^0.2.0" --plugin fleet-kit --yes
+bb plugin install "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:>=0.2.0 <1.0.0" --plugin fleet-kit --yes
 bb plugin config fleet-kit set manifestUrl https://builds.example.com/manifest.json
 ```
 
 Install Fleet Kit with exactly the `source` its manifest entry names: Fleet Kit
-updates itself only when the installed source matches.
+updates itself only when the installed source matches. Give Fleet Kit a range
+over a whole major version (`>=0.2.0 <1.0.0`), not `^0.2.0`: under `^0.x` a new
+minor release would need another source, and Fleet Kit cannot switch its own
+source.
 
 Fleet Kit syncs fifteen seconds after bb starts, every 30 minutes after that,
 whenever a setting changes, and on **Sync now**. Until `manifestUrl` is set it
@@ -84,7 +87,7 @@ a newer Fleet Kit can still deliver it.
   "aiServices": { "thread-title": "off", "commit-message": "off", "voice": "off" },
   "agents": { "allowed": ["acp-opencode"] },
   "plugins": [
-    { "id": "fleet-kit", "source": "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:^0.2.0", "plugin": "fleet-kit", "status": "required" },
+    { "id": "fleet-kit", "source": "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:>=0.2.0 <1.0.0", "plugin": "fleet-kit", "status": "required" },
     { "id": "notes", "source": "git:https://git.example.com/plugins.git@semver:notes/:^1.0.0", "plugin": "notes", "status": "required",
       "config": { "greeting": "hello" } },
     { "id": "later", "source": null, "status": "planned" }
@@ -187,9 +190,15 @@ entry, before the rest of the manifest is checked. When its source offers a
 newer release, Fleet Kit finishes the sync and asks bb to install it. If the
 new version does not come up, bb rolls back; Fleet Kit tries the same version at
 most twice a day. A sync that runs while the update is still going neither
-counts a try nor starts a second update. Fleet Kit cannot move itself to
-another source: with `^0.x` ranges a new minor release (`^0.1.0` to `^0.2.0`)
-is another source, so the sync warns and the installer reinstalls Fleet Kit.
+counts a try nor starts a second update.
+
+With a source such as `@semver:fleet-kit/:>=0.2.0 <1.0.0` the source string
+stays the same from release to release, so every new tag in the range reaches
+every machine on its next sync: tagging a release is shipping it. Fleet Kit
+cannot move itself to another source. When the manifest names another one,
+for example `>=0.2.0 <1.0.0` on a machine installed from `^0.1.0`, the sync
+warns and Fleet Kit stays where it is; reinstall it once (`bb plugin remove
+fleet-kit`, then the installer). The key stays in the OS credential store.
 
 Fleet Kit removes only plugins listed in `removePlugins`, never one bundled
 with bb. A plugin dropped from `plugins` stays and the sync says so once.
@@ -211,8 +220,18 @@ so an agent a new bb release adds is off as soon as Fleet Kit sees it. Each
 sync reads bb's provider catalog: an allowed agent that is off is turned on,
 any other agent that is on is turned off. When an agent Fleet Kit already
 turned off is on again, the sync reports it and the panel shows one notice
-naming the agents the build allows. If none of the allowed agents is in this
-bb's catalog, the sync stops with an error and turns nothing off.
+naming the agents the build allows.
+
+The person must never be left without a working agent. An allowed agent counts
+only when bb can run it (its program is found and its plugin is on). Until one
+allowed agent is on and ready, Fleet Kit turns nothing off and the sync reports
+an error; it does not ask bb to turn on an allowed agent bb cannot run, so it
+does not repeat a refused call on every sync. The same holds when none of the
+allowed agents is in this bb's catalog.
+
+Removing the `agents` block from the manifest stops this check but does not
+turn the agents Fleet Kit turned off back on: turn them on in bb's settings or
+with `bb provider enable <id>`.
 
 ### opencode.json
 

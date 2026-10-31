@@ -312,8 +312,16 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
 
   // ------------------------------------------- AI services and agents
   // After plugins: a build plugin may register the AI service or the agent it names.
-  await applyAiServices(deps, manifest, steps);
-  await applyAgents(deps, manifest, managed, steps, notices);
+  try {
+    await applyAiServices(deps, manifest, steps);
+  } catch (error) {
+    steps.add("ai", "ai-services", "error", errorText(error));
+  }
+  try {
+    await applyAgents(deps, manifest, managed, steps, notices);
+  } catch (error) {
+    steps.add("agent", "agents", "error", errorText(error));
+  }
 
   // ------------------------------------------------------------ OpenCode
   let opencode: OpenCodeStatus | null = null;
@@ -791,21 +799,24 @@ async function applyAiServices(deps: SyncDeps, manifest: Manifest, steps: Steps)
   }
 }
 
+type AgentEntry = Awaited<ReturnType<Sdk["providers"]["catalog"]>>[number];
+
+/** bb can run the agent: its program is there and its plugin is on. */
+function agentReady(entry: AgentEntry): boolean {
+  return entry.available && entry.pluginEnabled;
+}
+
 /**
  * Keep only the manifest's agents enabled. An allowlist, so a provider a
- * later bb adds is turned off as well. Nothing is turned off when none of the
- * allowed agents exists here: that would leave the person without any agent.
+ * later bb adds is turned off as well. Nothing is turned off until one of the
+ * allowed agents is on and ready: the person must never be left without a
+ * working agent. An allowed agent that is not ready is not turned on either
+ * (bb refuses it), so a sync never repeats a call bb already refused.
  */
 async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, notices: Notice[]) {
   const policy = manifest.agents;
   if (policy === undefined) return;
-  let catalog: Awaited<ReturnType<Sdk["providers"]["catalog"]>>;
-  try {
-    catalog = await within(deps.sdk.providers.catalog(), CALL_MS, "Listing bb's agents");
-  } catch (error) {
-    steps.add("agent", "agents", "error", errorText(error));
-    return;
-  }
+  let catalog = await within(deps.sdk.providers.catalog(), CALL_MS, "Listing bb's agents");
   const allowed = new Set(policy.allowed);
   const present = catalog.filter((entry) => allowed.has(entry.id));
   if (present.length === 0) {
@@ -814,22 +825,39 @@ async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedS
   }
   for (const id of policy.allowed) if (!catalog.some((entry) => entry.id === id)) steps.add("agent", id, "warning", say("agentAllowedMissing"));
   const shown = present.map((entry) => entry.displayName).join(", ");
+
+  for (const entry of present) {
+    if (!agentReady(entry)) {
+      steps.add("agent", entry.displayName, "warning", say(entry.pluginEnabled ? "agentUnavailable" : "agentPluginOff"));
+      continue;
+    }
+    if (entry.enabled) continue;
+    try {
+      catalog = await within(deps.sdk.providers.setEnabled({ providerId: entry.id, enabled: true }), CALL_MS, "Turning the agent on");
+      steps.add("agent", entry.displayName, "changed", say("agentEnabled"));
+    } catch (error) {
+      steps.add("agent", entry.displayName, "error", errorText(error));
+    }
+  }
+  const working = catalog.filter((entry) => allowed.has(entry.id) && entry.enabled && agentReady(entry));
+  if (working.length === 0) {
+    steps.add("agent", "agents", "error", say("agentsNoneReady", { allowed: shown }));
+    return; // keep managed.agents: a later sync still knows which agents it turned off
+  }
+
   const disabledBefore = new Set(managed.agents.disabled);
   const disabled: string[] = [];
   for (const entry of catalog) {
-    const keep = allowed.has(entry.id);
-    if (entry.enabled === keep) {
-      if (!keep) disabled.push(entry.id);
+    if (allowed.has(entry.id)) continue;
+    if (!entry.enabled) {
+      disabled.push(entry.id);
       continue;
     }
     try {
-      await within(deps.sdk.providers.setEnabled({ providerId: entry.id, enabled: keep }), CALL_MS, keep ? "Turning the agent on" : "Turning the agent off");
+      await within(deps.sdk.providers.setEnabled({ providerId: entry.id, enabled: false }), CALL_MS, "Turning the agent off");
     } catch (error) {
       steps.add("agent", entry.displayName, "error", errorText(error));
-      continue;
-    }
-    if (keep) {
-      steps.add("agent", entry.displayName, "changed", say("agentEnabled"));
+      if (disabledBefore.has(entry.id)) disabled.push(entry.id);
       continue;
     }
     disabled.push(entry.id);

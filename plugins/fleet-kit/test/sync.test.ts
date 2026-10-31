@@ -44,10 +44,10 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
     services: [{ id: "bb-cloud", displayName: "bb cloud", pluginId: "bb-ai", tasks: ["thread-title", "commit-message", "voice"], automaticRank: 0, status: { ready: true } }] as Array<Record<string, unknown>>,
   };
   const agents = [
-    { id: "acp-opencode", displayName: "OpenCode", enabled: true, available: true },
-    { id: "codex", displayName: "Codex", enabled: true, available: true },
-    { id: "claude-code", displayName: "Claude Code", enabled: true, available: false },
-    { id: "cursor", displayName: "Cursor", enabled: false, available: false },
+    { id: "acp-opencode", displayName: "OpenCode", enabled: true, available: true, pluginEnabled: true },
+    { id: "codex", displayName: "Codex", enabled: true, available: true, pluginEnabled: true },
+    { id: "claude-code", displayName: "Claude Code", enabled: true, available: false, pluginEnabled: true },
+    { id: "cursor", displayName: "Cursor", enabled: false, available: false, pluginEnabled: true },
   ];
   const view = (plugin: FakePlugin) => ({ id: plugin.id, source: plugin.source, version: plugin.version, enabled: plugin.enabled, provenance: plugin.provenance ?? "direct" });
   const schemaFor = (id: string): FakePlugin["schema"] =>
@@ -71,7 +71,10 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
       catalog: async () => clone(agents),
       setEnabled: async ({ providerId, enabled }: { providerId: string; enabled: boolean }) => {
         calls.push(`agent ${providerId} ${enabled ? "on" : "off"}`);
-        agents.find((entry) => entry.id === providerId)!.enabled = enabled;
+        const entry = agents.find((one) => one.id === providerId)!;
+        // bb refuses to turn on an agent it cannot run (409 provider_unavailable).
+        if (enabled && !(entry.available && entry.pluginEnabled)) throw new Error("Provider is unavailable (provider_unavailable)");
+        entry.enabled = enabled;
         return clone(agents);
       },
     },
@@ -623,6 +626,61 @@ describe("bb agents", () => {
     first.agents.find((entry) => entry.id === "acp-opencode")!.enabled = false;
     await runSync(first.deps, "start");
     expect(callsOf(first.calls, "agent ")).toContain("agent acp-opencode on");
+  });
+
+  it("turns nothing off while the allowed agent is on but cannot run (OpenCode not installed)", async () => {
+    const first = await setup(withAgents(["acp-opencode"]), [self()]);
+    first.agents.find((entry) => entry.id === "acp-opencode")!.available = false;
+    const one = await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "agent ")).toEqual([]);
+    expect(one.report.steps.find((step) => step.item === "OpenCode")).toMatchObject({ outcome: "warning", code: "agentUnavailable" });
+    expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
+    expect(first.agents.filter((entry) => entry.enabled).map((entry) => entry.id)).toEqual(["acp-opencode", "codex", "claude-code"]);
+  });
+
+  it("does not try to turn on an allowed agent whose plugin is off, turns nobody off, and does not repeat on the next sync", async () => {
+    const first = await setup(withAgents(["acp-opencode"]), [self()]);
+    const opencode = first.agents.find((entry) => entry.id === "acp-opencode")!;
+    Object.assign(opencode, { enabled: false, pluginEnabled: false });
+    const one = await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "agent ")).toEqual([]);
+    expect(one.report.steps.find((step) => step.item === "OpenCode")).toMatchObject({ outcome: "warning", code: "agentPluginOff" });
+    expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
+    const two = await runSync({ ...first.deps, managed: one.managed }, "schedule");
+    expect(callsOf(first.calls, "agent ")).toEqual([]);
+    expect(two.report.outcome).toBe("error");
+
+    // Its plugin is on again: the next sync turns it on and only then turns the others off.
+    opencode.pluginEnabled = true;
+    await runSync({ ...first.deps, managed: two.managed }, "schedule");
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent acp-opencode on", "agent codex off", "agent claude-code off"]);
+  });
+
+  it("turns nobody off when bb refuses to turn the allowed agent on", async () => {
+    const first = await setup(withAgents(["acp-opencode"]), [self()]);
+    first.agents.find((entry) => entry.id === "acp-opencode")!.enabled = false;
+    first.deps.sdk.providers.setEnabled = async () => {
+      first.calls.push("agent refused");
+      throw new Error("Provider is unavailable (provider_unavailable)");
+    };
+    const one = await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent refused"]);
+    expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
+    expect(first.agents.filter((entry) => entry.enabled).map((entry) => entry.id)).toEqual(["codex", "claude-code"]);
+  });
+
+  it("an error in the AI service or agent step does not stop the rest of the sync", async () => {
+    const first = await setup({ ...withAgents(["acp-opencode"]), aiServices: { voice: "off" } }, [self()]);
+    first.deps.sdk.system.aiServices = async () => {
+      throw new Error("ai boom");
+    };
+    first.deps.sdk.providers.catalog = async () => {
+      throw new Error("agents boom");
+    };
+    const outcome = await runSync(first.deps, "start");
+    expect(outcome.report.steps.find((step) => step.item === "ai-services")).toMatchObject({ outcome: "error", message: "ai boom" });
+    expect(outcome.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", message: "agents boom" });
+    expect(outcome.report.steps.some((step) => step.area === "opencode")).toBe(true);
   });
 
   it("turns nothing off when none of the allowed agents exists here", async () => {
