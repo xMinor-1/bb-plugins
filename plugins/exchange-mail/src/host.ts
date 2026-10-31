@@ -46,6 +46,7 @@ export default experimental_defineHostEntry({
     conversation: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).conversation(input.ref, ctx.signal)),
     attachment: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).attachment(input.ref, input.index, ctx.signal)),
     inlineImages: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).inlineImages(input.ref, ctx.signal)),
+    findPeople: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).findPeople(input.query, ctx.signal)),
     drafts: (_input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).drafts(ctx.signal)),
     draft: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).draft(input.id, ctx.signal, input.threadId)),
     saveDraft: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).saveDraft(input, ctx.signal)),

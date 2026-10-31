@@ -210,7 +210,7 @@ def seed() -> None:
         add("inbox", 200 + n * 60, bob, f"Daily digest #{n + 1}", f"Digest body {n + 1}", read=True)
     add("sentitems", 400, SELF, "Re: Budget", "Sent earlier.", to=[bob], read=True)
     STATE.clear()
-    STATE.update({"items": items, "sent": [], "requests": [], "downloads": [], "signIns": 0, "refused": 0})
+    STATE.update({"items": items, "sent": [], "requests": [], "downloads": [], "lookups": [], "signIns": 0, "refused": 0})
 
 
 def attachment(name, size):
@@ -262,6 +262,45 @@ def ok(op: str, inner: str) -> bytes:
 
 class SchemaError(Exception):
     pass
+
+
+# The address book: synthetic people only. "kind" is the EWS MailboxType.
+DIRECTORY = [
+    {"name": "Denis Orlov", "email": "denis.orlov@example.test", "title": "Engineer", "department": "Platform", "company": "Example Corp", "office": "Room 301", "kind": "Mailbox"},
+    {"name": "Denis Petrov", "email": "denis.petrov@example.test", "title": "Accountant", "department": "Finance", "company": "Example Corp", "office": None, "kind": "Mailbox"},
+    {"name": "Denis Volkov", "email": "d.volkov@example.test", "title": "Sales manager", "department": "Sales", "company": "Example Corp", "office": None, "kind": "Mailbox"},
+    {"name": "Design team", "email": "design@example.test", "kind": "PublicDL"},
+    {"name": "Денис Смирнов", "email": "denis.smirnov@example.test", "title": "Аналитик", "department": "Отдел данных", "company": "Example Corp", "office": None, "kind": "Mailbox"},
+    {"name": "Ivanov, Ivan", "email": "ivan.ivanov@example.test", "title": "Lawyer", "department": "Legal", "company": "Example Corp", "office": None, "kind": "Mailbox"},
+    {"name": "Bob Builder", "email": "bob@example.test", "title": "Builder", "department": "Construction", "company": "Example Corp", "office": None, "kind": "Mailbox"},
+    # The same Bob once more from the person's own contacts: Exchange returns both.
+    {"name": "Bob Builder", "email": "bob@example.test", "title": None, "department": None, "company": None, "office": None, "kind": "Contact"},
+    {"name": "Dave Example", "email": "dave@example.test", "title": None, "department": None, "company": None, "office": None, "kind": "Contact"},
+] + [
+    {"name": f"Tester {n:02d}", "email": f"tester{n:02d}@example.test", "title": "Tester", "department": "Quality", "company": "Example Corp", "office": None, "kind": "Mailbox"}
+    for n in range(1, 31)
+]
+
+
+def directory_matches(person, query: str) -> bool:
+    """Like Exchange's ambiguous name resolution: the start of any word of the name, or of the address."""
+    q = query.strip().lower()
+    words = person["name"].lower().replace(",", " ").split()
+    return person["email"].lower().startswith(q) or person["name"].lower().startswith(q) or any(w.startswith(q) for w in words)
+
+
+def resolution_xml(person) -> str:
+    box = (f"<t:Mailbox><t:Name>{escape(person['name'])}</t:Name><t:EmailAddress>{escape(person['email'])}</t:EmailAddress>"
+           f"<t:RoutingType>SMTP</t:RoutingType><t:MailboxType>{person['kind']}</t:MailboxType></t:Mailbox>")
+    if person["kind"] == "PublicDL":
+        return f"<t:Resolution>{box}</t:Resolution>"
+    fields = "".join(f"<t:{tag}>{escape(person[key])}</t:{tag}>" for tag, key in
+                     (("JobTitle", "title"), ("Department", "department"), ("CompanyName", "company"), ("OfficeLocation", "office")) if person.get(key))
+    source = "ActiveDirectory" if person["kind"] == "Mailbox" else "Store"
+    contact = (f"<t:Contact><t:DisplayName>{escape(person['name'])}</t:DisplayName>"
+               f"<t:EmailAddresses><t:Entry Key=\"EmailAddress1\">SMTP:{escape(person['email'])}</t:Entry></t:EmailAddresses>"
+               f"{fields}<t:ContactSource>{source}</t:ContactSource></t:Contact>")
+    return f"<t:Resolution>{box}{contact}</t:Resolution>"
 
 
 def check_order(element, expected: list[str], what: str) -> None:
@@ -489,6 +528,24 @@ def handle_soap(raw: bytes) -> bytes:
         item["folder"] = "deleteditems"
         return ok(op, "")
 
+    if op == "ResolveNames":
+        if op_el.get("ReturnFullContactData") != "true":
+            raise SchemaError("ResolveNames must ask for full contact data (job title, department)")
+        query = op_el.findtext("m:UnresolvedEntry", namespaces=NS) or ""
+        found = [p for p in DIRECTORY if directory_matches(p, query)][:100]
+        STATE["lookups"].append(query)
+        if not found:
+            return error(op, "ErrorNameResolutionNoResults", "No results were found.")
+        inner = (f'<m:ResolutionSet TotalItemsInView="{len(found)}" IncludesLastItemInRange="true">'
+                 + "".join(resolution_xml(p) for p in found) + "</m:ResolutionSet>")
+        if len(found) == 1:
+            return ok(op, inner)
+        return envelope(
+            f'<m:{op}Response><m:ResponseMessages><m:{op}ResponseMessage ResponseClass="Warning">'
+            f"<m:MessageText>Multiple results were found.</m:MessageText><m:ResponseCode>ErrorNameResolutionMultipleResults</m:ResponseCode>"
+            f"<m:DescriptiveLinkKey>0</m:DescriptiveLinkKey>{inner}</m:{op}ResponseMessage></m:ResponseMessages></m:{op}Response>"
+        )
+
     if op == "UpdateItem":
         change = op_el.find("m:ItemChanges/t:ItemChange", NS)
         item = items.get(change.find(T + "ItemId").get("Id"))
@@ -554,7 +611,7 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 drafts = [{"id": i["id"], "subject": i["subject"], "to": i["to"], "body": i["body"], "attachments": [a["name"] for a in i["attachments"]]}
                           for i in STATE["items"].values() if i["folder"] == "drafts"]
-                body = json.dumps({"sent": STATE["sent"], "drafts": drafts, "requests": STATE["requests"], "downloads": STATE["downloads"],
+                body = json.dumps({"sent": STATE["sent"], "drafts": drafts, "requests": STATE["requests"], "downloads": STATE["downloads"], "lookups": STATE["lookups"],
                                    "signIns": STATE["signIns"], "refused": STATE["refused"]}).encode()
             return self.reply(200, body, content_type="application/json")
         self.reply(404)

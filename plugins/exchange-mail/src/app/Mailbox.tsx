@@ -11,6 +11,8 @@ import { Conversation } from "./Conversation";
 import { DraftCard, formatAddress, textareaClass } from "./DraftCard";
 import { MessageBody } from "./MessageBody";
 import { People, Person, shownName } from "./People";
+import { RecipientsInput } from "./RecipientsInput";
+import { splitRecipients } from "../shared/recipients";
 import { Notice, errorText } from "./ui";
 import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
@@ -262,11 +264,7 @@ function MessageView({
   );
 }
 
-const recipientsOf = (text: string) =>
-  text
-    .split(/[;,\n]/)
-    .map((part) => part.trim())
-    .filter(Boolean);
+const recipientsOf = splitRecipients;
 
 function Composer({
   rpc,
@@ -314,7 +312,7 @@ function Composer({
 
   return (
     <div className="space-y-2">
-      {needsTo ? <Input value={to} onChange={(event) => setTo(event.target.value)} placeholder={t.toPlaceholder} aria-label={t.to} spellCheck={false} /> : null}
+      {needsTo ? <RecipientsInput rpc={rpc} hostId={hostId} value={to} onChange={setTo} placeholder={t.toPlaceholder} ariaLabel={t.to} /> : null}
       {mode.kind === "new" ? <Input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t.subjectPlaceholder} aria-label={t.subjectPlaceholder} /> : null}
       <textarea
         className={textareaClass}

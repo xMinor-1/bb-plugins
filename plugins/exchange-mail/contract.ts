@@ -170,6 +170,25 @@ export const sendResultSchema = z
   ]);
 export type SendResult = z.infer<typeof sendResultSchema>;
 
+/** Someone from the organization's address book or the person's own contacts. */
+export const personSchema = z
+  .object({
+    name: z.string(),
+    email: z.string(),
+    title: z.string().nullable(),
+    department: z.string().nullable(),
+    company: z.string().nullable(),
+    office: z.string().nullable(),
+    kind: z.enum(["person", "group", "contact"]),
+  })
+  .strict();
+export type Person = z.infer<typeof personSchema>;
+
+/** People whose name or address starts like the query. `more`: the address book has others the list leaves out. */
+export const peopleSchema = z.object({ people: z.array(personSchema), more: z.boolean() }).strict();
+export type People = z.infer<typeof peopleSchema>;
+export const peopleQuerySchema = z.string().trim().min(2).max(200);
+
 /** What an agent may ask for. There is deliberately no send. */
 export const toolInputSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("list"), folder: folderSchema.optional(), unreadOnly: z.boolean().optional(), limit: z.number().int().min(1).max(50).optional(), offset: z.number().int().min(0).max(10_000).optional() }).strict(),
@@ -177,6 +196,7 @@ export const toolInputSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("read"), ref: z.string().min(1).max(64), maxChars: z.number().int().min(500).max(100_000).optional() }).strict(),
   z.object({ tool: z.literal("attachment"), ref: z.string().min(1).max(64), index: z.number().int().min(1).max(500), maxChars: z.number().int().min(500).max(200_000).optional() }).strict(),
   z.object({ tool: z.literal("conversation"), ref: z.string().min(1).max(64) }).strict(),
+  z.object({ tool: z.literal("people"), query: peopleQuerySchema }).strict(),
   z
     .object({
       tool: z.literal("draft"),
@@ -195,7 +215,18 @@ export const toolInputSchema = z.discriminatedUnion("tool", [
 ]);
 export type ToolInput = z.infer<typeof toolInputSchema>;
 
-export const toolOutputSchema = z.object({ text: z.string(), isError: z.boolean(), draftId: z.string().nullable() }).strict();
+export const toolOutputSchema = z
+  .object({
+    text: z.string(),
+    isError: z.boolean(),
+    draftId: z.string().nullable(),
+    /** The people tool: everyone found, for the person to choose from when there is more than one. */
+    people: z.array(personSchema).optional(),
+    /** The people tool: the address book has more matches than it listed. */
+    more: z.boolean().optional(),
+  })
+  .strict();
+export type ToolOutput = z.infer<typeof toolOutputSchema>;
 
 export const saveConnectionInputSchema = z
   .object({
@@ -231,6 +262,7 @@ export const hostContract = defineRpcContract({
   conversation: { input: z.object({ ref: z.string().min(1).max(64) }).strict(), output: conversationSchema, experimental_retryable: true },
   attachment: { input: attachmentInputSchema, output: attachmentContentSchema },
   inlineImages: { input: z.object({ ref: z.string().min(1).max(64) }).strict(), output: inlineImagesSchema, experimental_retryable: true },
+  findPeople: { input: z.object({ query: peopleQuerySchema }).strict(), output: peopleSchema, experimental_retryable: true },
   drafts: { input: empty, output: z.object({ drafts: z.array(draftSchema) }).strict(), experimental_retryable: true },
   draft: { input: draftRef, output: draftSchema.nullable(), experimental_retryable: true },
   saveDraft: { input: draftInputSchema, output: draftSchema },

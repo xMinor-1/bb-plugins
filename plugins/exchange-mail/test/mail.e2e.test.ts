@@ -9,6 +9,7 @@ import type { ConfirmOutcome, SendSummary } from "../src/host/confirm";
 import { openFileSecretStore } from "../src/host/secret-store";
 import { MailService } from "../src/host/service";
 import { RETRY_AFTER_MS } from "../src/host/signin";
+import { recipientText } from "../src/shared/recipients";
 
 const STUB = process.env.EWS_STUB_URL;
 if (!STUB) throw new Error("Set EWS_STUB_URL (test/stub/run.sh prints it)");
@@ -28,6 +29,7 @@ async function state(): Promise<{
   drafts: { id: string; subject: string; attachments: string[] }[];
   requests: string[];
   downloads: string[];
+  lookups: string[];
   signIns: number;
   refused: number;
 }> {
@@ -476,5 +478,61 @@ describe("drafts and sending", () => {
     expect(await service.discardDraft(draft.id, undefined, "thr_2")).toEqual({ ok: false });
     expect(asked).toHaveLength(0);
     expect(await service.draft(draft.id, undefined, "thr_1")).not.toBeNull();
+  });
+});
+
+describe("the address book", () => {
+  beforeEach(connect);
+
+  it("finds people by the start of a name or an address, with job title and department", async () => {
+    const found = await service.findPeople("Den");
+    expect(found.more).toBe(false);
+    expect(found.people.map((p) => p.email).sort()).toEqual(["d.volkov@example.test", "denis.orlov@example.test", "denis.petrov@example.test", "denis.smirnov@example.test"]);
+    expect(found.people.find((p) => p.email === "denis.orlov@example.test")).toEqual({
+      name: "Denis Orlov",
+      email: "denis.orlov@example.test",
+      title: "Engineer",
+      department: "Platform",
+      company: "Example Corp",
+      office: "Room 301",
+      kind: "person",
+    });
+    expect((await state()).lookups).toEqual(["Den"]);
+  });
+
+  it("reads names outside ASCII, groups and the person's own contacts", async () => {
+    expect((await service.findPeople("Денис")).people).toEqual([
+      { name: "Денис Смирнов", email: "denis.smirnov@example.test", title: "Аналитик", department: "Отдел данных", company: "Example Corp", office: null, kind: "person" },
+    ]);
+    expect((await service.findPeople("design")).people).toMatchObject([{ name: "Design team", email: "design@example.test", kind: "group", title: null }]);
+    expect((await service.findPeople("Dave")).people).toMatchObject([{ email: "dave@example.test", kind: "contact" }]);
+  });
+
+  it("lists each address once and says when there are more than it shows", async () => {
+    expect((await service.findPeople("Bob")).people).toHaveLength(1);
+    const testers = await service.findPeople("Tester");
+    expect(testers.people).toHaveLength(25);
+    expect(testers.more).toBe(true);
+  });
+
+  it("answers nobody with an empty list, and ignores one letter", async () => {
+    expect(await service.findPeople("zzz")).toEqual({ people: [], more: false });
+    expect(await service.findPeople("D")).toEqual({ people: [], more: false });
+    expect((await state()).lookups).toEqual(["zzz"]);
+  });
+
+  it("gives the agent one match as text, and several for the person to choose from", async () => {
+    const one = await service.tool({ tool: "people", query: "Ivanov" });
+    expect(one).toMatchObject({ isError: false, text: 'One match for "Ivanov":\n- Ivanov, Ivan <ivan.ivanov@example.test> — Lawyer, Legal, Example Corp' });
+    const many = await service.tool({ tool: "people", query: "Denis" });
+    expect(many.people).toHaveLength(4);
+    const none = await service.tool({ tool: "people", query: "zzz" });
+    expect(none).toMatchObject({ isError: false, people: [], text: expect.stringMatching(/^Nobody in the address book matches "zzz"/) });
+  });
+
+  it("keeps a name with a comma together when it becomes a recipient", async () => {
+    const { people } = await service.findPeople("Ivanov");
+    const saved = await service.saveDraft({ kind: "new", to: [recipientText(people[0]!)], subject: "Contract", body: "See you.", source: "person" });
+    expect(saved.to).toEqual([{ name: "Ivanov, Ivan", email: "ivan.ivanov@example.test" }]);
   });
 });
