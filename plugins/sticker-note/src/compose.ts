@@ -19,3 +19,11 @@ export function decide(phrase: string): ComposeDecision {
   if (ASK.test(phrase)) return { type: "chat", text: tidy(phrase.replace(CHAT_LEAD, "")) || tidy(phrase) };
   return { type: "note", text: tidy(phrase.replace(NOTE_LEAD, "")) || tidy(phrase) };
 }
+
+/** "Добавь…", "допиши…", "отметь, что…": a note, even when a command word follows. */
+const EXPLICIT_NOTE =
+  /^\s*(?:(?:добавь|допиши|запиши|note|add)(?![\p{L}])|(?:отметь|mark)\s*,?\s+(?:что|that)(?![\p{L}]))/iu;
+
+export function isExplicitNote(phrase: string): boolean {
+  return EXPLICIT_NOTE.test(phrase);
+}

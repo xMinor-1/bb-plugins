@@ -9,13 +9,14 @@ import { cn } from "@/lib/utils";
 
 import type { CardsRpc } from "../hooks/useCards";
 import { columnOf } from "../src/board";
-import { decide } from "../src/compose";
+import { decide, isExplicitNote } from "../src/compose";
 import { addDays, fullDay, localNow, type LocalNow } from "../src/dates";
 import { messages } from "../src/messages";
 import type { Card, Due, Importance, Kind } from "../src/model";
 import { CaptureBar } from "./CaptureBar";
-import { columnName, linkHref, linkLabel, whenText } from "./format";
+import { columnName, linkHref, linkLabel, shorten, whenText } from "./format";
 import { Icon } from "./icons";
+import { commandText, type LogLine } from "./log";
 
 type Patch = {
   title?: string;
@@ -43,6 +44,7 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
   const rootRef = useRef<HTMLElement>(null);
   const [title, setTitle] = useState(card.title);
   const [link, setLink] = useState("");
+  const [footLog, setFootLog] = useState<LogLine | null>(null);
 
   useEffect(() => setTitle(card.title), [card.id, card.title]);
 
@@ -96,16 +98,24 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
     try {
       const result = await rpc.call("card_delete", { id: card.id });
       onClose();
-      onChanged(messagesNow(messages).deleted, result.undoToken);
+      onChanged(messagesNow(messages).logDeleted(shorten(card.title, 60)), result.undoToken);
     } catch (cause) {
       toast.error(messagesNow(messages).error(cause instanceof Error ? cause.message : String(cause)));
     }
   };
 
   const compose = async (text: string) => {
-    const result = await rpc.call("card_compose", { id: card.id, text });
+    const at = localNow();
+    const result = await rpc.call("card_compose", { id: card.id, text, now: at });
     const t = messagesNow(messages);
-    onChanged(result.decision === "chat" ? t.chatStarted : t.noteAdded, result.undoToken);
+    const line =
+      result.decision === "command"
+        ? commandText(t, result.action!, result.card ?? result.before, at.date, lang)
+        : result.decision === "chat"
+          ? t.logChat(shorten(result.text, 80))
+          : t.logNote(shorten(result.text, 80));
+    setFootLog({ text: line, tone: "ok", undoToken: result.undoToken, at: Date.now() });
+    onChanged(line, result.undoToken);
     return null;
   };
 
@@ -119,6 +129,7 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
         <div className="sn-d-scroll">
           <div className="sn-d-top">
             <span className="sn-d-where">
+              <span className="sn-d-num">#{card.num}</span>
               {columnName(m, column)}
               {column !== "done" ? <span className="sn-faint">· {where}</span> : null}
             </span>
@@ -300,7 +311,7 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
               onClick={() =>
                 void update(
                   { done: !card.done },
-                  card.done ? messagesNow(messages).reopened : messagesNow(messages).marked,
+                  commandText(messagesNow(messages), card.done ? "undone" : "done", card, now.date, lang),
                 )
               }
             >
@@ -313,7 +324,7 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
                 className="sn-btn"
                 onClick={() => {
                   const due = { date: addDays(now.date, 1), time: card.due?.time ?? null };
-                  void update({ due }, messagesNow(messages).movedTo(whenText(messagesNow(messages), due, now.date, lang)));
+                  void update({ due }, commandText(messagesNow(messages), "move", { ...card, due }, now.date, lang));
                 }}
               >
                 <Icon name="calendar" size={14} />
@@ -333,11 +344,21 @@ export function Detail({ card, now, rpc, onClose, onChanged }: DetailProps) {
             key={card.id}
             variant="composer"
             placeholder={m.composer}
-            busyLabel={(text) => (decide(text).type === "chat" ? m.decChat : m.decNotes)}
-            spaceScope={rootRef}
+            busyLabel={(text) =>
+              isExplicitNote(text) ? m.decNotes : decide(text).type === "chat" ? m.decChat : m.understanding
+            }
+            hotkeyTarget
+            hotkeyLabel={null}
             onText={compose}
           />
-          <div className="sn-cmp-foot">{m.composerHint}</div>
+          {footLog ? (
+            <div key={footLog.at} className="sn-cmp-foot sn-log ok">
+              <Icon name="check" size={13} />
+              <span className="sn-log-text">{footLog.text}</span>
+            </div>
+          ) : (
+            <div className="sn-cmp-foot">{m.composerHint}</div>
+          )}
         </div>
       </aside>
     </>

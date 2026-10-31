@@ -4,12 +4,13 @@
 // sticker icon, and a sidebar footer button that opens the board. The footer
 // button cannot carry a badge through the SDK, so a content script adds one.
 import { useEffect } from "react";
-import { definePluginApp, useBbNavigate, type ExperimentalBadge } from "@get-bb/plugin-sdk/app";
+import { definePluginApp, useBbNavigate, useSettings, type ExperimentalBadge } from "@get-bb/plugin-sdk/app";
 
 import { getLang, useMessages } from "@/lib/i18n";
 
 import { BoardHeader, BoardPage } from "./components/Board";
 import { StickerMark } from "./components/icons";
+import { DEFAULT_HOTKEY, matchesHotkey, parseHotkey, startDictationOnNextBar, toggleDictation } from "./hooks/dictation";
 import { useCards } from "./hooks/useCards";
 import { useNow } from "./hooks/useNow";
 import { todayStore } from "./hooks/stores";
@@ -39,14 +40,37 @@ function useTodayBadge(): ExperimentalBadge | null {
   };
 }
 
-/** Navigation needs a hook; the footer button's handler reaches it through an event. */
+/**
+ * Mounted once per window. Navigation needs a hook, so the footer button's
+ * handler reaches it through an event. The dictation hotkey lives here too:
+ * on the board it toggles the active bar, elsewhere it opens the board and
+ * starts recording there.
+ */
 function OpenBridge() {
   const navigate = useBbNavigate();
+  const { values } = useSettings();
+  const raw = values?.hotkey;
+  const spec = typeof raw === "string" ? raw : DEFAULT_HOTKEY;
   useEffect(() => {
     const open = () => navigate.toPluginPanel(PANEL_PATH);
     document.addEventListener(OPEN_EVENT, open);
     return () => document.removeEventListener(OPEN_EVENT, open);
   }, [navigate]);
+  useEffect(() => {
+    const hotkey = parseHotkey(spec);
+    if (!hotkey) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat || !matchesHotkey(event, hotkey)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (toggleDictation()) return;
+      startDictationOnNextBar();
+      navigate.toPluginPanel(PANEL_PATH);
+    };
+    // Capture phase: the hotkey must reach us before a focused field or bb's own keys.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [spec, navigate]);
   return null;
 }
 
