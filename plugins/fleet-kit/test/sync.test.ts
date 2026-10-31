@@ -38,16 +38,44 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
   const updateJobs: Array<{ id: string; pluginId: string; state: string }> = [];
   /** Set to make bb's install job list fail. */
   const jobs = { unavailable: false };
+  type Selection = { mode: "automatic" } | { mode: "off" } | { mode: "service"; pluginId: string; serviceId: string };
+  const ai = {
+    selections: { "thread-title": { mode: "automatic" }, "commit-message": { mode: "automatic" }, voice: { mode: "automatic" } } as Record<string, Selection>,
+    services: [{ id: "bb-cloud", displayName: "bb cloud", pluginId: "bb-ai", tasks: ["thread-title", "commit-message", "voice"], automaticRank: 0, status: { ready: true } }] as Array<Record<string, unknown>>,
+  };
+  const agents = [
+    { id: "acp-opencode", displayName: "OpenCode", enabled: true, available: true, pluginEnabled: true },
+    { id: "codex", displayName: "Codex", enabled: true, available: true, pluginEnabled: true },
+    { id: "claude-code", displayName: "Claude Code", enabled: true, available: false, pluginEnabled: true },
+    { id: "cursor", displayName: "Cursor", enabled: false, available: false, pluginEnabled: true },
+  ];
   const view = (plugin: FakePlugin) => ({ id: plugin.id, source: plugin.source, version: plugin.version, enabled: plugin.enabled, provenance: plugin.provenance ?? "direct" });
   const schemaFor = (id: string): FakePlugin["schema"] =>
     id === "notes" ? { greeting: { type: "string" }, token: { type: "string", secret: true }, allowedProviders: { type: "string" } } : {};
   const sdk = {
     system: {
       version: async () => ({ currentVersion: "0.48.1" }),
+      aiServices: async () => clone({ selections: ai.selections, services: ai.services }),
+      setAiServiceSelection: async ({ task, selection }: { task: string; selection: Selection }) => {
+        calls.push(`ai ${task} ${selection.mode === "service" ? `${selection.pluginId}/${selection.serviceId}` : selection.mode}`);
+        ai.selections[task] = selection;
+        return clone({ selections: ai.selections, services: ai.services });
+      },
       config: async () => ({ generalSettings: { ...general }, primaryHostId: "host_1" }),
       updateGeneralSettings: async (next: Record<string, unknown>) => {
         calls.push(`settings ${JSON.stringify(next)}`);
         Object.assign(general, next);
+      },
+    },
+    providers: {
+      catalog: async () => clone(agents),
+      setEnabled: async ({ providerId, enabled }: { providerId: string; enabled: boolean }) => {
+        calls.push(`agent ${providerId} ${enabled ? "on" : "off"}`);
+        const entry = agents.find((one) => one.id === providerId)!;
+        // bb refuses to turn on an agent it cannot run (409 provider_unavailable).
+        if (enabled && !(entry.available && entry.pluginEnabled)) throw new Error("Provider is unavailable (provider_unavailable)");
+        entry.enabled = enabled;
+        return clone(agents);
       },
     },
     plugins: {
@@ -127,7 +155,7 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
       },
     },
   };
-  return { sdk, plugins, calls, general, installs, slow, updateJobs, jobs };
+  return { sdk, plugins, calls, general, installs, slow, updateJobs, jobs, ai, agents };
 }
 
 const dirs: string[] = [];
@@ -164,7 +192,9 @@ const notes = (overrides: Partial<FakePlugin> = {}): FakePlugin => ({
   values: { greeting: "hello", allowedProviders: "corp" },
   ...overrides,
 });
-const pluginCalls = (calls: string[]) => calls.filter((call) => !call.startsWith("settings") && call !== "check fleet-kit");
+const pluginCalls = (calls: string[]) =>
+  calls.filter((call) => !call.startsWith("settings") && call !== "check fleet-kit" && !call.startsWith("ai ") && !call.startsWith("agent "));
+const callsOf = (calls: string[], prefix: string) => calls.filter((call) => call.startsWith(prefix));
 
 describe("sync", () => {
   it("installs, configures, removes what removePlugins lists, and holds bb settings", async () => {
@@ -364,7 +394,7 @@ describe("switching a plugin's source", () => {
     now = Date.parse("2026-10-31T20:00:00Z");
     const four = await runSync({ ...deps, managed: three.managed }, "schedule");
     expect(pluginCalls(first.calls)).toEqual([]);
-    expect(message(four)).toContain("after 2026-11-01T10:00:00.000Z");
+    expect(four.report.steps.find((step) => step.item === "notes")).toMatchObject({ code: "switchWaiting", params: { attempts: 2, next: "2026-11-01T10:00:00.000Z" } });
 
     now = Date.parse("2026-11-01T10:00:01Z");
     const five = await runSync({ ...deps, managed: four.managed }, "schedule");
@@ -516,5 +546,147 @@ describe("Fleet Kit's own update while one runs", () => {
     const three = await runSync({ ...first.deps, managed: two.managed, selfUpdateStartedAt: Date.now() - 60_000 }, "manual");
     expect(three.selfUpdate).toBe(false);
     expect(three.managed.selfUpdate?.attempts).toBe(1);
+  });
+});
+
+describe("bb's AI services", () => {
+  const withAi = (aiServices: Record<string, unknown>) => ({ ...clone(sampleManifest()), aiServices });
+
+  it("holds each task at the manifest's choice and never falls back to automatic", async () => {
+    const first = await setup(withAi({ "thread-title": "off", "commit-message": "off", voice: "local-voice" }), [self()]);
+    const one = await runSync(first.deps, "start");
+    // The voice service is not registered yet: off, with a warning.
+    expect(callsOf(first.calls, "ai ")).toEqual(["ai thread-title off", "ai commit-message off", "ai voice off"]);
+    expect(one.report.steps.find((step) => step.item === "voice")).toMatchObject({ outcome: "warning", code: "aiServiceMissing" });
+
+    first.calls.length = 0;
+    await runSync({ ...first.deps, managed: one.managed }, "schedule");
+    expect(callsOf(first.calls, "ai ")).toEqual([]);
+
+    // The local voice plugin registers its service: the next sync selects it.
+    first.ai.services.push({ id: "local-voice", displayName: "Local voice", pluginId: "voice-local", tasks: ["voice"], automaticRank: null, status: { ready: true } });
+    const three = await runSync({ ...first.deps, managed: one.managed }, "schedule");
+    expect(callsOf(first.calls, "ai ")).toEqual(["ai voice voice-local/local-voice"]);
+    expect(three.report.steps.find((step) => step.item === "voice")).toMatchObject({ outcome: "changed", code: "aiService" });
+
+    // Changed by hand: put back.
+    first.calls.length = 0;
+    first.ai.selections["thread-title"] = { mode: "automatic" };
+    await runSync({ ...first.deps, managed: one.managed }, "schedule");
+    expect(callsOf(first.calls, "ai ")).toEqual(["ai thread-title off"]);
+  });
+
+  it("asks for the plugin when several register the service", async () => {
+    const first = await setup(withAi({ voice: "whisper" }), [self()]);
+    for (const pluginId of ["voice-a", "voice-b"]) {
+      first.ai.services.push({ id: "whisper", displayName: "Whisper", pluginId, tasks: ["voice"], automaticRank: null, status: { ready: true } });
+    }
+    const one = await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "ai ")).toEqual(["ai voice off"]);
+    expect(one.report.steps.find((step) => step.item === "voice")).toMatchObject({ code: "aiServiceAmbiguous" });
+
+    await writeFile(first.path, JSON.stringify(withAi({ voice: { service: "whisper", plugin: "voice-b" } })));
+    first.calls.length = 0;
+    await runSync({ ...first.deps, managed: one.managed }, "schedule");
+    expect(callsOf(first.calls, "ai ")).toEqual(["ai voice voice-b/whisper"]);
+  });
+
+  it("leaves bb's AI services alone without the block", async () => {
+    const { deps, calls } = await setup(sampleManifest(), [self()]);
+    await runSync(deps, "start");
+    expect(callsOf(calls, "ai ")).toEqual([]);
+  });
+});
+
+describe("bb agents", () => {
+  const withAgents = (allowed: string[]) => ({ ...clone(sampleManifest()), agents: { allowed } });
+
+  it("turns off every agent but the allowed ones, and says so once when one is turned on again", async () => {
+    const first = await setup(withAgents(["acp-opencode"]), [self()]);
+    const one = await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent codex off", "agent claude-code off"]);
+    expect(one.notices).toEqual([]);
+    expect(one.managed.agents.disabled.sort()).toEqual(["claude-code", "codex", "cursor"]);
+
+    first.calls.length = 0;
+    const two = await runSync({ ...first.deps, managed: one.managed }, "schedule");
+    expect(callsOf(first.calls, "agent ")).toEqual([]);
+
+    // The person turns Codex on: off again, with one notice.
+    first.agents.find((entry) => entry.id === "codex")!.enabled = true;
+    const three = await runSync({ ...first.deps, managed: two.managed }, "schedule");
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent codex off"]);
+    expect(three.notices).toHaveLength(1);
+    expect(three.notices[0]).toMatchObject({ id: "agent-disabled:codex", kind: "agent-disabled", code: "noticeAgentDisabled", params: { agent: "Codex", allowed: "OpenCode" } });
+    expect(three.report.steps.find((step) => step.item === "Codex")).toMatchObject({ outcome: "warning", code: "agentDisabledAgain" });
+  });
+
+  it("turns an allowed agent back on", async () => {
+    const first = await setup(withAgents(["acp-opencode"]), [self()]);
+    first.agents.find((entry) => entry.id === "acp-opencode")!.enabled = false;
+    await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "agent ")).toContain("agent acp-opencode on");
+  });
+
+  it("turns nothing off while the allowed agent is on but cannot run (OpenCode not installed)", async () => {
+    const first = await setup(withAgents(["acp-opencode"]), [self()]);
+    first.agents.find((entry) => entry.id === "acp-opencode")!.available = false;
+    const one = await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "agent ")).toEqual([]);
+    expect(one.report.steps.find((step) => step.item === "OpenCode")).toMatchObject({ outcome: "warning", code: "agentUnavailable" });
+    expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
+    expect(first.agents.filter((entry) => entry.enabled).map((entry) => entry.id)).toEqual(["acp-opencode", "codex", "claude-code"]);
+  });
+
+  it("does not try to turn on an allowed agent whose plugin is off, turns nobody off, and does not repeat on the next sync", async () => {
+    const first = await setup(withAgents(["acp-opencode"]), [self()]);
+    const opencode = first.agents.find((entry) => entry.id === "acp-opencode")!;
+    Object.assign(opencode, { enabled: false, pluginEnabled: false });
+    const one = await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "agent ")).toEqual([]);
+    expect(one.report.steps.find((step) => step.item === "OpenCode")).toMatchObject({ outcome: "warning", code: "agentPluginOff" });
+    expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
+    const two = await runSync({ ...first.deps, managed: one.managed }, "schedule");
+    expect(callsOf(first.calls, "agent ")).toEqual([]);
+    expect(two.report.outcome).toBe("error");
+
+    // Its plugin is on again: the next sync turns it on and only then turns the others off.
+    opencode.pluginEnabled = true;
+    await runSync({ ...first.deps, managed: two.managed }, "schedule");
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent acp-opencode on", "agent codex off", "agent claude-code off"]);
+  });
+
+  it("turns nobody off when bb refuses to turn the allowed agent on", async () => {
+    const first = await setup(withAgents(["acp-opencode"]), [self()]);
+    first.agents.find((entry) => entry.id === "acp-opencode")!.enabled = false;
+    first.deps.sdk.providers.setEnabled = async () => {
+      first.calls.push("agent refused");
+      throw new Error("Provider is unavailable (provider_unavailable)");
+    };
+    const one = await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent refused"]);
+    expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
+    expect(first.agents.filter((entry) => entry.enabled).map((entry) => entry.id)).toEqual(["codex", "claude-code"]);
+  });
+
+  it("an error in the AI service or agent step does not stop the rest of the sync", async () => {
+    const first = await setup({ ...withAgents(["acp-opencode"]), aiServices: { voice: "off" } }, [self()]);
+    first.deps.sdk.system.aiServices = async () => {
+      throw new Error("ai boom");
+    };
+    first.deps.sdk.providers.catalog = async () => {
+      throw new Error("agents boom");
+    };
+    const outcome = await runSync(first.deps, "start");
+    expect(outcome.report.steps.find((step) => step.item === "ai-services")).toMatchObject({ outcome: "error", message: "ai boom" });
+    expect(outcome.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", message: "agents boom" });
+    expect(outcome.report.steps.some((step) => step.area === "opencode")).toBe(true);
+  });
+
+  it("turns nothing off when none of the allowed agents exists here", async () => {
+    const first = await setup(withAgents(["acp-missing"]), [self()]);
+    const outcome = await runSync(first.deps, "start");
+    expect(callsOf(first.calls, "agent ")).toEqual([]);
+    expect(outcome.report.steps.find((step) => step.area === "agent")).toMatchObject({ outcome: "error", code: "agentsNoneHere" });
   });
 });

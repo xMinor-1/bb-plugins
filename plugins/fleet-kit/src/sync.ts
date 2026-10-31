@@ -13,7 +13,20 @@ import { tmpdir } from "node:os";
 import { join, normalize } from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Notice, OpenCodeStatus, Step, SyncReport } from "../contract.js";
-import { checkManifest, compareVersions, readSelfEntry, SELF_ID, selfSourcePinned, sourceProblem, type Manifest, type ManifestPlugin } from "./manifest.js";
+import { say, type Said } from "./shared/texts.js";
+import {
+  AI_TASKS,
+  checkManifest,
+  compareVersions,
+  readSelfEntry,
+  SELF_ID,
+  selfSourcePinned,
+  sourceProblem,
+  type AiChoice,
+  type AiTask,
+  type Manifest,
+  type ManifestPlugin,
+} from "./manifest.js";
 import { fetchManifestText, parseManifestJson, parseManifestLocation } from "./fetch-manifest.js";
 import type { SecretStore } from "./secret-store.js";
 import { planOpenCode, readOwnedValue, writeOpenCodeConfig, openCodeMajor, type OpenCodePlan } from "./host/opencode-config.js";
@@ -87,9 +100,18 @@ export interface ManagedState {
   selfUpdate: SelfUpdateRecord | null;
   sourceChanges: Record<string, SourceChangeRecord>;
   installs: Record<string, PendingInstall>;
+  /** bb agent providers Fleet Kit keeps turned off; one found on again was turned on by hand. */
+  agents: { disabled: string[] };
 }
 
-export const emptyManaged = (): ManagedState => ({ plugins: {}, opencode: null, selfUpdate: null, sourceChanges: {}, installs: {} });
+export const emptyManaged = (): ManagedState => ({
+  plugins: {},
+  opencode: null,
+  selfUpdate: null,
+  sourceChanges: {},
+  installs: {},
+  agents: { disabled: [] },
+});
 
 export const SELF_UPDATE_LIMIT = 2;
 export const SOURCE_CHANGE_LIMIT = 2;
@@ -135,8 +157,9 @@ export interface SyncOutcome {
 
 class Steps {
   readonly list: Step[] = [];
-  add(area: Step["area"], item: string, outcome: Step["outcome"], message: string) {
-    this.list.push({ area, item, outcome, message: message.slice(0, 600) });
+  add(area: Step["area"], item: string, outcome: Step["outcome"], text: Said | string) {
+    const said = typeof text === "string" ? say("raw", { text: text.slice(0, 600) }) : text;
+    this.list.push({ area, item, outcome, code: said.code, params: said.params, message: said.message.slice(0, 600) });
   }
 }
 
@@ -179,6 +202,7 @@ function loadManaged(saved: ManagedState): ManagedState {
     selfUpdate: copy.selfUpdate ?? null,
     sourceChanges: copy.sourceChanges ?? {},
     installs: copy.installs ?? {},
+    agents: { disabled: copy.agents?.disabled ?? [] },
   };
 }
 
@@ -213,7 +237,7 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
     display = location.display;
     raw = parseManifestJson(await fetchManifestText(location, { token: deps.settings.manifestToken, signal: deps.signal }));
   } catch (error) {
-    steps.add("manifest", "manifest", "error", `Could not read the manifest: ${errorText(error)}`);
+    steps.add("manifest", "manifest", "error", say("manifestUnreadable", { error: errorText(error) }));
     return finish(null, null);
   }
 
@@ -222,7 +246,7 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
   try {
     selfUpdate = await checkSelfUpdate(deps, raw, managed, steps);
   } catch (error) {
-    steps.add("plugin", SELF_ID, "warning", `Could not check for a Fleet Kit update: ${errorText(error)}`);
+    steps.add("plugin", SELF_ID, "warning", say("selfUpdateCheckFailed", { error: errorText(error) }));
   }
 
   const check = checkManifest(raw, { allowDevSources: deps.settings.allowDevSources });
@@ -236,20 +260,20 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
         "manifest",
         "error",
         selfUpdate
-          ? "This build needs a newer Fleet Kit. It installs after this sync; the rest of the build applies then."
-          : "This build needs a newer Fleet Kit, and none is offered yet; nothing else was applied.",
+          ? say("needsNewerSoon")
+          : say("needsNewerNone"),
       );
     } else {
-      steps.add("manifest", "manifest", "error", "The manifest has errors, so nothing else was applied.");
+      steps.add("manifest", "manifest", "error", say("manifestHasErrors"));
     }
     return finish(null, null, selfUpdate);
   }
   const manifest = check.manifest;
-  steps.add("manifest", display, "ok", `Read ${manifest.name} ${manifest.version}.`);
+  steps.add("manifest", display, "ok", say("manifestRead", { name: manifest.name, version: manifest.version }));
 
   const version = (await within(deps.sdk.system.version(), CALL_MS, "Reading the bb version")).currentVersion;
   if (version !== "0.0.0" && compareVersions(version, manifest.bb.minVersion) < 0) {
-    steps.add("bb", "version", "error", `This build needs bb ${manifest.bb.minVersion} or newer; this bb is ${version}. Update bb.`);
+    steps.add("bb", "version", "error", say("bbTooOld", { need: manifest.bb.minVersion, have: version }));
     return finish(manifest, null, selfUpdate);
   }
 
@@ -266,7 +290,7 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
             INSTALL_MS,
             "Adding the marketplace",
           );
-          steps.add("marketplace", wanted.source, "changed", "Added the marketplace.");
+          steps.add("marketplace", wanted.source, "changed", say("marketplaceAdded"));
         } catch (error) {
           steps.add("marketplace", wanted.source, "error", errorText(error));
         }
@@ -286,6 +310,19 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
     steps.add("plugin", "plugins", "error", errorText(error));
   }
 
+  // ------------------------------------------- AI services and agents
+  // After plugins: a build plugin may register the AI service or the agent it names.
+  try {
+    await applyAiServices(deps, manifest, steps);
+  } catch (error) {
+    steps.add("ai", "ai-services", "error", errorText(error));
+  }
+  try {
+    await applyAgents(deps, manifest, managed, steps, notices);
+  } catch (error) {
+    steps.add("agent", "agents", "error", errorText(error));
+  }
+
   // ------------------------------------------------------------ OpenCode
   let opencode: OpenCodeStatus | null = null;
   try {
@@ -298,10 +335,10 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
   for (const secret of manifest.secrets) {
     try {
       if (!(await deps.store.has(secret.name))) {
-        steps.add("secret", secret.name, "warning", `${secret.title} is not set. Enter it in the Fleet Kit panel.`);
+        steps.add("secret", secret.name, "warning", say("secretMissing", { title: secret.title }));
       }
     } catch (error) {
-      steps.add("secret", secret.name, "error", `Could not read ${deps.store.label}: ${errorText(error)}`);
+      steps.add("secret", secret.name, "error", say("secretStoreUnreadable", { store: deps.store.label, error: errorText(error) }));
     }
   }
 
@@ -329,17 +366,17 @@ async function checkSelfUpdate(deps: SyncDeps, raw: unknown, managed: ManagedSta
   if (entry === null) return false; // the full check reports the missing entry
   const problem = sourceProblem(entry.source, deps.settings.allowDevSources);
   if (problem !== null) {
-    steps.add("plugin", SELF_ID, "warning", `Not updating Fleet Kit: ${problem}.`);
+    steps.add("plugin", SELF_ID, "warning", say("selfNotUpdating", { problem }));
     return false;
   }
   if (!selfSourcePinned(entry.source)) {
-    steps.add("plugin", SELF_ID, "warning", "Not updating Fleet Kit: its source is not pinned with @semver:<range> or @ref:<name>.");
+    steps.add("plugin", SELF_ID, "warning", say("selfNotPinned"));
     return false;
   }
   const installed = (await within(deps.sdk.plugins.list(), CALL_MS, "Listing plugins")).plugins.find((plugin) => plugin.id === SELF_ID);
   if (installed === undefined) return false;
   if (!sameSource(SELF_ID, entry.source, installed, managed)) {
-    steps.add("plugin", SELF_ID, "warning", "Fleet Kit is installed from a different source than the manifest lists. Reinstall it with the installer.");
+    steps.add("plugin", SELF_ID, "warning", say("selfOtherSource"));
     return false;
   }
   const [check] = await within(deps.sdk.plugins.checkUpdates({ pluginId: SELF_ID, signal: deps.signal }), 2 * CALL_MS, "Checking for a Fleet Kit update");
@@ -348,16 +385,16 @@ async function checkSelfUpdate(deps: SyncDeps, raw: unknown, managed: ManagedSta
   // A sync while the update runs (a rerun, a manual sync) sees the same offer:
   // it must neither count another try nor start a second update.
   if (deps.selfUpdateStartedAt !== undefined && now - deps.selfUpdateStartedAt < SELF_UPDATE_RUNNING_MS) {
-    steps.add("plugin", SELF_ID, "skipped", "A Fleet Kit update is already running.");
+    steps.add("plugin", SELF_ID, "skipped", say("selfUpdateRunning"));
     return false;
   }
   const jobs = await within(Promise.resolve(deps.sdk.plugins.experimental_updateJobs?.list({ signal: deps.signal }) ?? null), CALL_MS, "Listing update jobs").catch(() => null);
   if (jobs === null) {
-    steps.add("plugin", SELF_ID, "warning", "Not updating Fleet Kit now: could not see whether an update is already running.");
+    steps.add("plugin", SELF_ID, "warning", say("selfUpdateJobsUnknown"));
     return false;
   }
   if (jobs.some((job) => job.pluginId === SELF_ID && (job.state === "queued" || job.state === "running"))) {
-    steps.add("plugin", SELF_ID, "skipped", "A Fleet Kit update is already running.");
+    steps.add("plugin", SELF_ID, "skipped", say("selfUpdateRunning"));
     return false;
   }
   // `version` identifies the candidate (a commit for git sources); `label` reads well.
@@ -368,11 +405,11 @@ async function checkSelfUpdate(deps: SyncDeps, raw: unknown, managed: ManagedSta
   const attempts = sameWindow ? record.attempts : 0;
   if (attempts >= SELF_UPDATE_LIMIT) {
     const retry = new Date(Date.parse(record!.at) + DAY_MS).toISOString();
-    steps.add("plugin", SELF_ID, "warning", `Fleet Kit ${shown} did not install after ${attempts} tries; the next try is after ${retry}.`);
+    steps.add("plugin", SELF_ID, "warning", say("selfUpdateGaveUp", { version: shown, attempts, retry }));
     return false;
   }
   managed.selfUpdate = { version: target, attempts: attempts + 1, at: sameWindow ? record!.at : new Date(now).toISOString() };
-  steps.add("plugin", SELF_ID, "changed", `Fleet Kit ${shown} is available; it installs after this sync.`);
+  steps.add("plugin", SELF_ID, "changed", say("selfUpdateAvailable", { version: shown }));
   return true;
 }
 
@@ -385,12 +422,12 @@ async function applyBbSettings(deps: SyncDeps, manifest: Manifest, steps: Steps)
     const changes: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(wanted)) {
       if (!(key in current)) {
-        steps.add("bb", key, "error", `bb has no general setting "${key}".`);
+        steps.add("bb", key, "error", say("bbSettingUnknown", { key }));
         continue;
       }
       const present = current[key];
       if (present !== null && typeof present !== typeof value) {
-        steps.add("bb", key, "error", `bb expects a ${typeof present} for "${key}".`);
+        steps.add("bb", key, "error", say("bbSettingType", { key, type: typeof present }));
         continue;
       }
       if (present !== value) changes[key] = value;
@@ -401,7 +438,7 @@ async function applyBbSettings(deps: SyncDeps, manifest: Manifest, steps: Steps)
       CALL_MS,
       "Saving bb settings",
     );
-    for (const [key, value] of Object.entries(changes)) steps.add("bb", key, "changed", `Set to ${JSON.stringify(value)}.`);
+    for (const [key, value] of Object.entries(changes)) steps.add("bb", key, "changed", say("bbSettingSet", { value: JSON.stringify(value) }));
   } catch (error) {
     steps.add("bb", "settings", "error", errorText(error));
   }
@@ -415,7 +452,7 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
     deps.signal.throwIfAborted();
     if (entry.id === SELF_ID) continue; // handled first, from the raw manifest
     if (entry.status === "planned") {
-      steps.add("plugin", entry.id, "skipped", "Planned; not installed yet.");
+      steps.add("plugin", entry.id, "skipped", say("pluginPlanned"));
       continue;
     }
     try {
@@ -448,21 +485,21 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
     if (listed.has(id)) continue;
     delete managed.plugins[id];
     if (byId.has(id) && !removals.has(id)) {
-      steps.add("plugin", id, "skipped", "No longer in the build; kept. List it in removePlugins to remove it.");
+      steps.add("plugin", id, "skipped", say("pluginKept"));
     }
   }
   for (const id of removals) {
     const installed = byId.get(id);
     if (installed === undefined || id === SELF_ID) continue;
     if (isBuiltin(installed)) {
-      steps.add("plugin", id, "warning", "Bundled with bb; Fleet Kit never removes it.");
+      steps.add("plugin", id, "warning", say("pluginBundled"));
       continue;
     }
     try {
       await within(sdk.plugins.remove({ pluginId: id }), CALL_MS, "Removing the plugin");
-      steps.add("plugin", id, "changed", "Removed: the build lists it in removePlugins.");
+      steps.add("plugin", id, "changed", say("pluginRemoved"));
     } catch (error) {
-      steps.add("plugin", id, "error", `Could not remove: ${errorText(error)}`);
+      steps.add("plugin", id, "error", say("pluginRemoveFailed", { error: errorText(error) }));
     }
   }
 }
@@ -545,14 +582,14 @@ interface PluginContext {
   now: number;
 }
 
-function reinstallNotice(ctx: PluginContext, message: string) {
-  ctx.notices.push({ id: `reinstalled:${ctx.entry.id}:${randomUUID().slice(0, 8)}`, kind: "reinstalled", message, at: new Date().toISOString() });
+function reinstallNotice(ctx: PluginContext, text: Said) {
+  ctx.notices.push({ id: `reinstalled:${ctx.entry.id}:${randomUUID().slice(0, 8)}`, kind: "reinstalled", at: new Date().toISOString(), ...text });
 }
 
 async function restoreSettings(ctx: PluginContext, keep: Record<string, unknown>) {
   if (Object.keys(keep).length === 0) return;
   await within(ctx.deps.sdk.plugins.updateSettings({ pluginId: ctx.entry.id, values: keep as Record<string, never> }), CALL_MS, "Restoring its settings").catch((error) => {
-    ctx.steps.add("plugin", ctx.entry.id, "warning", `Could not restore its previous settings: ${errorText(error)}`);
+    ctx.steps.add("plugin", ctx.entry.id, "warning", say("settingsRestoreFailed", { error: errorText(error) }));
   });
 }
 
@@ -561,17 +598,17 @@ async function switched(ctx: PluginContext, record: SourceChangeRecord, installe
   const { entry, managed } = ctx;
   managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: installed.source };
   delete managed.sourceChanges[entry.id];
-  ctx.steps.add("plugin", entry.id, "changed", `Reinstalled ${installed.version} from the manifest's source.`);
+  ctx.steps.add("plugin", entry.id, "changed", say("reinstalled", { version: installed.version }));
   await restoreSettings(ctx, record.keep);
-  if (record.secrets) reinstallNotice(ctx, `${entry.id} was reinstalled from a new source. Enter its secret settings again.`);
+  if (record.secrets) reinstallNotice(ctx, say("noticeReinstalled", { plugin: entry.id }));
   return installed;
 }
 
 /** The plugin is installed again, though not from the manifest's source: settings and secrets as after any reinstall. */
-async function settled(ctx: PluginContext, record: SourceChangeRecord, message: string) {
+async function settled(ctx: PluginContext, record: SourceChangeRecord, notice: Said) {
   record.pending = false;
   await restoreSettings(ctx, record.keep);
-  if (record.secrets) reinstallNotice(ctx, `${message} Enter its secret settings again.`);
+  if (record.secrets) reinstallNotice(ctx, notice);
 }
 
 /**
@@ -588,7 +625,7 @@ async function putPreviousBack(ctx: PluginContext, record: SourceChangeRecord): 
       if (error instanceof TimedOut) return "running";
       continue; // try the next form
     }
-    await settled(ctx, record, `${entry.id} could not switch to its new source and was put back on the previous one.`);
+    await settled(ctx, record, say("noticePutBack", { plugin: entry.id }));
     return "back";
   }
   return "failed";
@@ -607,27 +644,27 @@ async function trySwitch(ctx: PluginContext, record: SourceChangeRecord): Promis
   } catch (error) {
     const now = await listedNow(deps, entry.id);
     if (now === undefined) {
-      steps.add("plugin", entry.id, "warning", `Installing it from the manifest's source did not finish (${errorText(error)}), and bb's plugin list could not be read; the next sync checks again.`);
+      steps.add("plugin", entry.id, "warning", say("switchListUnknown", { error: errorText(error) }));
       return null;
     }
     if (now !== null) {
       if (await installedFrom(deps, now, entry.source!)) return switched(ctx, record, now);
-      await settled(ctx, record, `${entry.id} was reinstalled during a source switch.`);
-      steps.add("plugin", entry.id, "warning", `Installing it from the manifest's source did not finish (${errorText(error)}), and bb now lists it from ${now.source}; left as it is.`);
+      await settled(ctx, record, say("noticeReinstalledDuringSwitch", { plugin: entry.id }));
+      steps.add("plugin", entry.id, "warning", say("switchOtherSource", { error: errorText(error), source: now.source }));
       return null;
     }
     if (error instanceof TimedOut && (await installRunning(deps, [entry.source!])) !== false) {
-      steps.add("plugin", entry.id, "warning", "bb is still installing it from the manifest's source; the next sync checks the result.");
+      steps.add("plugin", entry.id, "warning", say("switchStillInstalling"));
       return null;
     }
-    const next = nextSourceTry(record, entry.source!, ctx.now) ?? "the next sync";
+    const next = nextSourceTry(record, entry.source!, ctx.now) ?? "";
     const back = await putPreviousBack(ctx, record);
     if (back === "back") {
-      steps.add("plugin", entry.id, "error", `Could not install it from the manifest's source (${errorText(error)}); the previous source is back. The next try is after ${next}.`);
+      steps.add("plugin", entry.id, "error", say("switchRolledBack", { error: errorText(error), next }));
       return null;
     }
     if (back === "running") {
-      steps.add("plugin", entry.id, "error", `Could not install it from the manifest's source (${errorText(error)}); bb is still putting the previous source back, and the next sync checks the result.`);
+      steps.add("plugin", entry.id, "error", say("switchRollbackRunning", { error: errorText(error) }));
       return null;
     }
     throw new Error(`Could not install it from the manifest's source, and the previous source could not be put back: ${errorText(error)}`);
@@ -686,28 +723,153 @@ async function settleAbandoned(
   const ctx: PluginContext = { deps, managed, entry, byId, steps, notices, now: (deps.now ?? Date.now)() };
   const now = await listedNow(deps, id);
   if (now === undefined) {
-    steps.add("plugin", id, "warning", "No longer in the build, and bb's plugin list could not be read to finish its source switch; the next sync checks again.");
+    steps.add("plugin", id, "warning", say("abandonedListUnknown"));
     return;
   }
   if (now !== null) {
-    await settled(ctx, record, `${id} was reinstalled during a source switch.`);
+    await settled(ctx, record, say("noticeReinstalledDuringSwitch", { plugin: id }));
     delete managed.sourceChanges[id];
-    steps.add("plugin", id, "skipped", `No longer in the build; its unfinished source switch left it installed from ${now.source}, and it is kept.`);
+    steps.add("plugin", id, "skipped", say("abandonedKept", { source: now.source }));
     return;
   }
   const running = await installRunning(deps, [record.target, record.previous.source]);
   if (running !== false) {
-    steps.add("plugin", id, "warning", running ? "No longer in the build; bb is still installing it, and the next sync checks the result." : "No longer in the build; could not see whether bb is still installing it, and the next sync checks again.");
+    steps.add("plugin", id, "warning", running ? say("abandonedInstalling") : say("abandonedJobsUnknown"));
     return;
   }
   const back = await putPreviousBack(ctx, record);
   if (back === "failed") throw new Error("No longer in the build, and its previous source, removed for a source switch, could not be put back.");
   if (back === "running") {
-    steps.add("plugin", id, "warning", "No longer in the build; bb is still putting its previous source back, and the next sync checks the result.");
+    steps.add("plugin", id, "warning", say("abandonedRollbackRunning"));
     return;
   }
   delete managed.sourceChanges[id];
-  steps.add("plugin", id, "changed", "No longer in the build; put back on its previous source, which an unfinished source switch had removed.");
+  steps.add("plugin", id, "changed", say("abandonedPutBack"));
+}
+
+type AiServices = Awaited<ReturnType<Sdk["system"]["aiServices"]>>;
+type AiSelection = AiServices["selections"][AiTask];
+
+/** The selection a manifest choice means here, and how to report it. */
+function resolveAiChoice(services: AiServices, task: AiTask, choice: AiChoice): { selection: AiSelection; text: Said; warning: boolean } {
+  if (choice === "off") return { selection: { mode: "off" }, text: say("aiOff"), warning: false };
+  if (choice === "automatic") return { selection: { mode: "automatic" }, text: say("aiAutomatic"), warning: false };
+  const service = typeof choice === "string" ? choice : choice.service;
+  const plugin = typeof choice === "string" ? undefined : choice.plugin;
+  const found = services.services.filter((entry) => entry.id === service && entry.tasks.includes(task) && (plugin === undefined || entry.pluginId === plugin));
+  // Never fall back to "automatic": that may pick bb cloud. Off until the named service is there.
+  if (found.length === 0) return { selection: { mode: "off" }, text: say("aiServiceMissing", { service }), warning: true };
+  if (found.length > 1) {
+    return { selection: { mode: "off" }, text: say("aiServiceAmbiguous", { service, plugins: found.map((entry) => entry.pluginId).join(", ") }), warning: true };
+  }
+  const [one] = found as [AiServices["services"][number]];
+  return { selection: { mode: "service", pluginId: one.pluginId, serviceId: one.id }, text: say("aiService", { service: one.displayName }), warning: false };
+}
+
+function sameAiSelection(a: AiSelection, b: AiSelection): boolean {
+  if (a.mode !== b.mode) return false;
+  return a.mode !== "service" || (b.mode === "service" && a.pluginId === b.pluginId && a.serviceId === b.serviceId);
+}
+
+/** Hold bb's AI service choices (`bb settings ai-services`) at the manifest's. */
+async function applyAiServices(deps: SyncDeps, manifest: Manifest, steps: Steps) {
+  const wanted = manifest.aiServices;
+  if (wanted === undefined) return;
+  let services: AiServices;
+  try {
+    services = await within(deps.sdk.system.aiServices({ signal: deps.signal }), CALL_MS, "Reading bb's AI services");
+  } catch (error) {
+    steps.add("ai", "ai-services", "error", errorText(error));
+    return;
+  }
+  for (const task of AI_TASKS) {
+    const choice = wanted[task];
+    if (choice === undefined) continue;
+    const { selection, text, warning } = resolveAiChoice(services, task, choice);
+    if (sameAiSelection(services.selections[task], selection)) {
+      steps.add("ai", task, warning ? "warning" : "ok", text);
+      continue;
+    }
+    try {
+      services = await within(deps.sdk.system.setAiServiceSelection({ task, selection }), CALL_MS, "Saving the AI service choice");
+      steps.add("ai", task, warning ? "warning" : "changed", text);
+    } catch (error) {
+      steps.add("ai", task, "error", errorText(error));
+    }
+  }
+}
+
+type AgentEntry = Awaited<ReturnType<Sdk["providers"]["catalog"]>>[number];
+
+/** bb can run the agent: its program is there and its plugin is on. */
+function agentReady(entry: AgentEntry): boolean {
+  return entry.available && entry.pluginEnabled;
+}
+
+/**
+ * Keep only the manifest's agents enabled. An allowlist, so a provider a
+ * later bb adds is turned off as well. Nothing is turned off until one of the
+ * allowed agents is on and ready: the person must never be left without a
+ * working agent. An allowed agent that is not ready is not turned on either
+ * (bb refuses it), so a sync never repeats a call bb already refused.
+ */
+async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, notices: Notice[]) {
+  const policy = manifest.agents;
+  if (policy === undefined) return;
+  let catalog = await within(deps.sdk.providers.catalog(), CALL_MS, "Listing bb's agents");
+  const allowed = new Set(policy.allowed);
+  const present = catalog.filter((entry) => allowed.has(entry.id));
+  if (present.length === 0) {
+    steps.add("agent", "agents", "error", say("agentsNoneHere", { allowed: policy.allowed.join(", ") }));
+    return;
+  }
+  for (const id of policy.allowed) if (!catalog.some((entry) => entry.id === id)) steps.add("agent", id, "warning", say("agentAllowedMissing"));
+  const shown = present.map((entry) => entry.displayName).join(", ");
+
+  for (const entry of present) {
+    if (!agentReady(entry)) {
+      steps.add("agent", entry.displayName, "warning", say(entry.pluginEnabled ? "agentUnavailable" : "agentPluginOff"));
+      continue;
+    }
+    if (entry.enabled) continue;
+    try {
+      catalog = await within(deps.sdk.providers.setEnabled({ providerId: entry.id, enabled: true }), CALL_MS, "Turning the agent on");
+      steps.add("agent", entry.displayName, "changed", say("agentEnabled"));
+    } catch (error) {
+      steps.add("agent", entry.displayName, "error", errorText(error));
+    }
+  }
+  const working = catalog.filter((entry) => allowed.has(entry.id) && entry.enabled && agentReady(entry));
+  if (working.length === 0) {
+    steps.add("agent", "agents", "error", say("agentsNoneReady", { allowed: shown }));
+    return; // keep managed.agents: a later sync still knows which agents it turned off
+  }
+
+  const disabledBefore = new Set(managed.agents.disabled);
+  const disabled: string[] = [];
+  for (const entry of catalog) {
+    if (allowed.has(entry.id)) continue;
+    if (!entry.enabled) {
+      disabled.push(entry.id);
+      continue;
+    }
+    try {
+      await within(deps.sdk.providers.setEnabled({ providerId: entry.id, enabled: false }), CALL_MS, "Turning the agent off");
+    } catch (error) {
+      steps.add("agent", entry.displayName, "error", errorText(error));
+      if (disabledBefore.has(entry.id)) disabled.push(entry.id);
+      continue;
+    }
+    disabled.push(entry.id);
+    if (disabledBefore.has(entry.id)) {
+      // Turned on by hand since Fleet Kit turned it off: say so once in the panel.
+      steps.add("agent", entry.displayName, "warning", say("agentDisabledAgain", { allowed: shown }));
+      notices.push({ id: `agent-disabled:${entry.id}`, kind: "agent-disabled", at: new Date().toISOString(), ...say("noticeAgentDisabled", { agent: entry.displayName, allowed: shown }) });
+    } else {
+      steps.add("agent", entry.displayName, "changed", say("agentDisabled", { allowed: shown }));
+    }
+  }
+  managed.agents = { disabled };
 }
 
 function installArgs(entry: ManifestPlugin): InstallArgs {
@@ -730,7 +892,7 @@ async function syncOnePlugin(
   const ctx: PluginContext = { deps, managed, entry, byId, steps, notices, now: (deps.now ?? Date.now)() };
   let current: Installed | null | undefined = byId.get(entry.id);
   if (current !== undefined && isBuiltin(current)) {
-    steps.add("plugin", entry.id, "error", "This id belongs to a plugin bundled with bb; pick another id.");
+    steps.add("plugin", entry.id, "error", say("pluginIdBundled"));
     return;
   }
   const record = managed.sourceChanges[entry.id];
@@ -747,11 +909,11 @@ async function syncOnePlugin(
       current = await switched(ctx, record, current);
     } else {
       // An install that timed out earlier put some source in place after all.
-      if (record?.pending) await settled(ctx, record, `${entry.id} was reinstalled during a source switch.`);
+      if (record?.pending) await settled(ctx, record, say("noticeReinstalledDuringSwitch", { plugin: entry.id }));
       const wait = nextSourceTry(record, entry.source!, ctx.now);
       if (wait !== null) {
         // Between tries the plugin stays on its previous source, untouched.
-        steps.add("plugin", entry.id, "warning", `Kept on its previous source: switching to the manifest's source failed ${record!.attempts} time(s); the next try is after ${wait}.`);
+        steps.add("plugin", entry.id, "warning", say("switchWaiting", { attempts: record!.attempts, next: wait }));
         return;
       }
       current = await startSwitch(ctx, current, record);
@@ -761,7 +923,7 @@ async function syncOnePlugin(
     // Removed for a switch that has not landed: never start a second install over a running one.
     const running = await installRunning(deps, [entry.source!, record.target, record.previous.source]);
     if (running !== false) {
-      steps.add("plugin", entry.id, "warning", running ? "bb is still installing it; the next sync checks the result." : "Could not see whether bb is still installing it; the next sync checks again.");
+      steps.add("plugin", entry.id, "warning", running ? say("stillInstalling") : say("jobsUnknown"));
       return;
     }
     const wait = nextSourceTry(record, entry.source!, ctx.now);
@@ -773,8 +935,8 @@ async function syncOnePlugin(
         entry.id,
         "warning",
         back === "back"
-          ? `Put back on its previous source: switching to the manifest's source failed ${record.attempts} time(s); the next try is after ${wait}.`
-          : "bb is still putting its previous source back; the next sync checks the result.",
+          ? say("putBackWaiting", { attempts: record.attempts, next: wait })
+          : say("rollbackRunning"),
       );
       return;
     }
@@ -792,7 +954,7 @@ async function syncOnePlugin(
         "plugin",
         entry.id,
         "warning",
-        running ? "bb is still installing it; the next sync checks the result." : "Could not see whether bb is still installing it; the next sync checks again.",
+        running ? say("stillInstalling") : say("jobsUnknown"),
       );
       return;
     }
@@ -801,7 +963,7 @@ async function syncOnePlugin(
     } catch (error) {
       if (error instanceof TimedOut) {
         managed.installs[entry.id] = { source: entry.source!, at: iso(ctx.now) };
-        steps.add("plugin", entry.id, "warning", `${errorText(error)}; the next sync checks the result.`);
+        steps.add("plugin", entry.id, "warning", say("installTimedOut", { seconds: Math.round((deps.installMs ?? INSTALL_MS) / 1000) }));
         return;
       }
       delete managed.installs[entry.id];
@@ -809,7 +971,7 @@ async function syncOnePlugin(
     }
     delete managed.installs[entry.id];
     managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: current.source };
-    steps.add("plugin", entry.id, "changed", `Installed ${current.version}.`);
+    steps.add("plugin", entry.id, "changed", say("installed", { version: current.version }));
   }
 
   if (current === undefined || current === null) return;
@@ -818,19 +980,19 @@ async function syncOnePlugin(
   if (managed.plugins[entry.id] === undefined) managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: current.source };
   if (!current.enabled) {
     current = await within(sdk.plugins.enable({ pluginId: entry.id }), CALL_MS, "Enabling the plugin");
-    steps.add("plugin", entry.id, "changed", "Enabled.");
+    steps.add("plugin", entry.id, "changed", say("enabled"));
   }
   // Pinned sources answer "pinned"; tracking ones may have an update.
   const [check] = await within(sdk.plugins.checkUpdates({ pluginId: entry.id, signal: deps.signal }), 2 * CALL_MS, "Checking for an update");
   if (check?.outcome === "update-available") {
     const update = await within(sdk.plugins.applyUpdate({ pluginId: entry.id }), INSTALL_MS, "Updating the plugin");
-    if (update.outcome === "updated") steps.add("plugin", entry.id, "changed", `Updated to ${update.to?.label ?? "the latest compatible version"}.`);
-    else steps.add("plugin", entry.id, "warning", `The update ${update.outcome === "rolled-back" ? "failed and was rolled back" : "did not apply"}.`);
+    if (update.outcome === "updated") steps.add("plugin", entry.id, "changed", say("updated", { version: update.to?.label ?? "" }));
+    else steps.add("plugin", entry.id, "warning", update.outcome === "rolled-back" ? say("updateRolledBack") : say("updateNotApplied"));
   }
 
   await applyPluginConfig(deps, manifest, entry, steps);
   if (!steps.list.some((step) => step.area === "plugin" && step.item === entry.id)) {
-    steps.add("plugin", entry.id, "ok", `Up to date (${current.version}).`);
+    steps.add("plugin", entry.id, "ok", say("upToDate", { version: current.version }));
   }
 }
 
@@ -854,19 +1016,19 @@ async function applyPluginConfig(deps: SyncDeps, manifest: Manifest, entry: Mani
     const descriptor = schema[key];
     const fromManifest = key in (entry.config ?? {});
     if (descriptor === undefined) {
-      if (fromManifest) steps.add("plugin", entry.id, "warning", `It has no setting "${key}".`);
+      if (fromManifest) steps.add("plugin", entry.id, "warning", say("noSuchSetting", { key }));
       continue;
     }
     // Secret settings are the person's to enter; a manifest never carries them.
     if (descriptor.secret) {
-      if (fromManifest) steps.add("plugin", entry.id, "warning", `"${key}" is a secret setting; Fleet Kit does not set it.`);
+      if (fromManifest) steps.add("plugin", entry.id, "warning", say("secretSettingSkipped", { key }));
       continue;
     }
     if (settings.values?.[key] !== value) changes[key] = value;
   }
   if (Object.keys(changes).length === 0) return;
   await within(sdk.plugins.updateSettings({ pluginId: entry.id, values: changes }), CALL_MS, "Saving its settings");
-  steps.add("plugin", entry.id, "changed", `Settings applied: ${Object.keys(changes).join(", ")}.`);
+  steps.add("plugin", entry.id, "changed", say("settingsApplied", { keys: Object.keys(changes).join(", ") }));
 }
 
 async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps): Promise<OpenCodeStatus> {
@@ -882,7 +1044,7 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
   };
   const binary = await findOpenCode(deps.environment);
   if (binary === null) {
-    steps.add("opencode", "OpenCode", "warning", "OpenCode is not installed, so its models are not configured.");
+    steps.add("opencode", "OpenCode", "warning", say("opencodeMissing"));
     return status;
   }
   status.installed = true;
@@ -891,11 +1053,11 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
   try {
     major = openCodeMajor(binary.version);
   } catch {
-    steps.add("opencode", "OpenCode", "warning", `OpenCode ${binary.version} is not supported. Update OpenCode to 2.x.`);
+    steps.add("opencode", "OpenCode", "warning", say("opencodeUnsupported", { version: String(binary.version) }));
     return status;
   }
   if (major !== 2) {
-    steps.add("opencode", "OpenCode", "warning", `OpenCode ${binary.version} is too old for this build. Update OpenCode to 2.x.`);
+    steps.add("opencode", "OpenCode", "warning", say("opencodeTooOld", { version: String(binary.version) }));
     return status;
   }
 
@@ -914,9 +1076,9 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     try {
       await writeOpenCodeConfig(managed.opencode.configFile, { entries: [], resolver: {}, secrets: [] }, managed.opencode.owned, { signal: deps.signal, timeoutMs: 30_000 });
       await syncResolverPlugin(managed.opencode.directory, null);
-      steps.add("opencode", managed.opencode.configFile, "changed", "Removed Fleet Kit's settings from the previous OpenCode configuration.");
+      steps.add("opencode", managed.opencode.configFile, "changed", say("previousConfigCleaned"));
     } catch (error) {
-      steps.add("opencode", managed.opencode.configFile, "warning", `Could not clean the previous configuration: ${errorText(error)}`);
+      steps.add("opencode", managed.opencode.configFile, "warning", say("previousConfigCleanFailed", { error: errorText(error) }));
     }
     managed.opencode = null;
   }
@@ -926,7 +1088,7 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     const result = await writeOpenCodeConfig(location.configFile, plan, previouslyOwned, { signal: deps.signal });
     managed.opencode = { configFile: location.configFile, directory: location.directory, owned: plan.entries.map((entry) => entry.path) };
     if (result.changed) {
-      steps.add("opencode", location.configFile, "changed", result.backup ? `Updated; the original is saved as ${result.backup}.` : "Updated.");
+      steps.add("opencode", location.configFile, "changed", say("configUpdated", { backup: result.backup ?? "" }));
     }
   } catch (error) {
     const lock = await lockState(location.configFile).catch(() => null);
@@ -937,7 +1099,7 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
 
   try {
     const changed = await syncResolverPlugin(location.directory, { providers: plan.resolver, store: deps.store });
-    if (changed) steps.add("opencode", "secret resolver", "changed", `Updated the OpenCode plugin that reads keys from ${deps.store.label}.`);
+    if (changed) steps.add("opencode", "secret resolver", "changed", say("resolverUpdated", { store: deps.store.label }));
   } catch (error) {
     steps.add("opencode", "secret resolver", "error", errorText(error));
   }
@@ -950,7 +1112,7 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
       "opencode",
       "model list",
       "warning",
-      `bb's model picker reads the default OpenCode configuration, not ${location.directory}. Start bb with OPENCODE_CONFIG_DIR=${location.directory} so the picker shows the build's models; threads already use the directory.`,
+      say("modelPickerDirectory", { directory: location.directory }),
     );
   }
 

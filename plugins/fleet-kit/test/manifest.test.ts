@@ -65,6 +65,10 @@ describe("manifest check", () => {
     ["a plain http gateway", (m: Record<string, any>) => { m.opencode.providers.corp.settings.baseURL = "http://llm.example.test/v1"; }, "must be an https:// address"],
     ["a loopback gateway without allowDevSources", (m: Record<string, any>) => { m.opencode.providers.corp.settings.baseURL = "http://127.0.0.1:4010/v1"; }, "only with allowDevSources"],
     ["a keyed provider without baseURL", (m: Record<string, any>) => { delete m.opencode.providers.corp.settings.baseURL; }, "settings.baseURL is required"],
+    ["an AI service task bb does not have", (m: Record<string, any>) => { m.aiServices = { summaries: "off" }; }, "aiServices"],
+    ["an AI service choice that is not an id", (m: Record<string, any>) => { m.aiServices = { voice: "bb cloud" }; }, "aiServices.voice"],
+    ["an empty agent list", (m: Record<string, any>) => { m.agents = { allowed: [] }; }, "agents.allowed"],
+    ["agents that leave out the default agent", (m: Record<string, any>) => { m.bb.settings.defaultProviderId = "acp-opencode"; m.agents = { allowed: ["codex"] }; }, "would be turned off"],
     ["a small model from another provider", (m: Record<string, any>) => { m.opencode.small_model = "other/m"; }, "opencode.small_model"],
   ])("rejects %s", (_, edit, message) => {
     const manifest = clone(sampleManifest()) as Record<string, any>;
@@ -88,6 +92,16 @@ describe("manifest check", () => {
     manifest.opencode.providers.corp.package = "file:/srv/provider";
     expect(checkManifest(manifest, { allowDevSources: true }).errors).toEqual([]);
     expect(checkManifest(manifest).errors.join("\n")).toContain("need allowDevSources");
+  });
+
+  it("accepts AI service choices and an agent allowlist", () => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    manifest.bb.settings.defaultProviderId = "acp-opencode";
+    manifest.aiServices = { "thread-title": "off", "commit-message": "automatic", voice: { service: "local-voice", plugin: "voice-local" } };
+    manifest.agents = { allowed: ["acp-opencode"] };
+    const result = checkManifest(manifest);
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.agents?.allowed).toEqual(["acp-opencode"]);
   });
 
   it("accepts plugin sources with spaces in a semver range", () => {

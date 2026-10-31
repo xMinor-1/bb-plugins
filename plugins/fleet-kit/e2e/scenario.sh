@@ -3,8 +3,9 @@
 # syncs the fixture build, enters the key and checks the whole path. When
 # run.sh started from an earlier release (FLEET_KIT_BASE_REF), it first checks
 # that the installed release updates itself to the working copy on its own
-# schedule. Prints one line per check; exits 1 when any check fails. Never
-# prints the key.
+# schedule or, for a new minor release, warns and is reinstalled the way the
+# installer does. Then it checks bb's AI services and the allowed agents.
+# Prints one line per check; exits 1 when any check fails. Never prints the key.
 set -uo pipefail
 cd "$HOME"
 failures=0
@@ -16,6 +17,15 @@ check() {
 plugins() { bb plugin list --json 2>/dev/null | jq -c '(.plugins // .)[]'; }
 version_of() { plugins | jq -r --arg id "$1" 'select(.id == $id) | .version'; }
 status() { bb fleet-kit status --json 2>/dev/null; }
+minor() { echo "$1" | cut -d. -f1,2; }
+manifest=$HOME/build/manifest.json
+fk_source() { jq -r '.plugins[] | select(.id == "fleet-kit") | .source' "$manifest"; }
+key_set() { bb fleet-kit status --json | jq -e '.secrets[] | select(.name == "gateway-key") | .set == true'; }
+setup_fleet_kit() { # what the scenario and the installer set after an install
+  bb plugin config fleet-kit set allowDevSources true >/dev/null
+  bb plugin config fleet-kit set manifestUrl file://$manifest >/dev/null
+}
+enabled_agents() { bb provider list --json 2>/dev/null | jq -r '.[].id' | sort | paste -sd' '; }
 new_lines() { tail -n +$(($2 + 1)) "$1"; }
 spawn() { # project root, then the prompt
   local project
@@ -24,20 +34,48 @@ spawn() { # project root, then the prompt
     --prompt "Reply with one word." --json | jq -r .id
 }
 
-bb plugin install "git:/home/tester/fleet.git@semver:fleet-kit/:^0.1.0" --plugin fleet-kit --yes >/dev/null
+echo "agents enabled before Fleet Kit: $(enabled_agents)"
+bb plugin install "$(fk_source)" --plugin fleet-kit --yes >/dev/null
 first=$(version_of fleet-kit)
 echo "installed fleet-kit $first"
 # A test machine on purpose: local git sources and a gateway on 127.0.0.1.
-bb plugin config fleet-kit set allowDevSources true >/dev/null
-bb plugin config fleet-kit set manifestUrl file:///home/tester/build/manifest.json >/dev/null
+setup_fleet_kit
 bb fleet-kit sync >/dev/null 2>&1   # the first sync learns the build's secrets
 bb fleet-kit secret set gateway-key --value-stdin < ~/.fk-e2e/expected-key >/dev/null
 bb fleet-kit sync >/dev/null 2>&1
 check "the build installed fixture-a" test -n "$(version_of fixture-a)"
 check "the build installed theme-toggle" test -n "$(version_of theme-toggle)"
-check "the gateway key is set" bash -c 'bb fleet-kit status --json | jq -e ".secrets[] | select(.name == \"gateway-key\") | .set == true"'
+check "the gateway key is set" key_set
+if [ -f /tmp/fleet-kit-base.tgz ] && ! tar -xzOf /tmp/fleet-kit-base.tgz fleet-kit/src/manifest.ts | grep -q aiServices; then
+  # A release before aiServices and agents: those fields only warn.
+  echo "fleet-kit $first on the new manifest: $(status | jq -r '.lastSync.outcome')"
+  status | jq -r '.lastSync.steps[] | select(.outcome == "warning" or .outcome == "error") | "  \(.outcome) \(.item): \(.message)"'
+  check "fleet-kit $first applies a manifest with aiServices and agents (no error)" \
+    bash -c "bb fleet-kit status --json | jq -e '.lastSync.outcome != \"error\"'"
+  check "fleet-kit $first warns about aiServices and agents" \
+    bash -c "bb fleet-kit status --json | jq -e '[.lastSync.steps[] | select(.outcome == \"warning\" and (.message | test(\"^(aiServices|agents): not known\")))] | length == 2'"
+fi
 
-if [ -f /tmp/fleet-kit-base.tgz ]; then
+current=$(tar -xzOf /tmp/fleet-kit-src.tgz fleet-kit/package.json | jq -r .version)
+if [ -f /tmp/fleet-kit-base.tgz ] && [ "$(minor "$first")" != "$(minor "$current")" ]; then
+  # A new minor release is outside the installed ^range: another source for bb.
+  target=$(bash /tmp/release-current.sh)
+  new_source="git:/home/tester/fleet.git@semver:fleet-kit/:^$(minor "$target").0"
+  jq --arg source "$new_source" '(.plugins[] | select(.id == "fleet-kit") | .source) = $source' "$manifest" > "$manifest.tmp" && mv "$manifest.tmp" "$manifest"
+  echo "released fleet-kit $target; the manifest now names $new_source"
+  bb fleet-kit sync >/dev/null 2>&1
+  check "fleet-kit $first says it is installed from another source" \
+    bash -c "bb fleet-kit status --json | jq -e '[.lastSync.steps[] | select(.message | test(\"different source\"))] | length == 1'"
+  check "fleet-kit $first stays on $first" test "$(version_of fleet-kit)" = "$first"
+  # What the installer tells a person to do: remove Fleet Kit and install again.
+  bb plugin remove fleet-kit >/dev/null
+  bb plugin install "$new_source" --plugin fleet-kit --yes >/dev/null
+  setup_fleet_kit
+  bb fleet-kit sync >/dev/null 2>&1
+  check "fleet-kit $target installed from $new_source" test "$(version_of fleet-kit)" = "$target"
+  check "the key survived the reinstall" key_set
+  echo "fleet-kit $target first sync: $(status | jq -r '.lastSync.outcome')"
+elif [ -f /tmp/fleet-kit-base.tgz ]; then
   bb plugin config fleet-kit set syncIntervalMinutes 5 >/dev/null
   sleep 20   # let the sync the settings change starts finish
   released_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -57,7 +95,32 @@ if [ -f /tmp/fleet-kit-base.tgz ]; then
     sleep 5
   done
   check "fleet-kit $target synced on start (outcome: ${synced:-none})" test -n "$synced"
-  check "the key survived the update" bash -c 'bb fleet-kit status --json | jq -e ".secrets[] | select(.name == \"gateway-key\") | .set == true"'
+  check "the key survived the update" key_set
+fi
+
+# bb's AI services: the build turns all three off.
+bb settings ai-services set thread-title automatic >/dev/null 2>&1   # someone changes one by hand
+bb fleet-kit sync >/dev/null 2>&1
+echo "ai services: $(bb settings ai-services show --json 2>/dev/null | jq -c '.selections')"
+check "thread titles, commit messages and voice are off" \
+  bash -c "bb settings ai-services show --json | jq -e '[.selections[\"thread-title\", \"commit-message\", \"voice\"].mode] == [\"off\", \"off\", \"off\"]'"
+
+# Agents: only acp-opencode stays on, also after someone turns another one on.
+echo "agents enabled after the sync: $(enabled_agents)"
+check "only acp-opencode is enabled" test "$(enabled_agents)" = "acp-opencode"
+other=$(bb provider list --all --json 2>/dev/null | jq -r '[.[].id | select(. != "acp-opencode")][0] // empty')
+if [ -n "$other" ]; then
+  for round in 1 2; do
+    bb provider enable "$other" >/dev/null 2>&1
+    on=$(enabled_agents)
+    bb fleet-kit sync >/dev/null 2>&1
+    echo "round $round: enabled by hand: $on; after the sync: $(enabled_agents)"
+  done
+  check "$other turned on by hand is off again" test "$(enabled_agents)" = "acp-opencode"
+  check "one notice about $other" \
+    bash -c "bb fleet-kit status --json | jq -e --arg id \"agent-disabled:$other\" '[.notices[] | select(.id == \$id)] | length == 1'"
+else
+  check "another agent to turn on" false
 fi
 check "the resolver refuses redirects" grep -q 'redirect: "error"' ~/.config/opencode/plugins/fleet-kit-secrets.js
 

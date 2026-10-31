@@ -1,13 +1,14 @@
 ---
 name: fleet-kit
-description: Inspect or run Fleet Kit, the plugin that keeps this bb in line with a build manifest (plugins, bb settings, OpenCode models), and store build secrets. Use when the user asks about the build version, why a plugin was installed, updated or removed, whether OpenCode is limited to the build's models, or to sync now.
+description: Inspect or run Fleet Kit, the plugin that keeps this bb in line with a build manifest (plugins, bb settings, bb's AI services, allowed agents, OpenCode models), and store build secrets. Use when the user asks about the build version, why a plugin was installed, updated or removed, why an agent was turned off, whether OpenCode is limited to the build's models, or to sync now.
 ---
 
 # Fleet Kit
 
 Fleet Kit reads a build manifest and brings this bb to it: it installs,
-updates and removes plugins, holds bb general settings, and merges the
-build's OpenCode block into `opencode.json`. The panel **Fleet Kit** in the
+updates and removes plugins, holds bb general settings and bb's AI service
+choices (`bb settings ai-services`), keeps only the build's allowed agents
+enabled, and merges the build's OpenCode block into `opencode.json`. The panel **Fleet Kit** in the
 sidebar shows the same information as the commands below.
 
 ## Commands
@@ -53,6 +54,9 @@ changes one and triggers a sync.
 - Do not reinstall a plugin that the sync reports as "Kept on its previous
   source": switching to the manifest's source failed, and Fleet Kit tries again
   at most twice a day, an hour apart. Fix the source in the manifest instead.
+- Do not turn on an agent the manifest does not allow (`bb provider enable`)
+  or change an AI service task the manifest sets: the next sync undoes it.
+  The allowed agents are in the manifest's `agents.allowed`.
 - Do not install or remove plugins that the manifest lists; change the
   manifest instead. Fleet Kit removes a plugin only when the manifest lists it
   in `removePlugins`; dropping it from `plugins` leaves it installed.

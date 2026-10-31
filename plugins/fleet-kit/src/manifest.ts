@@ -84,6 +84,23 @@ const opencodeBlock = z
   })
   .strict();
 
+/** bb's AI service tasks (`bb settings ai-services`). */
+export const AI_TASKS = ["thread-title", "commit-message", "voice"] as const;
+export type AiTask = (typeof AI_TASKS)[number];
+
+/**
+ * A task's choice, as `bb settings ai-services set` takes it: "off",
+ * "automatic" (bb picks a ready service, which may be bb cloud), or a service
+ * id; the object form names the plugin too, for an id several plugins share.
+ */
+const aiChoice = z.union([
+  z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, 'use "off", "automatic" or a service id'),
+  z.object({ service: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/), plugin: id }).strict(),
+]);
+export type AiChoice = z.infer<typeof aiChoice>;
+
+const providerId = z.string().regex(/^[a-z0-9][a-z0-9._-]*$/, "use a bb provider id such as acp-opencode");
+
 const rootShape = {
   $schema: z.string().optional(),
   schema: z.number().int().positive(),
@@ -106,6 +123,13 @@ const rootShape = {
   opencode: opencodeBlock,
   mcp: z.array(mcpEntry),
   skills: z.array(z.object({ id }).passthrough()).optional(),
+  /** Choices Fleet Kit holds for bb's AI service tasks; a task left out is not touched. */
+  aiServices: z.object(Object.fromEntries(AI_TASKS.map((task) => [task, aiChoice.optional()])) as Record<AiTask, z.ZodOptional<typeof aiChoice>>).strict().optional(),
+  /**
+   * bb agent providers. `allowed` lists the only ones that stay enabled:
+   * every other provider, including ones a later bb adds, is turned off.
+   */
+  agents: z.object({ allowed: z.array(providerId).min(1) }).strict().optional(),
 };
 
 export const manifestSchema = z.object(rootShape).strict();
@@ -347,6 +371,13 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
     if (!(provider in manifest.opencode.providers)) {
       warnings.push(`opencode.${key}: provider "${provider}" is not declared in opencode.providers`);
     }
+  }
+  if (manifest.agents !== undefined) {
+    const defaultProvider = manifest.bb.settings?.defaultProviderId;
+    if (typeof defaultProvider === "string" && !manifest.agents.allowed.includes(defaultProvider)) {
+      errors.push(`agents.allowed: the default agent "${defaultProvider}" (bb.settings.defaultProviderId) would be turned off`);
+    }
+    if (new Set(manifest.agents.allowed).size !== manifest.agents.allowed.length) errors.push("agents.allowed: an agent is listed twice");
   }
   if (compareVersions(manifest.install.bb, manifest.bb.minVersion) < 0) {
     errors.push("install.bb: lower than bb.minVersion");

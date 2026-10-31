@@ -11,6 +11,11 @@ brings bb to that description and keeps it there.
   `removePlugins`. bb itself does not update plugins on its own; Fleet Kit does.
 - **bb settings**: holds the general settings the build sets (telemetry,
   default provider and so on).
+- **bb's AI services**: holds which service writes thread titles and commit
+  messages and transcribes voice input — off, bb's automatic choice, or a
+  service a plugin provides.
+- **Agents**: keeps only the agents the build allows turned on in bb. An agent
+  someone turns on again is turned off on the next sync, with one notice.
 - **OpenCode**: merges the build's OpenCode 2 block into `opencode.json` —
   providers, default model, `enabled_providers` — and leaves everything else in
   the file alone.
@@ -19,17 +24,21 @@ brings bb to that description and keeps it there.
   lands in `opencode.json`, in logs, or in the panel.
 - **Panel**: a **Fleet Kit** page in the sidebar shows the build version, what
   the last sync changed, any errors, whether OpenCode is limited to the build's
-  models, and a **Sync now** button.
+  models, and a **Sync now** button. The panel is in English and Russian, with
+  a switch in its header.
 
 ## Install
 
 ```sh
-bb plugin install "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:^0.1.0" --plugin fleet-kit --yes
+bb plugin install "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:>=0.2.0 <1.0.0" --plugin fleet-kit --yes
 bb plugin config fleet-kit set manifestUrl https://builds.example.com/manifest.json
 ```
 
 Install Fleet Kit with exactly the `source` its manifest entry names: Fleet Kit
-updates itself only when the installed source matches.
+updates itself only when the installed source matches. Give Fleet Kit a range
+over a whole major version (`>=0.2.0 <1.0.0`), not `^0.2.0`: under `^0.x` a new
+minor release would need another source, and Fleet Kit cannot switch its own
+source.
 
 Fleet Kit syncs fifteen seconds after bb starts, every 30 minutes after that,
 whenever a setting changes, and on **Sync now**. Until `manifestUrl` is set it
@@ -74,9 +83,11 @@ a newer Fleet Kit can still deliver it.
   "name": "Example build",
   "version": "1.2.0",
   "install": { "bb": "0.48.1", "opencode": "2.2.5" },
-  "bb": { "minVersion": "0.48.0", "settings": { "telemetryEnabled": false } },
+  "bb": { "minVersion": "0.48.0", "settings": { "telemetryEnabled": false, "defaultProviderId": "acp-opencode" } },
+  "aiServices": { "thread-title": "off", "commit-message": "off", "voice": "off" },
+  "agents": { "allowed": ["acp-opencode"] },
   "plugins": [
-    { "id": "fleet-kit", "source": "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:^0.1.0", "plugin": "fleet-kit", "status": "required" },
+    { "id": "fleet-kit", "source": "git:https://github.com/xMinor-1/bb-plugins.git@semver:fleet-kit/:>=0.2.0 <1.0.0", "plugin": "fleet-kit", "status": "required" },
     { "id": "notes", "source": "git:https://git.example.com/plugins.git@semver:notes/:^1.0.0", "plugin": "notes", "status": "required",
       "config": { "greeting": "hello" } },
     { "id": "later", "source": null, "status": "planned" }
@@ -108,6 +119,14 @@ a newer Fleet Kit can still deliver it.
 - `bb.minVersion` — Fleet Kit stops with an error on an older bb.
 - `bb.settings` — keys of bb's general settings (`bb settings general`). An
   unknown key or a value of the wrong type is an error, not a silent skip.
+- `aiServices` — bb's AI service tasks (`bb settings ai-services`):
+  `thread-title`, `commit-message`, `voice`. Each value is `"off"`,
+  `"automatic"` (bb picks), or the id of a service, such as one a plugin adds;
+  when two plugins offer the same id, write `{ "service": "<id>", "plugin":
+  "<plugin id>" }`. A task the manifest leaves out is not touched.
+- `agents.allowed` — the bb agents (providers, `bb provider list`) that stay
+  enabled; every other agent is turned off, including ones a later bb adds.
+  `bb.settings.defaultProviderId`, when set, must be in the list.
 - `marketplaces` — bb marketplaces to add if missing.
 - `plugins` — `source` is a `git:https://` source. For one plugin from a
   monorepo with tags like `notes/v1.2.0`, write the tag prefix into the source:
@@ -173,8 +192,46 @@ new version does not come up, bb rolls back; Fleet Kit tries the same version at
 most twice a day. A sync that runs while the update is still going neither
 counts a try nor starts a second update.
 
+With a source such as `@semver:fleet-kit/:>=0.2.0 <1.0.0` the source string
+stays the same from release to release, so every new tag in the range reaches
+every machine on its next sync: tagging a release is shipping it. Fleet Kit
+cannot move itself to another source. When the manifest names another one,
+for example `>=0.2.0 <1.0.0` on a machine installed from `^0.1.0`, the sync
+warns and Fleet Kit stays where it is; reinstall it once (`bb plugin remove
+fleet-kit`, then the installer). The key stays in the OS credential store.
+
 Fleet Kit removes only plugins listed in `removePlugins`, never one bundled
 with bb. A plugin dropped from `plugins` stays and the sync says so once.
+
+### bb's AI services
+
+bb sends thread titles, commit messages and voice input to the service each
+task is set to. Fleet Kit reads the current choice with
+`bb.sdk.system.aiServices()` and sets the manifest's with
+`setAiServiceSelection`. A service id that this bb does not offer yet (its
+plugin is not installed or not up) or that two plugins offer, without
+`plugin` to pick one, turns the task off with a warning: Fleet Kit never
+falls back to bb's automatic choice, which may be a cloud service.
+
+### Agents
+
+`agents.allowed` is a list of the agents to keep, not of the ones to turn off,
+so an agent a new bb release adds is off as soon as Fleet Kit sees it. Each
+sync reads bb's provider catalog: an allowed agent that is off is turned on,
+any other agent that is on is turned off. When an agent Fleet Kit already
+turned off is on again, the sync reports it and the panel shows one notice
+naming the agents the build allows.
+
+The person must never be left without a working agent. An allowed agent counts
+only when bb can run it (its program is found and its plugin is on). Until one
+allowed agent is on and ready, Fleet Kit turns nothing off and the sync reports
+an error; it does not ask bb to turn on an allowed agent bb cannot run, so it
+does not repeat a refused call on every sync. The same holds when none of the
+allowed agents is in this bb's catalog.
+
+Removing the `agents` block from the manifest stops this check but does not
+turn the agents Fleet Kit turned off back on: turn them on in bb's settings or
+with `bb provider enable <id>`.
 
 ### opencode.json
 
@@ -271,6 +328,8 @@ Fleet Kit uses the variable.
 - Removing Fleet Kit leaves what it wrote in `opencode.json` and the secret
   plugin in place; the original file is in `opencode.json.before-fleet-kit.bak`.
 - `mcp` and `skills` entries are validated but not applied yet.
+- In the Russian panel, manifest check messages and error details that come
+  from bb stay in English.
 
 ## Development
 
@@ -320,7 +379,7 @@ the key must not appear in any log, configuration or project file.
 To check Fleet Kit's own update, start from an earlier release:
 
 ```sh
-FLEET_KIT_BASE_REF=fleet-kit/v0.1.0 e2e/run.sh
+FLEET_KIT_BASE_REF=fleet-kit/v0.1.2 e2e/run.sh
 e2e/x.sh 'bash /tmp/scenario.sh'
 ```
 
@@ -328,12 +387,22 @@ The container's repository then holds only that release. The scenario
 installs it, releases the working copy as a new tag (`e2e/release-current.sh`),
 sets the sync interval to five minutes, and waits for the installed version
 to update itself on its schedule, without a manual sync, then for the new
-version's first sync. `e2e/run.sh --build-arg OPENCODE_PACKAGE=opencode-ai@1.19.5`
-checks the OpenCode 1.x path.
+version's first sync. When the working copy is a new minor release, outside
+the installed `^` range, the scenario instead checks that the earlier release
+applies the manifest with only warnings for fields it does not know, moves the
+manifest to the new range, checks the "different source" warning, and
+reinstalls Fleet Kit the way the installer does; the key must survive. Then it
+checks bb's AI services and agents: all three tasks off, only `acp-opencode`
+enabled, and an agent turned on by hand turned off again with one notice.
+`e2e/run.sh --build-arg OPENCODE_PACKAGE=opencode-ai@1.19.5` checks the
+OpenCode 1.x path.
 
 `e2e/panel-smoke.mjs` clicks through the panel in headless Chromium inside the
-container — Sync now, removing the key and entering it again through the form —
-and fails on console errors or if the key shows up on the page:
+container — Sync now, removing the key and entering it again through the form,
+then the panel in Russian (English panel texts left over, buttons whose text
+overflows or sticks out, at 1280, 900, 600 and 400 px) — and fails on console errors or if the key
+shows up on the page. Stop OpenCode's `serve` processes first: Chromium and
+them do not fit in the container's 2 GB.
 
 ```sh
 docker exec -u root fleet-kit-e2e bash -c 'apt-get update -qq && apt-get install -y -qq chromium'

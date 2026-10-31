@@ -59,6 +59,8 @@ cat > build/manifest.json <<'EOF'
   "version": "1.0.0",
   "install": { "bb": "0.48.1", "opencode": "2.2.5" },
   "bb": { "minVersion": "0.48.0", "settings": { "telemetryEnabled": false, "defaultProviderId": "acp-opencode" } },
+  "aiServices": { "thread-title": "off", "commit-message": "off", "voice": "off" },
+  "agents": { "allowed": ["acp-opencode"] },
   "marketplaces": [],
   "plugins": [
     { "id": "fleet-kit", "source": "git:/home/tester/fleet.git@semver:fleet-kit/:^0.1.0", "plugin": "fleet-kit", "status": "required" },
@@ -85,4 +87,8 @@ cat > build/manifest.json <<'EOF'
   "skills": []
 }
 EOF
+# Fleet Kit's range follows the release installed first: ^0.1.0 for 0.1.x.
+fk_range="^$(echo "$fleet_kit_version" | cut -d. -f1,2).0"
+jq --arg source "git:/home/tester/fleet.git@semver:fleet-kit/:$fk_range" \
+  '(.plugins[] | select(.id == "fleet-kit") | .source) = $source' build/manifest.json > build/manifest.tmp && mv build/manifest.tmp build/manifest.json
 echo "setup done"

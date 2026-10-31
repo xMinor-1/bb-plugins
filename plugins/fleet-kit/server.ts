@@ -165,7 +165,9 @@ export default async function plugin(bb: BbPluginApi) {
     }
     if (outcome.notices.length > 0) {
       const notices = (await kv.get<Notice[]>("notices")) ?? [];
-      await kv.set("notices", [...notices, ...outcome.notices].slice(-20));
+      // One notice per id: an agent turned on by hand again does not pile up notices.
+      const fresh = outcome.notices.filter((notice) => !notices.some((existing) => existing.id === notice.id));
+      await kv.set("notices", [...notices, ...fresh].slice(-20));
     }
     const errors = outcome.report.steps.filter((step) => step.outcome === "error").length;
     bb.log.info(`sync (${trigger}): ${outcome.report.outcome}, ${outcome.report.steps.length} steps, ${errors} errors`);
