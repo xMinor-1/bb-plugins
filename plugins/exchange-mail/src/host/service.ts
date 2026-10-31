@@ -188,15 +188,15 @@ export class MailService {
 
   private async client(options: { retry?: boolean } = {}): Promise<EwsClient> {
     const connection = await this.readConnection();
-    if (!connection) throw new UserError("Mail is not connected on this machine yet. Connect it in the Exchange Mail panel.");
+    if (!connection) throw new UserError("Mail is not connected on this machine yet. Connect it in Mail → Settings in the bb sidebar.");
     let auth: HttpAuth;
     if (connection.auth === "negotiate") auth = { kind: "negotiate" };
     else {
       if (connection.blocked && !options.retry) {
-        throw new UserError(`Mail sign-in is paused: ${connection.blocked} Enter the password again in the Exchange Mail panel, or press Try once more there.`);
+        throw new UserError(`Mail sign-in is paused: ${connection.blocked} Enter the password again in Mail → Settings in the bb sidebar, or press Try once more there.`);
       }
       const stored = await this.secrets.get(PASSWORD);
-      if (!stored || !connection.user) throw new UserError("The mail password is missing on this machine. Enter it again in the Exchange Mail panel.");
+      if (!stored || !connection.user) throw new UserError("The mail password is missing on this machine. Enter it again in Mail → Settings in the bb sidebar.");
       auth = { kind: "ntlm", user: connection.user, password: Buffer.from(stored, "base64").toString("utf8") };
     }
     const block = async (message: string) => {
@@ -377,7 +377,7 @@ export class MailService {
     if (previous && input.source === "agent" && (previous.source !== "agent" || previous.threadId !== (input.threadId ?? null))) {
       throw new UserError(`Draft ${previous.id} was not prepared in this thread; save a new draft instead.`);
     }
-    if (!previous && entries.length >= MAX_DRAFTS) throw new UserError("Too many drafts are waiting. Send or discard some in the Exchange Mail panel first.");
+    if (!previous && entries.length >= MAX_DRAFTS) throw new UserError("Too many drafts are waiting. Send or discard some in Mail → Settings in the bb sidebar first.");
 
     const to = input.to?.map(parseRecipient);
     const cc = input.cc?.map(parseRecipient);

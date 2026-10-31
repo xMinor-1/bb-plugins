@@ -77,7 +77,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Exchange Web Services address",
       description:
-        "Suggested in the Exchange Mail panel so people only press Connect, for example https://mail.example.com/EWS/Exchange.asmx. Each machine keeps its own copy.",
+        "Suggested in Mail → Settings so people only press Connect, for example https://mail.example.com/EWS/Exchange.asmx. Each machine keeps its own copy.",
       default: "",
       experimental_schema: z.string().max(500),
     },
@@ -85,7 +85,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Agents allowed to read mail",
       description:
-        "One rule per line: <provider-id> <model-glob>, for example `acp-opencode corp/*`. Empty means no agent gets mail tools. Edit it in the Exchange Mail panel → Agents.",
+        "One rule per line: <provider-id> <model-glob>, for example `acp-opencode corp/*`. Empty means no agent gets mail tools. Edit it in Mail → Settings → Agents.",
       experimental_multiline: true,
       default: "",
       experimental_schema: z.string().max(8000).refine((value) => {
@@ -135,7 +135,7 @@ export default async function plugin(bb: BbPluginApi) {
       return {
         action: "reject",
         message:
-          "This thread contains mail, so only the models allowed in Exchange Mail → Agents can continue it. " +
+          "This thread contains mail, so only the models allowed in Mail → Settings → Agents can continue it. " +
           "Switch back to one of them, or start a new thread.",
       };
     }
@@ -166,7 +166,7 @@ export default async function plugin(bb: BbPluginApi) {
     const execution = await kv.get<Execution>(execKey(threadId));
     if (!execution || !policy.allows(execution.providerId, execution.model)) {
       const who = execution ? `${execution.providerId} ${execution.model ?? "(default model)"}` : "this agent";
-      return { ok: false, message: `Mail is not available to ${who}. Only the models allowed in the Exchange Mail panel → Agents can read it.` };
+      return { ok: false, message: `Mail is not available to ${who}. Only the models allowed in Mail → Settings → Agents can read it.` };
     }
     const hostId = await hostOfThread(threadId);
     if (!hostId) return { ok: false, message: "This thread has no machine to reach Exchange from yet." };

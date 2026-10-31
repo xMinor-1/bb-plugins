@@ -273,7 +273,7 @@ function credentialManagerStore(): SecretStore {
       timeoutMs: 60_000,
     });
     if (result.code !== 0 && result.code !== 3) {
-      throw new Error(`Windows Credential Manager ${action} failed (PowerShell exit ${result.code}); a policy may block Add-Type, set secretStore to "file"`);
+      throw new Error(`Windows Credential Manager ${action} failed (PowerShell exit ${result.code}); a company policy may block it — use Windows sign-in instead`);
     }
     return result;
   };

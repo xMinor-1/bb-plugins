@@ -6,7 +6,7 @@
 ## Новый плагин
 
 ```sh
-scripts/new-plugin.sh <имя> [--app]
+scripts/new-plugin.sh <имя>
 ```
 
 Скрипт создаёт `plugins/<имя>` через `bb plugin new` и регистрирует его в
