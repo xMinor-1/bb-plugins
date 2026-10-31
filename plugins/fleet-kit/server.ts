@@ -71,6 +71,8 @@ export default async function plugin(bb: BbPluginApi) {
   let nextSyncAt: string | null = null;
   /** When the last sync started; the schedule counts from it. */
   let lastSyncAt = 0;
+  /** When this process started Fleet Kit's own update; a sync meanwhile does not start another. */
+  let selfUpdateStartedAt: number | undefined;
   const controller = new AbortController();
   bb.onDispose(() => controller.abort());
 
@@ -140,7 +142,17 @@ export default async function plugin(bb: BbPluginApi) {
     const environment: NodeJS.ProcessEnv = { ...process.env };
     if (current.opencodeConfigDir !== "") environment.OPENCODE_CONFIG_DIR = current.opencodeConfigDir;
     const outcome = await runSync(
-      { sdk: bb.sdk, log: bb.log, settings: current, store, managed, signal: controller.signal, environment, bbConfigDir: process.env.OPENCODE_CONFIG_DIR },
+      {
+        sdk: bb.sdk,
+        log: bb.log,
+        settings: current,
+        store,
+        managed,
+        signal: controller.signal,
+        environment,
+        bbConfigDir: process.env.OPENCODE_CONFIG_DIR,
+        selfUpdateStartedAt,
+      },
       trigger,
     );
     await kv.set("managed", outcome.managed);
@@ -161,6 +173,7 @@ export default async function plugin(bb: BbPluginApi) {
       // Last: the update restarts Fleet Kit, and the new version syncs on start.
       try {
         await bb.sdk.plugins.experimental_startUpdate({ pluginId: SELF_ID });
+        selfUpdateStartedAt = Date.now();
       } catch (error) {
         bb.log.warn(`could not start the Fleet Kit update: ${error instanceof Error ? error.message : String(error)}`);
       }

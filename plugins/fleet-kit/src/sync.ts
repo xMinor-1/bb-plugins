@@ -46,15 +46,49 @@ export interface SelfUpdateRecord {
   at: string;
 }
 
+export interface InstallArgs {
+  source: string;
+  plugin?: string;
+  subdirectory?: string;
+}
+
+/**
+ * A plugin's switch to the source the manifest lists. bb cannot switch in
+ * place, so a switch removes the plugin first; a failed one puts the previous
+ * source back. At most SOURCE_CHANGE_LIMIT tries a day, SOURCE_RETRY_MS
+ * apart; between tries the plugin stays on its previous source untouched.
+ */
+export interface SourceChangeRecord {
+  target: string;
+  /** Where the plugin came from, to put it back when the switch fails. */
+  previous: InstallArgs;
+  /** Plain (non-secret) settings to restore after a reinstall. */
+  keep: Record<string, unknown>;
+  /** It had secret settings, which a reinstall clears. */
+  secrets: boolean;
+  attempts: number;
+  /** When the first try in the current window started. */
+  at: string;
+  /** When the last try started. */
+  last: string;
+  /** The plugin was removed and is installed from neither source yet. */
+  pending: boolean;
+}
+
 export interface ManagedState {
   plugins: Record<string, { manifestSource: string; bbSource: string }>;
   opencode: { configFile: string; directory: string; owned: string[][] } | null;
   selfUpdate: SelfUpdateRecord | null;
+  sourceChanges: Record<string, SourceChangeRecord>;
 }
 
-export const emptyManaged = (): ManagedState => ({ plugins: {}, opencode: null, selfUpdate: null });
+export const emptyManaged = (): ManagedState => ({ plugins: {}, opencode: null, selfUpdate: null, sourceChanges: {} });
 
 export const SELF_UPDATE_LIMIT = 2;
+export const SOURCE_CHANGE_LIMIT = 2;
+export const SOURCE_RETRY_MS = 60 * 60_000;
+/** A Fleet Kit update started this long ago still counts as running. */
+export const SELF_UPDATE_RUNNING_MS = 15 * 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface SyncDeps {
@@ -71,8 +105,15 @@ export interface SyncDeps {
    * plugin-contributed variables, so the model picker reads only this one.
    */
   bbConfigDir?: string | undefined;
+  /**
+   * When this process last started Fleet Kit's own update. A sync that runs
+   * while that update is still going neither counts a try nor starts another.
+   */
+  selfUpdateStartedAt?: number | undefined;
   /** For tests. */
   now?: () => number;
+  /** For tests: how long to wait for one install. */
+  installMs?: number;
 }
 
 export interface SyncOutcome {
@@ -98,13 +139,16 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const CALL_MS = 60_000;
 const INSTALL_MS = 10 * 60_000;
 
+/** The wait ended, not the call: bb may still finish it. */
+class TimedOut extends Error {}
+
 async function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${what} did not finish within ${Math.round(ms / 1000)} s`)), ms);
+        timer = setTimeout(() => reject(new TimedOut(`${what} did not finish within ${Math.round(ms / 1000)} s`)), ms);
       }),
     ]);
   } finally {
@@ -122,7 +166,7 @@ function overall(steps: Step[]): SyncReport["outcome"] {
 /** Older saved state: drop fields this version no longer keeps. */
 function loadManaged(saved: ManagedState): ManagedState {
   const copy = JSON.parse(JSON.stringify(saved)) as Partial<ManagedState> & Record<string, unknown>;
-  return { plugins: copy.plugins ?? {}, opencode: copy.opencode ?? null, selfUpdate: copy.selfUpdate ?? null };
+  return { plugins: copy.plugins ?? {}, opencode: copy.opencode ?? null, selfUpdate: copy.selfUpdate ?? null, sourceChanges: copy.sourceChanges ?? {} };
 }
 
 export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): Promise<SyncOutcome> {
@@ -287,10 +331,25 @@ async function checkSelfUpdate(deps: SyncDeps, raw: unknown, managed: ManagedSta
   }
   const [check] = await within(deps.sdk.plugins.checkUpdates({ pluginId: SELF_ID, signal: deps.signal }), 2 * CALL_MS, "Checking for a Fleet Kit update");
   if (check?.outcome !== "update-available") return false;
+  const now = (deps.now ?? Date.now)();
+  // A sync while the update runs (a rerun, a manual sync) sees the same offer:
+  // it must neither count another try nor start a second update.
+  if (deps.selfUpdateStartedAt !== undefined && now - deps.selfUpdateStartedAt < SELF_UPDATE_RUNNING_MS) {
+    steps.add("plugin", SELF_ID, "skipped", "A Fleet Kit update is already running.");
+    return false;
+  }
+  const jobs = await within(Promise.resolve(deps.sdk.plugins.experimental_updateJobs?.list({ signal: deps.signal }) ?? null), CALL_MS, "Listing update jobs").catch(() => null);
+  if (jobs === null) {
+    steps.add("plugin", SELF_ID, "warning", "Not updating Fleet Kit now: could not see whether an update is already running.");
+    return false;
+  }
+  if (jobs.some((job) => job.pluginId === SELF_ID && (job.state === "queued" || job.state === "running"))) {
+    steps.add("plugin", SELF_ID, "skipped", "A Fleet Kit update is already running.");
+    return false;
+  }
   // `version` identifies the candidate (a commit for git sources); `label` reads well.
   const target = check.candidate?.version ?? check.candidate?.label ?? "latest";
   const shown = check.candidate?.label ?? target;
-  const now = (deps.now ?? Date.now)();
   const record = managed.selfUpdate;
   const sameWindow = record !== null && record.version === target && now - Date.parse(record.at) < DAY_MS;
   const attempts = sameWindow ? record.attempts : 0;
@@ -333,13 +392,6 @@ async function applyBbSettings(deps: SyncDeps, manifest: Manifest, steps: Steps)
   } catch (error) {
     steps.add("bb", "settings", "error", errorText(error));
   }
-}
-
-function installArgs(entry: ManifestPlugin) {
-  const args: { source: string; plugin?: string; subdirectory?: string } = { source: entry.source! };
-  if (entry.plugin) args.plugin = entry.plugin;
-  if (entry.subdirectory) args.subdirectory = entry.subdirectory;
-  return args;
 }
 
 async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, notices: Notice[]): Promise<void> {
@@ -388,13 +440,205 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
 }
 
 /** Install from `args` and make sure bb installed the plugin the manifest names. */
-async function installChecked(sdk: Sdk, id: string, args: { source: string; plugin?: string; subdirectory?: string }, byId: Map<string, Installed>) {
-  const result = await within(sdk.plugins.install(args), INSTALL_MS, "Installing the plugin");
+async function installChecked(deps: SyncDeps, id: string, args: InstallArgs, byId: Map<string, Installed>) {
+  const { sdk } = deps;
+  const result = await within(sdk.plugins.install(args), deps.installMs ?? INSTALL_MS, "Installing the plugin");
   if (result.id !== id) {
     if (!byId.has(result.id)) await within(sdk.plugins.remove({ pluginId: result.id }), CALL_MS, "Removing the wrong plugin").catch(() => undefined);
     throw new Error(`the source installs the plugin "${result.id}", not "${id}"`);
   }
   return result;
+}
+
+/** Whether bb is still installing one of `sources`; null when that cannot be told. */
+async function installRunning(deps: SyncDeps, sources: string[]): Promise<boolean | null> {
+  try {
+    const jobs = await within(deps.sdk.plugins.installJobs.list({ signal: deps.signal }), CALL_MS, "Listing install jobs");
+    return jobs.some((job) =>
+      (job.state === "queued" || job.state === "running" || job.state === "cancelling") &&
+      job.target.kind === "source" && sources.includes(job.target.source));
+  } catch {
+    return null;
+  }
+}
+
+/** The plugin as bb lists it now: null when absent, undefined when the list cannot be read. */
+async function listedNow(deps: SyncDeps, id: string): Promise<Installed | null | undefined> {
+  try {
+    return (await within(deps.sdk.plugins.list(), CALL_MS, "Listing plugins")).plugins.find((plugin) => plugin.id === id) ?? null;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `installed` came from `source`: bb may list a source in its own spelling. */
+async function installedFrom(deps: SyncDeps, installed: Installed, source: string): Promise<boolean> {
+  if (installed.source === source) return true;
+  const detail = await within(deps.sdk.plugins.getSource({ pluginId: installed.id, signal: deps.signal }), CALL_MS, "Reading its source").catch(() => null);
+  return detail?.requested === source;
+}
+
+const iso = (ms: number) => new Date(ms).toISOString();
+
+/** When the next switch to `target` may start; null when it may start now. */
+function nextSourceTry(record: SourceChangeRecord | undefined, target: string, now: number): string | null {
+  if (record === undefined || record.target !== target) return null;
+  const windowStart = Date.parse(record.at);
+  if (!(now - windowStart < DAY_MS)) return null;
+  if (record.attempts >= SOURCE_CHANGE_LIMIT) return iso(windowStart + DAY_MS);
+  const gap = Date.parse(record.last) + SOURCE_RETRY_MS;
+  return now < gap ? iso(gap) : null;
+}
+
+/** Count one more try to switch to `target`. */
+function countSourceTry(record: SourceChangeRecord, target: string, now: number) {
+  const sameWindow = record.target === target && now - Date.parse(record.at) < DAY_MS;
+  record.target = target;
+  record.attempts = sameWindow ? record.attempts + 1 : 1;
+  if (!sameWindow) record.at = iso(now);
+  record.last = iso(now);
+}
+
+/** The ways to put a previous source back, the most specific first. */
+function previousForms(previous: InstallArgs, id: string): InstallArgs[] {
+  const forms: InstallArgs[] = [];
+  if (previous.subdirectory) forms.push({ source: previous.source, subdirectory: previous.subdirectory });
+  forms.push({ source: previous.source, plugin: id }, { source: previous.source });
+  return forms;
+}
+
+interface PluginContext {
+  deps: SyncDeps;
+  managed: ManagedState;
+  entry: ManifestPlugin;
+  byId: Map<string, Installed>;
+  steps: Steps;
+  notices: Notice[];
+  now: number;
+}
+
+function reinstallNotice(ctx: PluginContext, message: string) {
+  ctx.notices.push({ id: `reinstalled:${ctx.entry.id}:${randomUUID().slice(0, 8)}`, kind: "reinstalled", message, at: new Date().toISOString() });
+}
+
+async function restoreSettings(ctx: PluginContext, keep: Record<string, unknown>) {
+  if (Object.keys(keep).length === 0) return;
+  await within(ctx.deps.sdk.plugins.updateSettings({ pluginId: ctx.entry.id, values: keep as Record<string, never> }), CALL_MS, "Restoring its settings").catch((error) => {
+    ctx.steps.add("plugin", ctx.entry.id, "warning", `Could not restore its previous settings: ${errorText(error)}`);
+  });
+}
+
+/** The switch landed: the plugin is on the manifest's source. */
+async function switched(ctx: PluginContext, record: SourceChangeRecord, installed: Installed): Promise<Installed> {
+  const { entry, managed } = ctx;
+  managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: installed.source };
+  delete managed.sourceChanges[entry.id];
+  ctx.steps.add("plugin", entry.id, "changed", `Reinstalled ${installed.version} from the manifest's source.`);
+  await restoreSettings(ctx, record.keep);
+  if (record.secrets) reinstallNotice(ctx, `${entry.id} was reinstalled from a new source. Enter its secret settings again.`);
+  return installed;
+}
+
+/** The plugin is installed again, though not from the manifest's source: settings and secrets as after any reinstall. */
+async function settled(ctx: PluginContext, record: SourceChangeRecord, message: string) {
+  record.pending = false;
+  await restoreSettings(ctx, record.keep);
+  if (record.secrets) reinstallNotice(ctx, `${message} Enter its secret settings again.`);
+}
+
+/**
+ * Put the previous source back: "back" when it is installed, "running" when
+ * bb is still at it after the wait (no other form is tried then), "failed"
+ * when no form of it installs.
+ */
+async function putPreviousBack(ctx: PluginContext, record: SourceChangeRecord): Promise<"back" | "running" | "failed"> {
+  const { deps, entry } = ctx;
+  for (const args of previousForms(record.previous, entry.id)) {
+    try {
+      await installChecked(deps, entry.id, args, ctx.byId);
+    } catch (error) {
+      if (error instanceof TimedOut) return "running";
+      continue; // try the next form
+    }
+    await settled(ctx, record, `${entry.id} could not switch to its new source and was put back on the previous one.`);
+    return "back";
+  }
+  return "failed";
+}
+
+/**
+ * Install the manifest's source after the plugin was removed. A failed
+ * install is checked against what bb lists now before anything else is
+ * installed: a timed-out install may still finish, and a second source under
+ * the same id must not race it.
+ */
+async function trySwitch(ctx: PluginContext, record: SourceChangeRecord): Promise<Installed | null> {
+  const { deps, entry, steps } = ctx;
+  try {
+    return await switched(ctx, record, await installChecked(deps, entry.id, installArgs(entry), ctx.byId));
+  } catch (error) {
+    const now = await listedNow(deps, entry.id);
+    if (now === undefined) {
+      steps.add("plugin", entry.id, "warning", `Installing it from the manifest's source did not finish (${errorText(error)}), and bb's plugin list could not be read; the next sync checks again.`);
+      return null;
+    }
+    if (now !== null) {
+      if (await installedFrom(deps, now, entry.source!)) return switched(ctx, record, now);
+      await settled(ctx, record, `${entry.id} was reinstalled during a source switch.`);
+      steps.add("plugin", entry.id, "warning", `Installing it from the manifest's source did not finish (${errorText(error)}), and bb now lists it from ${now.source}; left as it is.`);
+      return null;
+    }
+    if (error instanceof TimedOut && (await installRunning(deps, [entry.source!])) !== false) {
+      steps.add("plugin", entry.id, "warning", "bb is still installing it from the manifest's source; the next sync checks the result.");
+      return null;
+    }
+    const next = nextSourceTry(record, entry.source!, ctx.now) ?? "the next sync";
+    const back = await putPreviousBack(ctx, record);
+    if (back === "back") {
+      steps.add("plugin", entry.id, "error", `Could not install it from the manifest's source (${errorText(error)}); the previous source is back. The next try is after ${next}.`);
+      return null;
+    }
+    if (back === "running") {
+      steps.add("plugin", entry.id, "error", `Could not install it from the manifest's source (${errorText(error)}); bb is still putting the previous source back, and the next sync checks the result.`);
+      return null;
+    }
+    throw new Error(`Could not install it from the manifest's source, and the previous source could not be put back: ${errorText(error)}`);
+  }
+}
+
+/** Start a switch of an installed plugin to the manifest's source. */
+async function startSwitch(ctx: PluginContext, current: Installed, record: SourceChangeRecord | undefined): Promise<Installed | null> {
+  const { deps, entry } = ctx;
+  const { sdk } = deps;
+  const before = await within(sdk.plugins.getSettings({ pluginId: entry.id, signal: deps.signal }), CALL_MS, "Reading its settings").catch(() => null);
+  const detail = await within(sdk.plugins.getSource({ pluginId: entry.id, signal: deps.signal }), CALL_MS, "Reading its source").catch(() => null);
+  const keep: Record<string, unknown> = {};
+  let secrets = false;
+  for (const [key, descriptor] of Object.entries(before?.schema ?? {})) {
+    const value = before?.values?.[key];
+    if ((descriptor as { secret?: boolean }).secret) {
+      if (isSet(value)) secrets = true;
+      continue;
+    }
+    if (value !== undefined && value !== null) keep[key] = value;
+  }
+  const previous: InstallArgs = { source: current.source };
+  if (detail?.subdirectory) previous.subdirectory = detail.subdirectory;
+  const next: SourceChangeRecord = record ?? { target: entry.source!, previous, keep, secrets, attempts: 0, at: iso(ctx.now), last: iso(ctx.now), pending: false };
+  Object.assign(next, { previous, keep, secrets });
+  countSourceTry(next, entry.source!, ctx.now);
+  ctx.managed.sourceChanges[entry.id] = next;
+
+  await within(sdk.plugins.remove({ pluginId: entry.id }), CALL_MS, "Removing the plugin");
+  next.pending = true;
+  return trySwitch(ctx, next);
+}
+
+function installArgs(entry: ManifestPlugin): InstallArgs {
+  const args: InstallArgs = { source: entry.source! };
+  if (entry.plugin) args.plugin = entry.plugin;
+  if (entry.subdirectory) args.subdirectory = entry.subdirectory;
+  return args;
 }
 
 async function syncOnePlugin(
@@ -407,82 +651,91 @@ async function syncOnePlugin(
   notices: Notice[],
 ) {
   const { sdk } = deps;
-  let current = byId.get(entry.id);
+  const ctx: PluginContext = { deps, managed, entry, byId, steps, notices, now: (deps.now ?? Date.now)() };
+  let current: Installed | null | undefined = byId.get(entry.id);
   if (current !== undefined && isBuiltin(current)) {
     steps.add("plugin", entry.id, "error", "This id belongs to a plugin bundled with bb; pick another id.");
     return;
   }
+  const record = managed.sourceChanges[entry.id];
 
-  if (current !== undefined && !sameSource(entry.id, entry.source!, current, managed)) {
+  if (current !== undefined && sameSource(entry.id, entry.source!, current, managed)) {
+    if (record !== undefined) {
+      // A switch that timed out earlier finished after all.
+      if (record.pending) current = await switched(ctx, record, current);
+      else delete managed.sourceChanges[entry.id];
+    }
+  } else if (current !== undefined) {
     // Same id from another source: bb cannot switch sources in place.
-    const previous = current;
-    const before = await within(sdk.plugins.getSettings({ pluginId: entry.id, signal: deps.signal }), CALL_MS, "Reading its settings").catch(() => null);
-    const hadSecrets =
-      before !== null &&
-      Object.entries(before.schema ?? {}).some(([key, descriptor]) => (descriptor as { secret?: boolean }).secret && isSet(before.values?.[key]));
-    const restore: Record<string, unknown> = {};
-    for (const [key, descriptor] of Object.entries(before?.schema ?? {})) {
-      if ((descriptor as { secret?: boolean }).secret) continue;
-      const value = before?.values?.[key];
-      if (value !== undefined && value !== null) restore[key] = value;
-    }
-    const putBack = async () => {
-      if (Object.keys(restore).length === 0) return;
-      await within(sdk.plugins.updateSettings({ pluginId: entry.id, values: restore as Record<string, never> }), CALL_MS, "Restoring its settings").catch((error) => {
-        steps.add("plugin", entry.id, "warning", `Could not restore its previous settings: ${errorText(error)}`);
-      });
-    };
-
-    await within(sdk.plugins.remove({ pluginId: entry.id }), CALL_MS, "Removing the plugin");
-    let result: Installed;
-    try {
-      result = await installChecked(sdk, entry.id, installArgs(entry), byId);
-    } catch (error) {
-      // Put the previous source back rather than leave the machine without the plugin.
-      const attempts = [{ source: previous.source, plugin: entry.id }, { source: previous.source }];
-      for (const args of attempts) {
-        try {
-          const back = await installChecked(sdk, entry.id, args, byId);
-          managed.plugins[entry.id] = { manifestSource: back.source, bbSource: back.source };
-          await putBack();
-          steps.add("plugin", entry.id, "error", `Could not install it from the manifest's source (${errorText(error)}); the previous source is back.`);
-          return;
-        } catch {
-          // try the next form
-        }
+    if (record?.pending && (await installedFrom(deps, current, entry.source!))) {
+      current = await switched(ctx, record, current);
+    } else {
+      // An install that timed out earlier put some source in place after all.
+      if (record?.pending) await settled(ctx, record, `${entry.id} was reinstalled during a source switch.`);
+      const wait = nextSourceTry(record, entry.source!, ctx.now);
+      if (wait !== null) {
+        // Between tries the plugin stays on its previous source, untouched.
+        steps.add("plugin", entry.id, "warning", `Kept on its previous source: switching to the manifest's source failed ${record!.attempts} time(s); the next try is after ${wait}.`);
+        return;
       }
-      throw new Error(`Could not install it from the manifest's source, and the previous source could not be put back: ${errorText(error)}`);
+      current = await startSwitch(ctx, current, record);
+      if (current === null) return;
     }
-    managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: result.source };
-    steps.add("plugin", entry.id, "changed", `Reinstalled ${result.version} from the manifest's source.`);
-    await putBack();
-    if (hadSecrets) {
-      notices.push({
-        id: `reinstalled:${entry.id}:${randomUUID().slice(0, 8)}`,
-        kind: "reinstalled",
-        message: `${entry.id} was reinstalled from a new source. Enter its secret settings again.`,
-        at: new Date().toISOString(),
-      });
+  } else if (record?.pending) {
+    // Removed for a switch that has not landed: never start a second install over a running one.
+    const running = await installRunning(deps, [entry.source!, record.target, record.previous.source]);
+    if (running !== false) {
+      steps.add("plugin", entry.id, "warning", running ? "bb is still installing it; the next sync checks the result." : "Could not see whether bb is still installing it; the next sync checks again.");
+      return;
     }
-    current = result;
-  } else if (current === undefined) {
-    const result = await installChecked(sdk, entry.id, installArgs(entry), byId);
-    managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: result.source };
-    steps.add("plugin", entry.id, "changed", `Installed ${result.version}.`);
-    current = result;
+    const wait = nextSourceTry(record, entry.source!, ctx.now);
+    if (wait !== null) {
+      const back = await putPreviousBack(ctx, record);
+      if (back === "failed") throw new Error("Its previous source could not be put back.");
+      steps.add(
+        "plugin",
+        entry.id,
+        "warning",
+        back === "back"
+          ? `Put back on its previous source: switching to the manifest's source failed ${record.attempts} time(s); the next try is after ${wait}.`
+          : "bb is still putting its previous source back; the next sync checks the result.",
+      );
+      return;
+    }
+    countSourceTry(record, entry.source!, ctx.now);
+    current = await trySwitch(ctx, record);
+    if (current === null) return;
   } else {
-    if (managed.plugins[entry.id] === undefined) managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: current.source };
-    if (!current.enabled) {
-      current = await within(sdk.plugins.enable({ pluginId: entry.id }), CALL_MS, "Enabling the plugin");
-      steps.add("plugin", entry.id, "changed", "Enabled.");
+    if (record !== undefined) delete managed.sourceChanges[entry.id];
+    if ((await installRunning(deps, [entry.source!])) === true) {
+      steps.add("plugin", entry.id, "warning", "bb is still installing it; the next sync checks the result.");
+      return;
     }
-    // Pinned sources answer "pinned"; tracking ones may have an update.
-    const [check] = await within(sdk.plugins.checkUpdates({ pluginId: entry.id, signal: deps.signal }), 2 * CALL_MS, "Checking for an update");
-    if (check?.outcome === "update-available") {
-      const update = await within(sdk.plugins.applyUpdate({ pluginId: entry.id }), INSTALL_MS, "Updating the plugin");
-      if (update.outcome === "updated") steps.add("plugin", entry.id, "changed", `Updated to ${update.to?.label ?? "the latest compatible version"}.`);
-      else steps.add("plugin", entry.id, "warning", `The update ${update.outcome === "rolled-back" ? "failed and was rolled back" : "did not apply"}.`);
+    try {
+      current = await installChecked(deps, entry.id, installArgs(entry), byId);
+    } catch (error) {
+      if (error instanceof TimedOut) {
+        steps.add("plugin", entry.id, "warning", `${errorText(error)}; the next sync checks the result.`);
+        return;
+      }
+      throw error;
     }
+    managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: current.source };
+    steps.add("plugin", entry.id, "changed", `Installed ${current.version}.`);
+  }
+
+  if (current === undefined || current === null) return;
+  if (managed.plugins[entry.id] === undefined) managed.plugins[entry.id] = { manifestSource: entry.source!, bbSource: current.source };
+  if (!current.enabled) {
+    current = await within(sdk.plugins.enable({ pluginId: entry.id }), CALL_MS, "Enabling the plugin");
+    steps.add("plugin", entry.id, "changed", "Enabled.");
+  }
+  // Pinned sources answer "pinned"; tracking ones may have an update.
+  const [check] = await within(sdk.plugins.checkUpdates({ pluginId: entry.id, signal: deps.signal }), 2 * CALL_MS, "Checking for an update");
+  if (check?.outcome === "update-available") {
+    const update = await within(sdk.plugins.applyUpdate({ pluginId: entry.id }), INSTALL_MS, "Updating the plugin");
+    if (update.outcome === "updated") steps.add("plugin", entry.id, "changed", `Updated to ${update.to?.label ?? "the latest compatible version"}.`);
+    else steps.add("plugin", entry.id, "warning", `The update ${update.outcome === "rolled-back" ? "failed and was rolled back" : "did not apply"}.`);
   }
 
   await applyPluginConfig(deps, manifest, entry, steps);

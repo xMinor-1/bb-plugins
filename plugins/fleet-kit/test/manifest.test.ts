@@ -51,6 +51,11 @@ describe("manifest check", () => {
     ["a secret inside the key", (m: Record<string, any>) => { m.opencode.providers.corp.settings.apiKey = "Key {secret:gateway-key}"; }, "settings.apiKey: {secret:...} is allowed only"],
     ["an {env:} substitution", (m: Record<string, any>) => { m.opencode.providers.corp.settings.headers = { "X-User": "{env:USER}" }; }, "{env:...} and {file:...} are not allowed"],
     ["a {file:} substitution", (m: Record<string, any>) => { m.plugins[1].config.greeting = "{file:~/.ssh/id_rsa}"; }, "{env:...} and {file:...} are not allowed"],
+    ["an {env:} substitution in a header name", (m: Record<string, any>) => { m.opencode.providers.corp.settings.headers = { "x-{env:GITHUB_TOKEN}": "1" }; }, "settings.headers.x-{env:GITHUB_TOKEN}: substitutions such as {env:...}"],
+    ["a {file:} substitution in a model name", (m: Record<string, any>) => { m.opencode.providers.corp.models["{file:~/.ssh/id_rsa}"] = { name: "x" }; }, "models.{file:~/.ssh/id_rsa}: substitutions such as"],
+    ["a {file:} substitution in a plugin setting name", (m: Record<string, any>) => { m.plugins[1].config["{file:~/.ssh/id_rsa}"] = "x"; }, "plugins.1.config.{file:~/.ssh/id_rsa}"],
+    ["a provider package from npm", (m: Record<string, any>) => { m.opencode.providers.corp.package = "opencode-evil-provider"; }, "is not an OpenCode provider"],
+    ["a provider package under a look-alike scope", (m: Record<string, any>) => { m.opencode.providers.corp.package = "@opencode/ai/providers/../../evil"; }, "is not an OpenCode provider"],
     ["an npm source", (m: Record<string, any>) => { m.plugins[1].source = "npm:notes"; }, "use a git:https:// source"],
     ["a path source", (m: Record<string, any>) => { m.plugins[1].source = "path:/tmp/notes"; }, "use a git:https:// source"],
     ["a local git source", (m: Record<string, any>) => { m.plugins[1].source = "git:/srv/plugins.git"; }, "use a git:https:// source"],
@@ -76,6 +81,13 @@ describe("manifest check", () => {
     manifest.opencode.providers.corp.settings.baseURL = "http://127.0.0.1:4010/v1";
     expect(checkManifest(manifest, { allowDevSources: true }).errors).toEqual([]);
     expect(checkManifest(manifest).manifest).toBeNull();
+  });
+
+  it("accepts another provider package only with allowDevSources", () => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    manifest.opencode.providers.corp.package = "file:/srv/provider";
+    expect(checkManifest(manifest, { allowDevSources: true }).errors).toEqual([]);
+    expect(checkManifest(manifest).errors.join("\n")).toContain("need allowDevSources");
   });
 
   it("accepts plugin sources with spaces in a semver range", () => {
