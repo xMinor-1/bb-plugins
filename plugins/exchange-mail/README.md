@@ -13,6 +13,9 @@ confirm in a system window on your computer.
 - The address book: names from the organization's directory are suggested in
   To and Cc as you type; when an agent finds several people with a similar
   name, a card in the thread shows them for you to choose.
+- **Calendar** page: your week from Monday, recurring meetings shown on every
+  day they happen, moved and cancelled ones marked. Agents can ask what is on
+  a day and when you are free. Read only: meetings are made in Outlook.
 - Mail stays in Exchange. bb keeps no copy; drafts live in your Drafts folder,
   so you also see them in Outlook.
 
@@ -93,6 +96,67 @@ agent that may run shell commands can therefore see the list and pick someone
 itself. What protects you is the send: nothing leaves without your click and
 the system window, and both list every recipient.
 
+## Calendar
+
+- The **Calendar** page in the sidebar (also a tab of the Mail page) shows a
+  week, Monday to Sunday, in your browser's time zone. Every occurrence of a
+  recurring meeting is on its own day (EWS `CalendarView` expands the series),
+  and each card says what you need to know: *recurring*, *recurring, moved*
+  for an occurrence that was moved or changed, *cancelled* (struck through),
+  *tentative*, *free*, *away*, *you declined*, *not answered*, *private*.
+  A click shows the organizer and who is invited. Arrows switch the week,
+  **Today** comes back.
+- `calendar_events` gives agents the meetings of a period — "what do I have
+  tomorrow": time, subject, place, organizer, how many are invited (not who),
+  your response, and whether it was cancelled or moved. Dates are read and
+  written in the time zone of the machine with the mailbox.
+- **Private events** (marked private in Outlook) reach agents and other
+  plugins as their time and free/busy only: no subject, place or people. The
+  page shows them to you in full.
+- `calendar_free_time` gives the free stretches of working hours (09:00–18:00
+  and 30 minutes by default, weekdays only unless asked) — "when am I free on
+  Thursday". Busy, tentative and away events take time; cancelled, declined
+  and free ones do not. It knows your own calendar only, not other people's.
+- The calendar is guarded like mail: only allowed models get the tools, and a
+  thread that read it is marked the same way.
+- Nothing creates, answers or moves a meeting: there is no such tool or
+  button. One request reads 500 events and 62 days at most (31 for free
+  time; an hour more when the clocks go back inside the period); the page and
+  the agent say when the calendar had more. A subject, place or organizer name
+  is kept up to 1000 characters, the list of invitees up to 4000.
+
+### The calendar for other plugins
+
+A plugin such as a personal board can show today's meetings. It calls
+`calendarEvents` (contract in `src/shared/calendar-rpc.ts`):
+
+```ts
+const answer = await bb.sdk.plugins.callRpc({
+  pluginId: "exchange-mail",
+  method: "calendarEvents",
+  input: {
+    start: "2026-11-02T00:00:00+03:00", // ISO with a zone (Z or ±hh:mm)
+    end: "2026-11-03T00:00:00+03:00",   // at most 62 days after start
+    // hostId: optional; by default the machine the Mail page used last
+  },
+});
+// { ok: true, more: false, events: [{ id, subject, start, end, allDay, location,
+//   showAs, myResponse, kind: "single" | "occurrence" | "exception", cancelled, private }] }
+// { ok: false, reason: "not-allowed" | "no-machine" | "offline" | "not-connected" | "unavailable", message }
+```
+
+- Only plugins listed in the `calendarPlugins` setting get an answer; the rest
+  get `not-allowed`. The list is empty until you fill it.
+- They get less than the page: times, subjects and places, no organizer and no
+  attendees. A private event comes with the subject `"Private"` and no place.
+  Keep even its time out of anything shared.
+- `start` and `end` are UTC. An all-day event runs from midnight to midnight of
+  the mailbox's time zone; to place it in another zone, take the local midnight
+  nearest to `start`, as the Calendar page does.
+- A plugin on the list takes on the rule the mail tools follow: the calendar
+  goes to no model outside the allowed agents. List only plugins you trust
+  with that.
+
 ## Sending is always a person's click
 
 - Agents have tools to list, search and read mail and to save drafts. There is
@@ -126,7 +190,7 @@ that in bb, not in the agent:
   whose provider and model match the allow-list. Other agents never see them.
 - Every tool call re-checks the model the thread is running *now*, so switching
   models mid-thread does not keep the tools working.
-- A thread that has received mail or address book entries is marked. bb refuses to send that thread —
+- A thread that has received mail, address book entries or the calendar is marked. bb refuses to send that thread —
   or a fork of it, or a fork of a fork — to a model outside the list, because
   the whole history, mail included, would go to that model. Marks stay when a
   thread is deleted: its forks still hold its mail.
@@ -142,7 +206,7 @@ acp-opencode corp/*
 **What this does not cover.** bb tells a plugin nothing about who calls its
 panel actions: the panel, the `bb` CLI and an agent with a shell all look the
 same, with no thread or model attached. So an agent that may run shell
-commands can read mail with `bb plugin rpc call`, whatever its model, or reach
+commands can read mail and the calendar with `bb plugin rpc call`, whatever its model, or reach
 Exchange itself with `curl` under the user's Windows sign-in. It cannot send:
 that takes the system window. Other plugins are refused. Ship only approved
 agents in a bb build for company mail, and keep shell commands of agents that
@@ -194,19 +258,23 @@ carefully:
 | `mail_conversation` | all messages of a message's conversation in Inbox and Sent, oldest first |
 | `mail_find_person` | look someone up in the address book; with several matches the user chooses in the thread |
 | `mail_draft` | save a reply, reply-all, forward or new message as a draft, or revise one |
+| `calendar_events` | meetings of a period, recurring ones expanded: time, subject, place, organizer, number invited, response, cancelled or moved; private ones as time only |
+| `calendar_free_time` | free stretches of working hours in a period, from the user's own calendar |
 
 ## Settings
 
-Both can be set ahead of time by whoever prepares bb for a team:
+All can be set ahead of time by whoever prepares bb for a team:
 
 | Key | Meaning |
 | --- | --- |
 | `ewsUrl` | Exchange Web Services address suggested on the Connect screen |
 | `allowedModels` | the allow-list above |
+| `calendarPlugins` | plugin ids that may read the calendar (see above); empty: none |
 
 ```sh
 bb plugin config exchange-mail set ewsUrl "https://mail.example.com/EWS/Exchange.asmx"
 bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
+bb plugin config exchange-mail set calendarPlugins "sticker-note"
 ```
 
 ## How it works
@@ -223,7 +291,8 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
   stores no mail.
 - Send is decided on the host: `src/host/confirm.ts` draws the system window,
   `src/host/service.ts` checks the change key before and after it.
-- EWS operations used: `GetFolder`, `FindItem` (also by `ConversationId`),
+- EWS operations used: `GetFolder`, `FindItem` (also by `ConversationId`, and
+  with a `CalendarView` for the calendar),
   `GetItem` (plain text, or HTML with `TextBody` for the panel), `GetAttachment`,
   `ResolveNames` (address book, with full contact data),
   `CreateItem` with `SaveOnly` (drafts only: message, reply, reply all,
@@ -256,7 +325,9 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
 ## Not yet
 
 - Agents read text files and PDF only; Word, Excel and pictures stay for people.
-- No shared mailboxes, calendar or Exchange Online (OAuth).
+- No shared mailboxes or Exchange Online (OAuth).
+- The calendar is read only: meetings are created, answered and moved in
+  Outlook. Other people's free/busy (the scheduling assistant) is not read.
 - The address book finds people by the start of a name or an address, as the
   To box in Outlook does; it does not browse the directory or show
   photos and phone numbers.
@@ -270,8 +341,8 @@ EWS_STUB_URL=$(test/stub/run.sh) npm run test:e2e   # against the EWS stub in do
 bb plugin build .
 ```
 
-`test/stub/ews_stub.py` is a small EWS stand-in with NTLMv2 sign-in and a
-synthetic mailbox; it also checks the element order of the requests. The
+`test/stub/ews_stub.py` is a small EWS stand-in with NTLMv2 sign-in, a
+synthetic mailbox and calendar; it also checks the element order of the requests. The
 end-to-end tests replace the system window with a stand-in.
 
 The plugin refuses plain `http://` addresses. To point a development bb at the

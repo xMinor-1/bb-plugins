@@ -1,5 +1,6 @@
 // Reading EWS SOAP answers. Namespaces are dropped; every value stays a string.
 import { XMLParser } from "fast-xml-parser";
+import { CALENDAR_ATTENDEES_MAX, CALENDAR_TEXT_MAX } from "../../shared/limits.js";
 import { normalizeText } from "../../shared/mail-text.js";
 import { isAddress } from "../../shared/recipients.js";
 import type { Address, ItemRef } from "./soap.js";
@@ -398,4 +399,60 @@ export function parseResolveNames(xmlText: string): { people: ParsedPerson[]; to
     });
   }
   return { people, total: Number(text(set?.["@TotalItemsInView"])) || people.length };
+}
+
+/** One meeting or appointment, or one occurrence of a recurring one. Times are ISO strings as Exchange gives them (UTC). */
+export interface ParsedEvent {
+  readonly item: ItemRef;
+  readonly subject: string;
+  readonly start: string;
+  readonly end: string;
+  readonly allDay: boolean;
+  readonly location: string | null;
+  readonly organizer: Address | null;
+  /** Organizer, Accept, Tentative, Decline, NoResponseReceived, Unknown. */
+  readonly myResponse: string;
+  /** Free, Tentative, Busy, OOF, WorkingElsewhere, NoData. */
+  readonly showAs: string;
+  /** Single, Occurrence, Exception, RecurringMaster. */
+  readonly type: string;
+  readonly cancelled: boolean;
+  readonly isMeeting: boolean;
+  readonly recurring: boolean;
+  /** Normal, Personal, Private, Confidential. */
+  readonly sensitivity: string;
+  readonly displayTo: string;
+  readonly displayCc: string;
+}
+
+/** At most `max` characters, the cut marked with an ellipsis. */
+const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
+
+export function parseCalendarView(xmlText: string): { events: ParsedEvent[]; last: boolean } {
+  const message = responseMessage(xmlText, "FindItem");
+  const root = asNode(message.RootFolder);
+  const events = items(root?.Items).map(({ node }): ParsedEvent => {
+    const organizer = address(node.Organizer);
+    return {
+      item: ref(node.ItemId),
+      subject: clip(text(node.Subject), CALENDAR_TEXT_MAX),
+      start: text(node.Start),
+      end: text(node.End),
+      allDay: bool(node.IsAllDayEvent),
+      location: clip(text(node.Location).trim(), CALENDAR_TEXT_MAX) || null,
+      // An organizer inside the organization may come with an X.500 address only: keep the name.
+      organizer: organizer ? { name: organizer.name === null ? null : clip(organizer.name, CALENDAR_TEXT_MAX), email: smtp(organizer.email) ?? "" } : null,
+      myResponse: text(node.MyResponseType) || "Unknown",
+      showAs: text(node.LegacyFreeBusyStatus) || "Busy",
+      type: text(node.CalendarItemType) || "Single",
+      cancelled: bool(node.IsCancelled),
+      isMeeting: bool(node.IsMeeting),
+      recurring: bool(node.IsRecurring),
+      sensitivity: text(node.Sensitivity) || "Normal",
+      // Each half may fill the list alone; toEvent joins them and cuts again.
+      displayTo: clip(text(node.DisplayTo), CALENDAR_ATTENDEES_MAX),
+      displayCc: clip(text(node.DisplayCc), CALENDAR_ATTENDEES_MAX),
+    };
+  });
+  return { events: events.filter((event) => event.start && event.end), last: text(root?.["@IncludesLastItemInRange"]).toLowerCase() !== "false" };
 }

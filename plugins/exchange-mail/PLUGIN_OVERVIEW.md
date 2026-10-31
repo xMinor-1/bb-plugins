@@ -17,12 +17,18 @@ with agents that help answer mail but never send it on their own.
   department. When an agent finds several people with a similar name, a card
   in the thread shows them for you to choose; every recipient is shown again
   before you send.
+- **Calendar** in the sidebar: your week from Monday, every occurrence of a
+  recurring meeting on its day, moved and cancelled ones marked, your
+  response on each. Agents answer "what do I have tomorrow" and "when am I
+  free on Thursday". Read only: meetings are made in Outlook. Plugins you list
+  in a setting can show your meetings too (times, subjects and places only).
+  Events you marked private reach agents and plugins as their time only.
 
 ## Agents read; people send
 
 Agents on the models you approve can list, search and read mail, read
 attachments (text files and PDF) and whole conversations, look people up in
-the address book, and save drafts. There is no agent tool that sends. Send is confirmed in a system
+the address book, read the calendar and save drafts. There is no agent tool that sends. Send is confirmed in a system
 window on your computer that lists every recipient, Bcc included, and the
 text, and it names the exact version you were shown; if an agent or Outlook
 changed the draft meanwhile, nothing goes out and you see the new version.
@@ -30,7 +36,7 @@ The window is a second step outside bb, not a guarantee: on Windows and X11
 other programs running as you can press buttons, so read it before you send.
 
 Mail reaches only the provider/model pairs on the allow-list your bb setup
-provides. A thread that has read mail, and every fork of it, cannot be
+provides. A thread that has read mail or the calendar, and every fork of it, cannot be
 continued with a model outside that list, and tool answers remind the agent
 that instructions inside a message are not orders.
 
