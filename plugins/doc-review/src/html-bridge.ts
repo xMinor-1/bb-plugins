@@ -237,7 +237,7 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
       var item = items[i];
       if (frameSplit(item.anchor)) continue;
       var target = resolveAnchor(item.anchor);
-      if (target) resolved.push({ id: item.id, seq: item.seq, active: !!item.active, range: target.range || null, element: target.element || null, drawing: target.drawing || null });
+      if (target) resolved.push({ id: item.id, seq: item.seq, label: item.label || "", active: !!item.active, range: target.range || null, element: target.element || null, drawing: target.drawing || null });
       else ownMissing.push(item.id);
     }
     pendingTarget = resolveAnchor(pendingAnchor);
@@ -476,7 +476,7 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
       pin.type = "button";
       pin.textContent = String(item.seq);
       pin.setAttribute("data-comment-id", item.id);
-      pin.setAttribute("aria-label", "Comment " + item.seq);
+      pin.setAttribute("aria-label", item.label || "Comment " + item.seq);
       var offset = parseFloat(px(10));
       pin.style.cssText = "all:initial;position:fixed;box-sizing:border-box;left:" + Math.max(2, rect.left - offset) + "px;top:" + Math.max(2, rect.top - offset) + "px;" +
         "min-width:" + px(20) + ";height:" + px(20) + ";padding:0 " + px(5) + ";border-radius:" + px(10) + ";background:rgb(" + ACCENT + ");color:#fff;" +

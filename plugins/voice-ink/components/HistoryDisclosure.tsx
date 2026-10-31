@@ -8,6 +8,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 
 import { Icon } from "@/components/ui/icon";
+import { describeStoredFailure } from "@/lib/failures";
+import { defineMessages, intlLocale, useLang, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { PANEL_PATH, type HistoryEntry } from "../contract";
 import type { rpcContract } from "../server";
@@ -16,16 +18,40 @@ import type { rpcContract } from "../server";
 const RECENT_COUNT = 6;
 const POLL_MS = 5_000;
 
-function formatWhen(createdAt: number): string {
+const messages = defineMessages(
+  {
+    title: "Recent dictations",
+    openHistory: "Open History",
+    loading: "Loading…",
+    empty: "Nothing dictated yet.",
+    running: "still transcribing",
+    partialHint: "Only part of this reached the composer.",
+    partial: "partial",
+  },
+  {
+    title: "Последние диктовки",
+    openHistory: "Открыть историю",
+    loading: "Загружаю…",
+    empty: "Пока ничего не надиктовано.",
+    running: "ещё распознаётся",
+    partialHint: "В поле ввода попала только часть текста.",
+    partial: "частично",
+  },
+);
+
+function formatWhen(createdAt: number, lang: Lang): string {
+  const locale = intlLocale(lang);
   const date = new Date(createdAt);
   const today = new Date();
   const sameDay = date.toDateString() === today.toDateString();
-  const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const time = date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
   if (sameDay) return time;
-  return `${date.toLocaleDateString(undefined, { day: "numeric", month: "short" })}, ${time}`;
+  return `${date.toLocaleDateString(locale, { day: "numeric", month: "short" })}, ${time}`;
 }
 
 export function HistoryDisclosure({ dismiss }: { dismiss: () => void }) {
+  const lang = useLang();
+  const t = messages[lang];
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
@@ -63,23 +89,23 @@ export function HistoryDisclosure({ dismiss }: { dismiss: () => void }) {
   return (
     <div className="flex w-full flex-col gap-1 p-1">
       <div className="flex items-center justify-between px-2 pb-1 pt-0.5">
-        <span className="text-xs font-medium text-foreground">Recent dictations</span>
+        <span className="text-xs font-medium text-foreground">{t.title}</span>
         <button
           className="cursor-pointer text-[11px] text-muted-foreground transition-colors hover:text-foreground"
           onClick={() => open()}
           type="button"
         >
-          Open History
+          {t.openHistory}
         </button>
       </div>
 
       {error !== null ? (
         <p className="px-2 pb-1 text-[11px] text-destructive">{error}</p>
       ) : entries === null ? (
-        <p className="px-2 pb-1 text-[11px] text-muted-foreground">Loading…</p>
+        <p className="px-2 pb-1 text-[11px] text-muted-foreground">{t.loading}</p>
       ) : entries.length === 0 ? (
         <p className="px-2 pb-1 text-[11px] text-muted-foreground">
-          Nothing dictated yet.
+          {t.empty}
         </p>
       ) : (
         <ul className="flex flex-col">
@@ -100,26 +126,26 @@ export function HistoryDisclosure({ dismiss }: { dismiss: () => void }) {
                 >
                   <span className="flex items-center gap-1.5">
                     <span className="text-[11px] text-muted-foreground">
-                      {formatWhen(entry.createdAt)}
+                      {formatWhen(entry.createdAt, lang)}
                     </span>
                     {entry.status === "running" ? (
                       <Icon
-                        aria-label="still transcribing"
+                        aria-label={t.running}
                         className="size-3 animate-spin text-muted-foreground"
                         name="Loading"
                       />
                     ) : cutShort ? (
                       <span
                         className="text-[10px] text-primary"
-                        title="Only part of this reached the composer."
+                        title={t.partialHint}
                       >
-                        partial
+                        {t.partial}
                       </span>
                     ) : null}
                   </span>
                   <span className="line-clamp-2 text-xs text-foreground">
                     {entry.text.replace(/\s+/g, " ").trim() ||
-                      (entry.status === "failed" ? "Recognition failed." : "…")}
+                      (entry.status === "failed" ? describeStoredFailure(null) : "…")}
                   </span>
                 </button>
               </li>

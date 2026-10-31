@@ -10,11 +10,75 @@
 //
 // Plain ES2019 kept as a string, like the bridge. It expects `bb` in scope.
 
+/**
+ * The controls' texts in English. The toolbar action passes the panel's
+ * language in `activate` and with every state; `{tag}` stands for an
+ * element's tag.
+ */
+export const WEB_UI_TEXT = {
+  replyPlaceholder: "Answer the agent",
+  statusDraft: "Draft",
+  statusSent: "Sent",
+  statusReplied: "Answered",
+  statusResolved: "Done",
+  sentToChat: "Sent to the chat",
+  element: "Element <{tag}>",
+  drawing: "Drawing",
+  text: "Text",
+  page: "Page",
+  cancel: "Cancel",
+  modeText: "Text",
+  modeTextTitle: "Select text to comment on it",
+  modeElement: "Element",
+  modeElementTitle: "Click a block, button, or picture to comment on it",
+  modeDraw: "Draw",
+  modeDrawTitle: "Draw over the page, then comment on the drawing",
+  pen: "Pen",
+  line: "Line",
+  arrow: "Arrow",
+  box: "Box",
+  comments: "Comments",
+  sending: "Sending…",
+  send: "Send",
+  sendTitle: "Send every draft on this site to the chat",
+  stop: "Stop reviewing this page",
+  placeholder: "What should change here?",
+  comment: "Comment",
+  agent: "Agent",
+  you: "You",
+  youNotSent: "You, not sent",
+  discardReply: "Discard reply",
+  delete: "Delete",
+  deleteComment: "Delete comment",
+  drawingPicture: "Drawing with a picture of the page",
+  elementGone: "The element is not on the page now.",
+  quoteGone: "The quoted text is not on the page now.",
+  reply: "Reply",
+  empty: "No comments on this page yet. Select text, or switch to Element or Draw.",
+  listTitle: "Comments on this page",
+  close: "Close",
+  undo: "Undo",
+  undoTitle: "Take back the last stroke (⌘Z)",
+  clearAll: "Clear all",
+  clear: "Clear",
+  clearTitle: "Remove the whole drawing",
+  /** A pin's name for screen readers; `{n}` is the comment's number. */
+  pin: "Comment {n}",
+};
+export type WebUiText = typeof WEB_UI_TEXT;
+
 export const WEB_UI_SCRIPT = String.raw`(function () {
   "use strict";
   if (window.__docReviewWeb) return;
-  var REPLY_PLACEHOLDER = "Answer the agent";
-  var STATUS = { draft: "Draft", sent: "Sent", replied: "Answered", resolved: "Done" };
+  var T = ${JSON.stringify(WEB_UI_TEXT)};
+  /** Takes the texts the plugin sends, in the panel's language. */
+  function useText(text) {
+    if (!text || typeof text !== "object") return;
+    for (var key in T) if (typeof text[key] === "string") T[key] = text[key];
+  }
+  function statusText(status) {
+    return status === "draft" ? T.statusDraft : status === "sent" ? T.statusSent : status === "replied" ? T.statusReplied : T.statusResolved;
+  }
   var ORDER = { replied: 0, draft: 1, sent: 2, resolved: 3 };
   var host = { send: fromBridge, receive: null };
   window.__docReviewHost = host;
@@ -67,7 +131,7 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
       items: state.active ? state.comments.filter(function (comment) {
         return isHtmlAnchor(comment.anchor) && (comment.status !== "resolved" || comment.id === state.activeId);
       }).map(function (comment) {
-        return { id: comment.id, seq: comment.seq, active: comment.id === state.activeId, anchor: comment.anchor };
+        return { id: comment.id, seq: comment.seq, label: T.pin.replace("{n}", String(comment.seq)), active: comment.id === state.activeId, anchor: comment.anchor };
       }) : []
     });
     toBridge({ type: "pending", anchor: state.active && state.composer ? state.composer.anchor : null });
@@ -182,7 +246,7 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
     render();
     ask({ type: "send" }, function (reply) {
       state.sending = false;
-      flash(reply.error ? reply.error : "Sent to the chat");
+      flash(reply.error ? reply.error : T.sentToChat);
     });
   }
   function flash(text) {
@@ -225,10 +289,10 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
     return flat.length <= max ? flat : flat.slice(0, max - 1) + "…";
   }
   function anchorLabel(anchor) {
-    if (anchor.kind === "html-element") return "Element <" + anchor.tag + ">";
-    if (anchor.kind === "html-drawing") return "Drawing";
-    if (anchor.kind === "html-text") return "Text";
-    return "Page";
+    if (anchor.kind === "html-element") return T.element.replace("{tag}", anchor.tag);
+    if (anchor.kind === "html-drawing") return T.drawing;
+    if (anchor.kind === "html-text") return T.text;
+    return T.page;
   }
   function anchorQuote(anchor) {
     if (anchor.kind === "html-text") return anchor.quote;
@@ -254,15 +318,15 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
     });
     var children = [field];
     if (options.error) children.push(h("div", { class: "error", text: options.error }));
-    children.push(h("div", { class: "row end" }, [h("span", { class: "hint", text: "⌘↵" }), button("Cancel", options.onCancel), submit]));
+    children.push(h("div", { class: "row end" }, [h("span", { class: "hint", text: "⌘↵" }), button(T.cancel, options.onCancel), submit]));
     return h("div", { class: "editor" }, children);
   }
 
   function modeBar() {
     var modes = [
-      ["text", "Text", "Select text to comment on it"],
-      ["element", "Element", "Click a block, button, or picture to comment on it"],
-      ["draw", "Draw", "Draw over the page, then comment on the drawing"]
+      ["text", T.modeText, T.modeTextTitle],
+      ["element", T.modeElement, T.modeElementTitle],
+      ["draw", T.modeDraw, T.modeDrawTitle]
     ];
     var items = modes.map(function (entry) {
       return button(entry[1], function () {
@@ -275,15 +339,15 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
     });
     if (state.mode === "draw") {
       items.push(h("span", { class: "sep" }));
-      [["pen", "Pen"], ["line", "Line"], ["arrow", "Arrow"], ["rect", "Box"]].forEach(function (entry) {
+      [["pen", T.pen], ["line", T.line], ["arrow", T.arrow], ["rect", T.box]].forEach(function (entry) {
         items.push(button(entry[1], function () { state.tool = entry[0]; syncBridge(); render(); }, { pressed: state.tool === entry[0] }));
       });
     }
     var open = state.comments.filter(function (comment) { return comment.status !== "resolved"; }).length;
     items.push(h("span", { class: "sep" }));
-    items.push(button("Comments" + (open ? " " + open : ""), function () { state.listOpen = !state.listOpen; render(); }, { pressed: state.listOpen }));
-    items.push(button(state.sending ? "Sending…" : "Send" + (state.drafts ? " " + state.drafts : ""), send, { cls: "primary", disabled: !state.drafts || state.sending, title: "Send every draft on this site to the chat" }));
-    items.push(button("×", function () { toPlugin({ type: "close" }); }, { cls: "icon", title: "Stop reviewing this page" }));
+    items.push(button(T.comments + (open ? " " + open : ""), function () { state.listOpen = !state.listOpen; render(); }, { pressed: state.listOpen }));
+    items.push(button(state.sending ? T.sending : T.send + (state.drafts ? " " + state.drafts : ""), send, { cls: "primary", disabled: !state.drafts || state.sending, title: T.sendTitle }));
+    items.push(button("×", function () { toPlugin({ type: "close" }); }, { cls: "icon", title: T.stop }));
     return h("div", { class: "bar panel", role: "toolbar", "aria-label": "Doc Review" }, items);
   }
 
@@ -296,8 +360,8 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
     var children = [h("div", { class: "label", text: anchorLabel(composer.anchor) })];
     if (quote) children.push(h("div", { class: "quote", text: shorten(quote, 200) }));
     children.push(editor({
-      placeholder: "What should change here?",
-      submitLabel: "Comment",
+      placeholder: T.placeholder,
+      submitLabel: T.comment,
       busy: composer.busy,
       error: composer.error,
       onSubmit: submitComposer,
@@ -308,9 +372,9 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
 
   function bubble(reply, comment) {
     var draft = reply.author === "user" && reply.sentAt === null;
-    var who = reply.author === "agent" ? "Agent" : draft ? "You, not sent" : "You";
+    var who = reply.author === "agent" ? T.agent : draft ? T.youNotSent : T.you;
     var children = [h("p", null, [h("b", { text: who + ": " }), document.createTextNode(reply.body)])];
-    if (draft) children.push(button("×", function () { ask({ type: "discard-reply", id: comment.id }); }, { cls: "icon", title: "Discard reply" }));
+    if (draft) children.push(button("×", function () { ask({ type: "discard-reply", id: comment.id }); }, { cls: "icon", title: T.discardReply }));
     return h("div", { class: "bubble " + (reply.author === "agent" ? "agent" : draft ? "user draft" : "user") }, children);
   }
 
@@ -318,22 +382,22 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
     var quote = anchorQuote(comment.anchor);
     var head = h("div", { class: "row" }, [
       h("span", { class: "seq" + (comment.status === "resolved" ? " done" : ""), text: String(comment.seq) }),
-      h("span", { class: "meta", text: anchorLabel(comment.anchor) + ", " + STATUS[comment.status] }),
-      button("Delete", function () { ask({ type: "delete", id: comment.id }); }, { cls: "link", title: "Delete comment" })
+      h("span", { class: "meta", text: anchorLabel(comment.anchor) + ", " + statusText(comment.status) }),
+      button(T.delete, function () { ask({ type: "delete", id: comment.id }); }, { cls: "link", title: T.deleteComment })
     ]);
     var children = [head];
-    if (comment.imageUrl) children.push(h("div", { class: "quote", text: "Drawing with a picture of the page" }));
+    if (comment.imageUrl) children.push(h("div", { class: "quote", text: T.drawingPicture }));
     else if (quote) children.push(h("div", { class: "quote", text: shorten(quote, 160) }));
     children.push(h("p", { class: "body", text: comment.body }));
     (comment.thread || []).forEach(function (reply) { children.push(bubble(reply, comment)); });
     if (state.missing.indexOf(comment.id) >= 0 && comment.status !== "resolved") {
-      children.push(h("div", { class: "hint", text: comment.anchor.kind === "html-element" ? "The element is not on the page now." : "The quoted text is not on the page now." }));
+      children.push(h("div", { class: "hint", text: comment.anchor.kind === "html-element" ? T.elementGone : T.quoteGone }));
     }
     if (comment.status === "replied" || comment.status === "resolved") {
       if (state.replyingId === comment.id) {
         children.push(editor({
-          placeholder: REPLY_PLACEHOLDER,
-          submitLabel: "Reply",
+          placeholder: T.replyPlaceholder,
+          submitLabel: T.reply,
           onSubmit: function (body) {
             ask({ type: "reply", id: comment.id, body: body }, function (reply) {
               if (reply.error) { flash(reply.error); return; }
@@ -344,7 +408,7 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
           onCancel: function () { state.replyingId = null; render(); }
         }));
       } else {
-        children.push(button("Reply", function () { state.replyingId = comment.id; render(); }, { cls: "link" }));
+        children.push(button(T.reply, function () { state.replyingId = comment.id; render(); }, { cls: "link" }));
       }
     }
     return h("div", {
@@ -362,9 +426,9 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
 
   function listPanel() {
     var comments = state.comments.slice().sort(function (a, b) { return (ORDER[a.status] - ORDER[b.status]) || (a.seq - b.seq); });
-    var cards = comments.length ? comments.map(card) : [h("p", { class: "hint", text: "No comments on this page yet. Select text, or switch to Element or Draw." })];
+    var cards = comments.length ? comments.map(card) : [h("p", { class: "hint", text: T.empty })];
     return h("div", { class: "list panel" }, [
-      h("div", { class: "row" }, [h("b", { class: "grow", text: "Comments on this page" }), button("×", function () { state.listOpen = false; render(); }, { cls: "icon", title: "Close" })]),
+      h("div", { class: "row" }, [h("b", { class: "grow", text: T.listTitle }), button("×", function () { state.listOpen = false; render(); }, { cls: "icon", title: T.close })]),
       h("div", { class: "cards" }, cards)
     ]);
   }
@@ -384,17 +448,17 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
           type: "button",
           class: "btn primary float",
           style: "top:" + clamp(b.y + b.h + 6, 8, window.innerHeight - 40) + "px;left:" + clamp(b.x + b.w - 40, 8, window.innerWidth - 110) + "px",
-          text: "Comment",
+          text: T.comment,
           onmousedown: function (event) { event.preventDefault(); },
           onclick: function (event) { event.stopPropagation(); openComposer(anchor, b); }
         }));
       }
       if (state.sketch && !state.composer && state.mode === "draw") {
         var s = state.sketch.rect;
-        var drawBar = [button("Comment", function () { toBridge({ type: "sketch-done" }); }, { cls: "primary" })];
+        var drawBar = [button(T.comment, function () { toBridge({ type: "sketch-done" }); }, { cls: "primary" })];
         // With one stroke Undo and Clear would do the same.
-        if (state.sketch.count > 1) drawBar.push(button("Undo", function () { toBridge({ type: "sketch-undo" }); }, { title: "Take back the last stroke (⌘Z)" }));
-        drawBar.push(button(state.sketch.count > 1 ? "Clear all" : "Clear", function () { toBridge({ type: "sketch-clear" }); state.sketch = null; render(); }, { title: "Remove the whole drawing" }));
+        if (state.sketch.count > 1) drawBar.push(button(T.undo, function () { toBridge({ type: "sketch-undo" }); }, { title: T.undoTitle }));
+        drawBar.push(button(state.sketch.count > 1 ? T.clearAll : T.clear, function () { toBridge({ type: "sketch-clear" }); state.sketch = null; render(); }, { title: T.clearTitle }));
         next.appendChild(h("div", {
           class: "drawbar panel row",
           style: "top:" + clamp(s.y + s.h + 6, 8, window.innerHeight - 48) + "px;left:" + clamp(s.x, 8, window.innerWidth - 250) + "px"
@@ -485,6 +549,7 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
   window.__docReviewWeb = {
     activate: function (config) {
       theme = (config && config.theme) || {};
+      useText(config && config.text);
       state.active = true;
       mount();
       syncBridge();
@@ -508,6 +573,7 @@ export const WEB_UI_SCRIPT = String.raw`(function () {
     fromPlugin: function (message) {
       if (!message || typeof message !== "object") return null;
       if (message.type === "state") {
+        useText(message.text);
         state.comments = Array.isArray(message.comments) ? message.comments : [];
         state.drafts = typeof message.drafts === "number" ? message.drafts : 0;
         if (state.activeId && !state.comments.some(function (comment) { return comment.id === state.activeId; })) state.activeId = null;

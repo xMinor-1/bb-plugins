@@ -8,21 +8,30 @@
 // be tested without a renderer.
 import { MAX_BOOKMARKS, type Bookmark } from "../contract";
 import { isSamePath } from "./fm-paths";
-
-export const BOOKMARK_ADD_FAILED_TEXT = "Could not add that bookmark.";
-export const BOOKMARK_REMOVE_FAILED_TEXT = "Could not remove that bookmark.";
-export const BOOKMARK_RENAME_FAILED_TEXT = "Could not rename that bookmark.";
+import { defineMessages } from "./i18n";
 
 /**
- * Said *before* the RPC, never after it.
+ * Toast text for the bookmark actions.
  *
- * The backend refuses the 51st bookmark with `unsupported`, whose stock
- * sentence ("That operation is not supported.") tells the user nothing about
- * what to do. The panel knows the count, so it can say the useful thing and
- * skip the round trip.
+ * `full` is said *before* the RPC, never after it: the backend refuses the
+ * 51st bookmark with `unsupported`, whose stock sentence ("That operation is
+ * not supported.") tells the user nothing about what to do. The panel knows
+ * the count, so it can say the useful thing and skip the round trip.
  */
-export const BOOKMARKS_FULL_TEXT =
-  `You can keep ${String(MAX_BOOKMARKS)} bookmarks. Remove one before adding another.`;
+export const bookmarkMessages = defineMessages(
+  {
+    addFailed: "Could not add that bookmark.",
+    removeFailed: "Could not remove that bookmark.",
+    renameFailed: "Could not rename that bookmark.",
+    full: `You can keep ${String(MAX_BOOKMARKS)} bookmarks. Remove one before adding another.`,
+  },
+  {
+    addFailed: "Не удалось добавить закладку.",
+    removeFailed: "Не удалось убрать закладку.",
+    renameFailed: "Не удалось переименовать закладку.",
+    full: `Можно хранить не больше ${String(MAX_BOOKMARKS)} закладок. Уберите одну, чтобы добавить новую.`,
+  },
+);
 
 /**
  * True when `path` is in the list.

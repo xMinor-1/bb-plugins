@@ -11,6 +11,8 @@ import {
   ContextMenuShortcut,
 } from "./ui/context-menu";
 import { Icon } from "./ui/icon";
+import { actionMessages } from "./action-messages";
+import { useMessages } from "../lib/i18n";
 
 export interface BackgroundContextMenuProps {
   writable: boolean;
@@ -57,21 +59,22 @@ export function BackgroundContextMenu({
 }: BackgroundContextMenuProps) {
   // Letting go of the right button must not run whatever it landed on.
   const pointerGuard = useMenuPointerGuard();
+  const t = useMessages(actionMessages);
 
   return (
     <ContextMenuContent className="w-56" data-testid="fm-background-menu" {...pointerGuard}>
       <ContextMenuItem disabled={!writable} onSelect={onNewFolder}>
         <Icon name="FolderPlus" className="size-4" aria-hidden="true" />
-        New folder
+        {t.newFolder}
         <ContextMenuShortcut>Ctrl+Shift+N</ContextMenuShortcut>
       </ContextMenuItem>
       <ContextMenuItem disabled={!writable} onSelect={onUpload}>
         <Icon name="PackageReceive" className="size-4" aria-hidden="true" />
-        Upload files…
+        {t.uploadFiles}
       </ContextMenuItem>
       <ContextMenuItem disabled={!canPaste || !writable} onSelect={onPaste}>
         <Icon name="Copy" className="size-4" aria-hidden="true" />
-        Paste
+        {t.paste}
         <ContextMenuShortcut>Ctrl+V</ContextMenuShortcut>
       </ContextMenuItem>
 
@@ -79,31 +82,31 @@ export function BackgroundContextMenu({
 
       <ContextMenuItem onSelect={onSelectAll}>
         <Icon name="Check" className="size-4" aria-hidden="true" />
-        Select all
+        {t.selectAll}
         <ContextMenuShortcut>Ctrl+A</ContextMenuShortcut>
       </ContextMenuItem>
       <ContextMenuItem onSelect={onRefresh}>
         <Icon name="ArrowReloadHorizontal" className="size-4" aria-hidden="true" />
-        Refresh
+        {t.refresh}
       </ContextMenuItem>
       <ContextMenuCheckboxItem checked={showHidden} onSelect={onToggleHidden}>
-        Show hidden files
+        {t.showHidden}
         <ContextMenuShortcut>Ctrl+Shift+.</ContextMenuShortcut>
       </ContextMenuCheckboxItem>
       <ContextMenuItem disabled={expandedCount === 0} onSelect={onCollapseAll}>
         <Icon name="Minimize2" className="size-4" aria-hidden="true" />
-        Collapse all folders
+        {t.collapseAll}
       </ContextMenuItem>
 
       <ContextMenuSeparator />
 
       <ContextMenuItem onSelect={onCopyPath}>
         <Icon name="Paperclip" className="size-4" aria-hidden="true" />
-        Copy folder path
+        {t.copyFolderPath}
       </ContextMenuItem>
       <ContextMenuItem onSelect={onSetStartFolder}>
         <Icon name="Pin" className="size-4" aria-hidden="true" />
-        Set as start folder
+        {t.setStartFolder}
       </ContextMenuItem>
       {/* Next to the start folder because they answer the same question from
           two sides: one folder you always open, many you jump between. */}
@@ -113,11 +116,11 @@ export function BackgroundContextMenu({
         onSelect={onToggleBookmark}
       >
         <Icon name={bookmarked ? "PinOff" : "Star"} className="size-4" aria-hidden="true" />
-        {bookmarked ? "Remove bookmark" : "Bookmark this folder"}
+        {bookmarked ? t.removeBookmark : t.bookmarkFolder}
       </ContextMenuItem>
       <ContextMenuItem onSelect={onProperties}>
         <Icon name="Info" className="size-4" aria-hidden="true" />
-        Properties
+        {t.properties}
         <ContextMenuShortcut>Alt+Enter</ContextMenuShortcut>
       </ContextMenuItem>
     </ContextMenuContent>

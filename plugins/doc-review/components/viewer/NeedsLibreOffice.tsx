@@ -1,7 +1,33 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { defineMessages, useMessages } from "@/lib/i18n";
 import type { NeedsLibreOffice as NeedsLibreOfficeResult } from "@/src/contract";
+
+const messages = defineMessages(
+  {
+    copied: "Copied",
+    copyCommand: "Copy command",
+    needed: "LibreOffice is needed to show this file",
+    shownAsPdf: (kind: string) => `${kind} files are shown as PDF, converted by LibreOffice on the machine bb runs on.`,
+    noModule: (module: string) => `LibreOffice is installed there, but without its ${module} module.`,
+    notFound: "LibreOffice was not found there.",
+    unusual: "Installed somewhere unusual? Set the path to soffice in this plugin's settings.",
+    tryAgain: "Try again",
+    download: "Download",
+  },
+  {
+    copied: "Скопировано",
+    copyCommand: "Скопировать команду",
+    needed: "Чтобы показать этот файл, нужен LibreOffice",
+    shownAsPdf: (kind) => `Файлы ${kind} показываются как PDF: их переводит LibreOffice на машине, где работает bb.`,
+    noModule: (module) => `LibreOffice там есть, но без модуля ${module}.`,
+    notFound: "LibreOffice там не найден.",
+    unusual: "Стоит в необычном месте? Укажите путь к soffice в настройках этого плагина.",
+    tryAgain: "Повторить",
+    download: "Скачать",
+  },
+);
 
 /**
  * Install commands for the machine bb runs on — which is not necessarily the
@@ -35,6 +61,7 @@ function installCommands(
 }
 
 function CommandLine({ label, command }: { label: string; command: string }) {
+  const t = useMessages(messages);
   const [copied, setCopied] = useState(false);
   return (
     <div className="space-y-1 text-left">
@@ -46,7 +73,7 @@ function CommandLine({ label, command }: { label: string; command: string }) {
         <Button
           size="sm"
           variant="ghost"
-          aria-label={copied ? "Copied" : "Copy command"}
+          aria-label={copied ? t.copied : t.copyCommand}
           onClick={() => {
             void navigator.clipboard?.writeText(command).then(() => {
               setCopied(true);
@@ -73,6 +100,7 @@ export function NeedsLibreOffice({
   downloadUrl: string | null;
   onReload: () => void;
 }) {
+  const t = useMessages(messages);
   const kind = result.component === "impress" ? "PowerPoint" : "Word";
   const module = result.component === "impress" ? "Impress" : "Writer";
   const commands = installCommands(result);
@@ -82,33 +110,29 @@ export function NeedsLibreOffice({
         <div className="space-y-2 text-center">
           <Icon name="FileQuestion" className="mx-auto size-6" aria-hidden />
           <p className="font-medium text-foreground">
-            LibreOffice is needed to show this file
+            {t.needed}
           </p>
           <p>
-            {kind} files are shown as PDF, converted by LibreOffice on the
-            machine bb runs on.{" "}
-            {result.installed
-              ? `LibreOffice is installed there, but without its ${module} module.`
-              : "LibreOffice was not found there."}
+            {t.shownAsPdf(kind)}{" "}
+            {result.installed ? t.noModule(module) : t.notFound}
           </p>
         </div>
         {commands.map((entry) => (
           <CommandLine key={entry.label} {...entry} />
         ))}
         <p className="text-center text-xs">
-          Installed somewhere unusual? Set the path to soffice in this
-          plugin&apos;s settings.
+          {t.unusual}
         </p>
         <div className="flex justify-center gap-2">
           <Button size="sm" variant="outline" onClick={onReload}>
             <Icon name="RotateCcw" aria-hidden />
-            Try again
+            {t.tryAgain}
           </Button>
           {downloadUrl ? (
             <Button size="sm" variant="ghost" asChild>
               <a href={downloadUrl} download={name}>
                 <Icon name="Download" aria-hidden />
-                Download
+                {t.download}
               </a>
             </Button>
           ) : null}

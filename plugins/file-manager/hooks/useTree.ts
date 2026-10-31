@@ -20,6 +20,7 @@ import { parseRpcError } from "../lib/errors";
 import { isInsideRoot, normalizePath } from "../lib/fm-paths";
 import { useFmRpc } from "../lib/fm-rpc";
 import { createSessionStore } from "../lib/fm-store";
+import { useLang } from "../lib/i18n";
 import {
   EMPTY_TREE_STATE,
   EXPANDED_STORAGE_KEY,
@@ -145,6 +146,8 @@ export function useTree(args: UseTreeArgs): UseTreeResult {
   /* Flatten                                                          */
   /* ---------------------------------------------------------------- */
 
+  // Status rows carry text in the interface language, so a switch re-flattens.
+  const lang = useLang();
   const flat = useMemo(
     () =>
       flattenTree({
@@ -156,7 +159,7 @@ export function useTree(args: UseTreeArgs): UseTreeResult {
         sortDirection,
         query,
       }),
-    [rootPath, rootEntries, state.nodes, state.expanded, sortField, sortDirection, query],
+    [rootPath, rootEntries, state.nodes, state.expanded, sortField, sortDirection, query, lang],
   );
 
   /* ---------------------------------------------------------------- */

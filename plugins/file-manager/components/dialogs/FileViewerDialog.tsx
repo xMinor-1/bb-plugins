@@ -48,6 +48,36 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Icon } from "../ui/icon";
+import { defineMessages, useMessages } from "../../lib/i18n";
+
+const messages = defineMessages(
+  {
+    mediaFailedTitle: "This file could not be displayed",
+    mediaFailedBody: "The browser refused to play or paint it. Downloading it still works.",
+    loading: "Loading…",
+    reading: "Reading…",
+    noPreviewTitle: "No preview for this kind of file",
+    noPreviewBody: "It is not text, and not an image, PDF or media file a browser can show.",
+    readFailed: "Could not read this file",
+    showingFirst: (size: string) => `· showing the first ${size}`,
+    source: "Source",
+    rendered: "Rendered",
+    download: "Download",
+  },
+  {
+    mediaFailedTitle: "Не удалось показать этот файл",
+    mediaFailedBody: "Браузер не смог его воспроизвести или отрисовать. Скачать файл всё равно можно.",
+    loading: "Загрузка…",
+    reading: "Читаю…",
+    noPreviewTitle: "Для такого файла нет просмотра",
+    noPreviewBody: "Это не текст и не картинка, PDF или медиафайл, которые умеет показывать браузер.",
+    readFailed: "Не удалось прочитать файл",
+    showingFirst: (size) => `— показаны первые ${size}`,
+    source: "Исходник",
+    rendered: "Просмотр",
+    download: "Скачать",
+  },
+);
 
 type TextState =
   | { status: "loading" }
@@ -102,6 +132,7 @@ function TextBody({
 }
 
 export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileViewerDialogProps) {
+  const t = useMessages(messages);
   const rpc = useFmRpc();
   const kind = viewerKindForEntry(entry);
   const wantsUrl = isUrlViewerKind(kind);
@@ -164,12 +195,12 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
   } else if (wantsUrl && mediaFailed) {
     body = (
       <Placeholder>
-        <p className="font-medium text-foreground">This file could not be displayed</p>
-        <p>The browser refused to play or paint it. Downloading it still works.</p>
+        <p className="font-medium text-foreground">{t.mediaFailedTitle}</p>
+        <p>{t.mediaFailedBody}</p>
       </Placeholder>
     );
   } else if (wantsUrl && url === null) {
-    body = <Placeholder>Loading…</Placeholder>;
+    body = <Placeholder>{t.loading}</Placeholder>;
   } else if (kind === "image" && url !== null) {
     body = (
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
@@ -221,18 +252,18 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
       </div>
     );
   } else if (text.status === "loading") {
-    body = <Placeholder>Reading…</Placeholder>;
+    body = <Placeholder>{t.reading}</Placeholder>;
   } else if (text.status === "unsupported") {
     body = (
       <Placeholder>
-        <p className="font-medium text-foreground">No preview for this kind of file</p>
-        <p>It is not text, and not an image, PDF or media file a browser can show.</p>
+        <p className="font-medium text-foreground">{t.noPreviewTitle}</p>
+        <p>{t.noPreviewBody}</p>
       </Placeholder>
     );
   } else if (text.status === "failed") {
     body = (
       <Placeholder>
-        <p className="font-medium text-foreground">Could not read this file</p>
+        <p className="font-medium text-foreground">{t.readFailed}</p>
         <p>{text.message}</p>
       </Placeholder>
     );
@@ -265,8 +296,9 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
                 <span>{formatBytes(entry.sizeBytes)}</span>
                 {truncated ? (
                   <span data-testid="fm-viewer-truncated">
-                    · showing the first{" "}
-                    {formatBytes(text.status === "ready" ? text.result.readBytes : 0)}
+                    {t.showingFirst(
+                      formatBytes(text.status === "ready" ? text.result.readBytes : 0),
+                    )}
                   </span>
                 ) : null}
               </DialogDescription>
@@ -282,7 +314,7 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
                   onClick={() => setRendered((value) => !value)}
                 >
                   <Icon name={rendered ? "Code" : "AlignLeft"} className="size-4" aria-hidden />
-                  <span className="hidden sm:inline">{rendered ? "Source" : "Rendered"}</span>
+                  <span className="hidden sm:inline">{rendered ? t.source : t.rendered}</span>
                 </Button>
               ) : null}
               <Button
@@ -294,7 +326,7 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
                 onClick={download}
               >
                 <Icon name="Download" className="size-4" aria-hidden />
-                <span className="hidden sm:inline">Download</span>
+                <span className="hidden sm:inline">{t.download}</span>
               </Button>
             </div>
           </div>

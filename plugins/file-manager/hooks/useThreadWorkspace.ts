@@ -15,6 +15,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ThreadWorkspaceReason } from "../contract";
 import { parseRpcError } from "../lib/errors";
 import { useFmRpc } from "../lib/fm-rpc";
+import { defineMessages, messagesNow } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    noEnvironment: "Thread folder: this thread has no workspace",
+    noCheckout: "Thread folder: the workspace has no folder yet",
+    outsideRoot: "Thread folder: outside your home folder",
+  },
+  {
+    noEnvironment: "Папка треда: у этого треда нет окружения",
+    noCheckout: "Папка треда: у окружения ещё нет папки",
+    outsideRoot: "Папка треда: вне вашей домашней папки",
+  },
+);
 
 export type ThreadWorkspaceState =
   /** This surface has no thread at all: there is nothing to offer. */
@@ -38,13 +52,14 @@ export interface UseThreadWorkspaceResult {
  * say which action it is talking about.
  */
 export function threadWorkspaceBlockedText(reason: ThreadWorkspaceReason): string {
+  const t = messagesNow(messages);
   switch (reason) {
     case "no_environment":
-      return "Thread folder: this thread has no workspace";
+      return t.noEnvironment;
     case "no_checkout":
-      return "Thread folder: the workspace has no folder yet";
+      return t.noCheckout;
     case "outside_root":
-      return "Thread folder: outside your home folder";
+      return t.outsideRoot;
   }
 }
 

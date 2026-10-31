@@ -15,6 +15,8 @@ interface FakePlugin {
   schema: Record<string, { type: string; secret?: boolean }>;
   values: Record<string, unknown>;
   update?: string;
+  /** What bb's getSource reports for it. */
+  subdirectory?: string;
 }
 
 const SELF_SOURCE = "git:https://git.example.test/plugins.git@semver:fleet-kit/:^0.1.0";
@@ -30,6 +32,12 @@ function idFor(source: string): string {
 function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { telemetryEnabled: true, streamerMode: false }) {
   const plugins = new Map(initial.map((plugin) => [plugin.id, clone(plugin)]));
   const calls: string[] = [];
+  const installs: Array<{ source: string; plugin?: string; subdirectory?: string }> = [];
+  /** Installs of a "slow" source wait here until a test finishes them. */
+  const slow: Array<{ source: string; finish: () => void }> = [];
+  const updateJobs: Array<{ id: string; pluginId: string; state: string }> = [];
+  /** Set to make bb's install job list fail. */
+  const jobs = { unavailable: false };
   const view = (plugin: FakePlugin) => ({ id: plugin.id, source: plugin.source, version: plugin.version, enabled: plugin.enabled, provenance: plugin.provenance ?? "direct" });
   const schemaFor = (id: string): FakePlugin["schema"] =>
     id === "notes" ? { greeting: { type: "string" }, token: { type: "string", secret: true }, allowedProviders: { type: "string" } } : {};
@@ -45,17 +53,40 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
     plugins: {
       marketplaces: { list: async () => [], add: async () => ({}) },
       list: async () => ({ plugins: [...plugins.values()].map(view) }),
-      install: async ({ source }: { source: string; plugin?: string }) => {
+      install: async (args: { source: string; plugin?: string; subdirectory?: string }) => {
+        const { source } = args;
+        installs.push(args);
         if (source.includes("broken")) {
           calls.push(`install-failed ${source}`);
           throw new Error("could not clone");
         }
         const id = idFor(source);
+        const land = () => {
+          const plugin: FakePlugin = { id, source, version: "1.0.0", enabled: true, schema: schemaFor(id), values: {} };
+          plugins.set(id, plugin);
+          return view(plugin);
+        };
+        if (source.includes("slow")) {
+          calls.push(`install-started ${id}`);
+          return new Promise((resolve) => {
+            const job = { source, finish: () => { slow.splice(slow.indexOf(job), 1); resolve(land()); } };
+            slow.push(job);
+          });
+        }
         calls.push(`install ${id}`);
-        const plugin: FakePlugin = { id, source, version: "1.0.0", enabled: true, schema: schemaFor(id), values: {} };
-        plugins.set(id, plugin);
-        return view(plugin);
+        return land();
       },
+      installJobs: {
+        list: async () => {
+          if (jobs.unavailable) throw new Error("install jobs are unavailable");
+          return slow.map((job, index) => ({ id: `job_${index}`, displayName: job.source, state: "running", target: { kind: "source", source: job.source, selection: { kind: "root" } } }));
+        },
+      },
+      getSource: async ({ pluginId }: { pluginId: string }) => {
+        const plugin = plugins.get(pluginId)!;
+        return { requested: plugin.source, resolved: plugin.source, history: [], engines: {}, ...(plugin.subdirectory ? { subdirectory: plugin.subdirectory } : {}) };
+      },
+      experimental_updateJobs: { list: async () => updateJobs },
       remove: async ({ pluginId }: { pluginId: string }) => {
         calls.push(`remove ${pluginId}`);
         plugins.delete(pluginId);
@@ -96,7 +127,7 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
       },
     },
   };
-  return { sdk, plugins, calls, general };
+  return { sdk, plugins, calls, general, installs, slow, updateJobs, jobs };
 }
 
 const dirs: string[] = [];
@@ -292,5 +323,198 @@ describe("Fleet Kit's own update", () => {
     expect(outcome.selfUpdate).toBe(false);
     expect(calls).not.toContain("check fleet-kit");
     expect(outcome.report.steps.find((step) => step.item === "fleet-kit")?.message).toContain("not pinned");
+  });
+});
+
+describe("switching a plugin's source", () => {
+  const BROKEN = "git:https://git.example.test/broken-notes.git@semver:notes/:^2.0.0";
+  const SLOW = "git:https://git.example.test/slow-notes.git@semver:notes/:^2.0.0";
+  const PREVIOUS = "git:https://git.example.test/plugins.git@semver:notes/:^0.9.0";
+  const withSource = (source: string) => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    manifest.plugins[1].source = source;
+    return manifest;
+  };
+  const message = (outcome: Awaited<ReturnType<typeof runSync>>) => outcome.report.steps.filter((step) => step.item === "notes").map((step) => step.message).join(" | ");
+
+  it("tries at most twice a day, an hour apart, and leaves the previous source alone between tries", async () => {
+    let now = Date.parse("2026-10-31T10:00:00Z");
+    const first = await setup(withSource(BROKEN), [self(), notes({ source: PREVIOUS, values: { greeting: "custom" } })]);
+    const deps = { ...first.deps, now: () => now };
+    const one = await runSync(deps, "manual");
+    expect(pluginCalls(first.calls).slice(0, 3)).toEqual(["remove notes", `install-failed ${BROKEN}`, "install notes"]);
+    expect(one.managed.sourceChanges.notes).toMatchObject({ target: BROKEN, attempts: 1, pending: false });
+
+    // The next sync: nothing removed, installed or configured.
+    first.calls.length = 0;
+    now += 5 * 60_000;
+    const two = await runSync({ ...deps, managed: one.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(first.plugins.get("notes")!.source).toBe(PREVIOUS);
+    expect(message(two)).toContain("Kept on its previous source");
+
+    // An hour after the first try: the second one.
+    now = Date.parse("2026-10-31T11:00:01Z");
+    const three = await runSync({ ...deps, managed: two.managed }, "schedule");
+    expect(pluginCalls(first.calls).slice(0, 3)).toEqual(["remove notes", `install-failed ${BROKEN}`, "install notes"]);
+    expect(three.managed.sourceChanges.notes?.attempts).toBe(2);
+
+    // Both tries used: none until a day after the first.
+    first.calls.length = 0;
+    now = Date.parse("2026-10-31T20:00:00Z");
+    const four = await runSync({ ...deps, managed: three.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(message(four)).toContain("after 2026-11-01T10:00:00.000Z");
+
+    now = Date.parse("2026-11-01T10:00:01Z");
+    const five = await runSync({ ...deps, managed: four.managed }, "schedule");
+    expect(pluginCalls(first.calls)[0]).toBe("remove notes");
+    expect(five.managed.sourceChanges.notes?.attempts).toBe(1);
+  });
+
+  it("puts the previous source back with its subdirectory and asks for secrets again", async () => {
+    const existing = notes({ source: PREVIOUS, subdirectory: "plugins/notes", values: { greeting: "custom", token: "t" } });
+    const { deps, installs, plugins } = await setup(withSource(BROKEN), [self(), existing]);
+    const outcome = await runSync(deps, "manual");
+    expect(installs.at(-1)).toEqual({ source: PREVIOUS, subdirectory: "plugins/notes" });
+    expect(plugins.get("notes")!.source).toBe(PREVIOUS);
+    expect(plugins.get("notes")!.values.greeting).toBe("custom");
+    expect(outcome.notices).toHaveLength(1);
+    expect(outcome.notices[0]!.message).toContain("put back on the previous one. Enter its secret settings again.");
+  });
+
+  it("waits for a timed-out install instead of installing a second source", async () => {
+    const first = await setup(withSource(SLOW), [self(), notes({ source: PREVIOUS, values: { greeting: "custom", token: "t" } })]);
+    const deps = { ...first.deps, installMs: 20 };
+    const one = await runSync(deps, "manual");
+    expect(pluginCalls(first.calls)).toEqual(["remove notes", "install-started notes"]);
+    expect(one.managed.sourceChanges.notes?.pending).toBe(true);
+    expect(message(one)).toContain("still installing");
+
+    first.calls.length = 0;
+    const two = await runSync({ ...deps, managed: one.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(message(two)).toContain("still installing");
+
+    // bb finishes the install it was given; the next sync takes it as the switch.
+    first.slow[0]!.finish();
+    const three = await runSync({ ...deps, managed: two.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual(["config notes greeting", "config notes allowedProviders,greeting"]);
+    expect(three.managed.sourceChanges.notes).toBeUndefined();
+    expect(three.managed.plugins.notes).toEqual({ manifestSource: SLOW, bbSource: SLOW });
+    expect(three.notices.map((notice) => notice.kind)).toEqual(["reinstalled"]);
+  });
+
+  it("puts the previous source back once a timed-out install is gone without a result", async () => {
+    let now = Date.parse("2026-10-31T10:00:00Z");
+    const first = await setup(withSource(SLOW), [self(), notes({ source: PREVIOUS, values: { greeting: "custom" } })]);
+    const deps = { ...first.deps, installMs: 20, now: () => now };
+    const one = await runSync(deps, "manual");
+    // The job ends without installing anything.
+    first.slow.splice(0);
+    first.calls.length = 0;
+    now += 5 * 60_000;
+    const two = await runSync({ ...deps, managed: one.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual(["install notes", "config notes greeting"]);
+    expect(first.plugins.get("notes")!.source).toBe(PREVIOUS);
+    expect(two.managed.sourceChanges.notes).toMatchObject({ attempts: 1, pending: false });
+    expect(message(two)).toContain("Put back on its previous source");
+  });
+});
+
+describe("unfinished installs", () => {
+  const SLOW = "git:https://git.example.test/slow-notes.git@semver:notes/:^2.0.0";
+  const BROKEN = "git:https://git.example.test/broken-notes.git@semver:notes/:^2.0.0";
+  const PREVIOUS = "git:https://git.example.test/plugins.git@semver:notes/:^0.9.0";
+  const build = (edit: (notes: Record<string, any>, manifest: Record<string, any>) => void) => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    edit(manifest.plugins[1], manifest);
+    return manifest;
+  };
+  const notesSteps = (outcome: Awaited<ReturnType<typeof runSync>>) => outcome.report.steps.filter((step) => step.item === "notes").map((step) => step.message).join(" | ");
+
+  it.each([
+    ["dropped from the build", (manifest: Record<string, any>) => { manifest.plugins.splice(1, 1); }],
+    ["marked planned", (manifest: Record<string, any>) => { manifest.plugins[1].status = "planned"; }],
+  ])("puts the previous source back when a timed-out switch is %s", async (_, edit) => {
+    const first = await setup(build((notes) => { notes.source = SLOW; }), [self(), notes({ source: PREVIOUS, values: { greeting: "custom", token: "t" } })]);
+    const deps = { ...first.deps, installMs: 20 };
+    const one = await runSync(deps, "manual");
+    expect(one.managed.sourceChanges.notes?.pending).toBe(true);
+    await writeFile(first.path, JSON.stringify(build((_notes, manifest) => edit(manifest))));
+
+    // Still installing: nothing else is started.
+    first.calls.length = 0;
+    const two = await runSync({ ...deps, managed: one.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(notesSteps(two)).toContain("still installing");
+
+    // The job ends without a result: the previous source comes back, with the notice.
+    first.slow.splice(0);
+    const three = await runSync({ ...deps, managed: two.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual(["install notes", "config notes greeting"]);
+    expect(first.plugins.get("notes")!.source).toBe(PREVIOUS);
+    expect(three.managed.sourceChanges.notes).toBeUndefined();
+    expect(three.notices.map((notice) => notice.message).join(" ")).toContain("Enter its secret settings again");
+    expect(notesSteps(three)).toContain("put back on its previous source");
+  });
+
+  it("drops a finished switch's record when the plugin leaves the build", async () => {
+    const first = await setup(build((notes) => { notes.source = BROKEN; }), [self(), notes({ source: PREVIOUS })]);
+    const one = await runSync(first.deps, "manual");
+    expect(one.managed.sourceChanges.notes).toMatchObject({ pending: false });
+    await writeFile(first.path, JSON.stringify(build((_notes, manifest) => { manifest.plugins.splice(1, 1); })));
+    first.calls.length = 0;
+    const two = await runSync({ ...first.deps, managed: one.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(two.managed.sourceChanges.notes).toBeUndefined();
+    expect(first.plugins.get("notes")!.source).toBe(PREVIOUS);
+  });
+
+  it("waits after a timed-out first install, also when bb's job list cannot be read", async () => {
+    const first = await setup(build((notes) => { notes.source = SLOW; }), [self()]);
+    const deps = { ...first.deps, installMs: 20 };
+    const one = await runSync(deps, "start");
+    expect(pluginCalls(first.calls)).toEqual(["install-started notes"]);
+    expect(one.managed.installs.notes).toMatchObject({ source: SLOW });
+
+    first.calls.length = 0;
+    first.jobs.unavailable = true;
+    const two = await runSync({ ...deps, managed: one.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(notesSteps(two)).toContain("Could not see whether bb is still installing it");
+
+    // bb finishes the install it was given; the record goes.
+    first.slow[0]!.finish();
+    const three = await runSync({ ...deps, managed: two.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual(["config notes allowedProviders,greeting"]);
+    expect(three.managed.installs.notes).toBeUndefined();
+  });
+
+  it("installs when the job list cannot be read but nothing of its own is pending", async () => {
+    const first = await setup(sampleManifest(), [self()]);
+    first.jobs.unavailable = true;
+    await runSync(first.deps, "start");
+    expect(pluginCalls(first.calls)[0]).toBe("install notes");
+  });
+});
+
+describe("Fleet Kit's own update while one runs", () => {
+  it("neither counts a try nor starts a second update", async () => {
+    const first = await setup(sampleManifest(), [{ ...self(), update: "0.2.0" }]);
+    const one = await runSync(first.deps, "start");
+    expect(one.selfUpdate).toBe(true);
+
+    first.updateJobs.push({ id: "update_1", pluginId: "fleet-kit", state: "running" });
+    const two = await runSync({ ...first.deps, managed: one.managed }, "manual");
+    expect(two.selfUpdate).toBe(false);
+    expect(two.managed.selfUpdate?.attempts).toBe(1);
+    expect(two.report.steps.find((step) => step.item === "fleet-kit")?.message).toContain("already running");
+
+    // bb has not listed the job yet, but this process started it a minute ago.
+    first.updateJobs.length = 0;
+    const three = await runSync({ ...first.deps, managed: two.managed, selfUpdateStartedAt: Date.now() - 60_000 }, "manual");
+    expect(three.selfUpdate).toBe(false);
+    expect(three.managed.selfUpdate?.attempts).toBe(1);
   });
 });

@@ -44,13 +44,7 @@ import { useSelection } from "../hooks/useSelection";
 import { threadWorkspaceBlockedText, useThreadWorkspace } from "../hooks/useThreadWorkspace";
 import { useTree, type UseTreeResult } from "../hooks/useTree";
 import { useUploads } from "../hooks/useUploads";
-import {
-  BOOKMARKS_FULL_TEXT,
-  BOOKMARK_ADD_FAILED_TEXT,
-  BOOKMARK_REMOVE_FAILED_TEXT,
-  BOOKMARK_RENAME_FAILED_TEXT,
-  findBookmark,
-} from "../lib/bookmarks";
+import { bookmarkMessages, findBookmark } from "../lib/bookmarks";
 import { addFileMentions } from "../lib/composer-mentions";
 import { downloadEntry, downloadZip } from "../lib/download";
 import {
@@ -74,11 +68,7 @@ import {
   setClientRoot,
   subPathToAbsolute,
 } from "../lib/fm-paths";
-import {
-  outsideRootMessage,
-  parsePathInput,
-  PATH_INVALID_MESSAGE,
-} from "../lib/fm-pathbar";
+import { outsideRootMessage, parsePathInput, pathInvalidMessage } from "../lib/fm-pathbar";
 import {
   forgetLastFolder,
   LAST_FOLDER_DEBOUNCE_MS,
@@ -95,15 +85,11 @@ import {
   type TreeEntryRow,
 } from "../lib/fm-tree";
 import { useFmRpc, type RpcOutput } from "../lib/fm-rpc";
-import {
-  saveStartFolder,
-  startFolderLabel,
-  START_FOLDER_SAVED_TEXT,
-  START_FOLDER_SAVE_FAILED_TEXT,
-} from "../lib/start-folder";
+import { saveStartFolder, startFolderLabel, startFolderMessages } from "../lib/start-folder";
+import { defineMessages, messagesNow, pluralRu, useMessages } from "../lib/i18n";
 import type { UploadRequest } from "../lib/upload-manager";
 import { isViewableEntry } from "../lib/viewer";
-import { ActivityTray } from "./ActivityTray";
+import { ActivityTray, jobSettledText } from "./ActivityTray";
 import { BackgroundContextMenu } from "./BackgroundContextMenu";
 import { BookmarkMenuItems, BookmarksMenu } from "./BookmarksMenu";
 import { EmptyState, type EmptyStateKind } from "./EmptyState";
@@ -135,6 +121,100 @@ import {
   type PanelSnapshot,
 } from "./panel-bus";
 import { PanelActions, type ThreadFolderAction } from "./PanelActions";
+
+const messages = defineMessages(
+  {
+    restoreGone: (label: string) => `The folder you were last in is gone. Opened ${label} instead.`,
+    restoreDenied: (label: string) =>
+      `The folder you were last in cannot be opened. Opened ${label} instead.`,
+    restoreUnreachable: (label: string) =>
+      `The folder you were last in is no longer reachable. Opened ${label} instead.`,
+    pathOpenFailed: "Could not open that path.",
+    pathNothing: (typed: string) => `There is nothing at ${typed}.`,
+    pathDenied: (typed: string) => `You do not have permission to open ${typed}.`,
+    pathIoError: "The filesystem reported an error. Try again.",
+    showingHidden: (name: string) => `Showing hidden files so ${name} is visible.`,
+    revealCutOff: (name: string, count: number) =>
+      `${name} is in this folder, but the listing was cut off at ${String(count)} items. Use the filter to find it.`,
+    revealGone: (name: string) => `${name} is not in this folder any more.`,
+    preferencesFailed: "Could not save your preferences.",
+    threadFolderFailed: (detail: string) => `Could not find this thread's folder. ${detail}`,
+    linkLeadsNowhere: (root: string) => `That link does not lead anywhere inside ${root}.`,
+    moveFailed: "Could not move those items.",
+    copyFailed: "Could not copy those items.",
+    deleteFailed: "Could not delete those items.",
+    pasteFailed: "Could not paste here.",
+    pathsCopied: (count: number) => (count === 1 ? "Path copied" : `${String(count)} paths copied`),
+    clipboardDenied: "This browser did not allow copying to the clipboard.",
+    downloadTooMany: "Too many items to download at once. Select their folder instead.",
+    onlyFilesToChat: "Only files can be added to the chat.",
+    addedToChat: (name: string) => `${name} added to the chat`,
+    filesAddedToChat: (count: number) => `${String(count)} files added to the chat`,
+    linkOutside: (root: string) => `Link points outside ${root}`,
+    folderUploadUnsupported: "Folder upload is not supported in this browser — drop individual files.",
+    backendSilent: "The file manager backend did not answer",
+    folderOpenFailed: "Could not open this folder",
+    listingTruncated: (shown: number, total: number) =>
+      `Showing the first ${String(shown)} of ${String(total)} items. Use the filter to narrow it down.`,
+    treeTruncated: (count: number) =>
+      `Showing the first ${String(count)} rows. Collapse a folder to see more.`,
+    cancelJobFailed: "Could not cancel that job.",
+    finishFailed: "Could not finish that operation.",
+    moveTo: "Move to…",
+    copyTo: "Copy to…",
+    chooseFolder: "Choose this folder",
+    move: "Move",
+    copy: "Copy",
+  },
+  {
+    restoreGone: (label) =>
+      `Папки, в которой вы были в прошлый раз, больше нет. Вместо неё открыта ${label}.`,
+    restoreDenied: (label) =>
+      `Папку, в которой вы были в прошлый раз, не открыть. Вместо неё открыта ${label}.`,
+    restoreUnreachable: (label) =>
+      `Папка, в которой вы были в прошлый раз, больше недоступна. Вместо неё открыта ${label}.`,
+    pathOpenFailed: "Не удалось открыть этот путь.",
+    pathNothing: (typed) => `По пути ${typed} ничего нет.`,
+    pathDenied: (typed) => `Нет доступа к ${typed}.`,
+    pathIoError: "Файловая система сообщила об ошибке. Попробуйте ещё раз.",
+    showingHidden: (name) => `Скрытые файлы показаны, чтобы был виден ${name}.`,
+    revealCutOff: (name, count) =>
+      `${name} есть в этой папке, но список обрезан на ${String(count)} ${pluralRu(count, ["элементе", "элементах", "элементах"])}. Найдите его через фильтр.`,
+    revealGone: (name) => `${name} в этой папке больше нет.`,
+    preferencesFailed: "Не удалось сохранить настройки.",
+    threadFolderFailed: (detail) => `Не удалось найти папку этого треда. ${detail}`,
+    linkLeadsNowhere: (root) => `Эта ссылка не ведёт никуда внутри ${root}.`,
+    moveFailed: "Не удалось переместить.",
+    copyFailed: "Не удалось скопировать.",
+    deleteFailed: "Не удалось удалить.",
+    pasteFailed: "Не удалось вставить сюда.",
+    pathsCopied: (count) =>
+      count === 1
+        ? "Путь скопирован"
+        : `${pluralRu(count, ["Скопирован", "Скопировано", "Скопировано"])} ${String(count)} ${pluralRu(count, ["путь", "пути", "путей"])}`,
+    clipboardDenied: "Браузер не разрешил копировать в буфер обмена.",
+    downloadTooMany: "Слишком много элементов для одного скачивания. Выберите их папку.",
+    onlyFilesToChat: "В чат можно добавить только файлы.",
+    addedToChat: (name) => `${name} добавлен в чат`,
+    filesAddedToChat: (count) =>
+      `${String(count)} ${pluralRu(count, ["файл добавлен", "файла добавлены", "файлов добавлено"])} в чат`,
+    linkOutside: (root) => `Ссылка ведёт за пределы ${root}`,
+    folderUploadUnsupported: "Этот браузер не умеет загружать папки — перетащите файлы по одному.",
+    backendSilent: "Сервер файлового менеджера не ответил",
+    folderOpenFailed: "Не удалось открыть эту папку",
+    listingTruncated: (shown, total) =>
+      `Показаны первые ${String(shown)} из ${String(total)}. Сузьте список фильтром.`,
+    treeTruncated: (count) =>
+      `Показаны первые ${String(count)} ${pluralRu(count, ["строка", "строки", "строк"])}. Сверните папку, чтобы увидеть остальное.`,
+    cancelJobFailed: "Не удалось отменить задание.",
+    finishFailed: "Не удалось завершить операцию.",
+    moveTo: "Переместить в…",
+    copyTo: "Копировать в…",
+    chooseFolder: "Выбрать эту папку",
+    move: "Переместить",
+    copy: "Копировать",
+  },
+);
 
 type GetState = RpcOutput<"getState">;
 type BatchResult = RpcOutput<"moveEntries">;
@@ -271,14 +351,15 @@ const RESTORE_FALLBACK_CODES: ReadonlySet<FileManagerErrorCode> = new Set<FileMa
 
 /** `label` comes from `startFolderLabel`, so no literal root path is spoken. */
 function restoreFallbackText(code: FileManagerErrorCode, label: string): string {
+  const t = messagesNow(messages);
   switch (code) {
     case "not_found":
     case "not_a_directory":
-      return `The folder you were last in is gone. Opened ${label} instead.`;
+      return t.restoreGone(label);
     case "permission_denied":
-      return `The folder you were last in cannot be opened. Opened ${label} instead.`;
+      return t.restoreDenied(label);
     default:
-      return `The folder you were last in is no longer reachable. Opened ${label} instead.`;
+      return t.restoreUnreachable(label);
   }
 }
 
@@ -288,21 +369,22 @@ function restoreFallbackText(code: FileManagerErrorCode, label: string): string 
  * the parent chain first and the error it throws names the parent (§5.4).
  */
 function pathCommitErrorText(failure: unknown, typed: string, root: string): string {
+  const t = messagesNow(messages);
   const parsed = parseRpcError(failure);
   switch (parsed.code) {
     case null:
-      return errorToastText(failure, "Could not open that path.");
+      return errorToastText(failure, t.pathOpenFailed);
     case "not_found":
-      return `There is nothing at ${typed}.`;
+      return t.pathNothing(typed);
     case "permission_denied":
-      return `You do not have permission to open ${typed}.`;
+      return t.pathDenied(typed);
     case "path_escape":
       return outsideRootMessage(root);
     case "invalid_path":
     case "invalid_name":
-      return PATH_INVALID_MESSAGE;
+      return pathInvalidMessage();
     case "io_error":
-      return "The filesystem reported an error. Try again.";
+      return t.pathIoError;
     default:
       return describeErrorCode(parsed.code);
   }
@@ -404,6 +486,7 @@ export function FileManagerSurface({
   initialQuery = "",
   threadId = null,
 }: FileManagerSurfaceProps) {
+  const t = useMessages(messages);
   const rpc = useFmRpc();
   const isCompactViewport = useIsCompactViewport();
   const isCoarsePointer = useIsCoarsePointer();
@@ -746,8 +829,8 @@ export function FileManagerSurface({
   directoryDataRef.current = directory.data;
   const jobs = useJobs({
     onFinished: (job) => {
-      if (job.state === "done") toast.success(`${job.label} finished`);
-      else if (job.state === "failed") toast.error(job.errorMessage ?? `${job.label} failed`);
+      if (job.state === "done") toast.success(jobSettledText(job));
+      else if (job.state === "failed") toast.error(jobSettledText(job));
       refetchRef.current();
     },
     onVanished: () => {
@@ -921,7 +1004,14 @@ export function FileManagerSurface({
       replace: true,
     });
     toast.message(
-      restoreFallbackText(restoreFallbackCode, startFolderLabel(state.startFolder, state.root)),
+      restoreFallbackText(
+        restoreFallbackCode,
+        startFolderLabel(
+          state.startFolder,
+          state.root,
+          messagesNow(startFolderMessages).homeInSentence,
+        ),
+      ),
     );
   }, [directory.error, restoreFallbackCode, restoreFallbackMoves, state]);
 
@@ -946,7 +1036,7 @@ export function FileManagerSurface({
       // State only, never `persist()` — same rule as the path bar's reveal.
       setShowHidden(true);
       since = directoryDataRef.current;
-      toast.message(`Showing hidden files so ${name} is visible.`);
+      toast.message(messagesNow(messages).showingHidden(name));
     }
     setPendingReveal({
       path: revealPath,
@@ -980,10 +1070,11 @@ export function FileManagerSurface({
     setPendingReveal(null);
     toast.message(
       data.truncated
-        ? `${pending.name} is in this folder, but the listing was cut off at ${String(
+        ? messagesNow(messages).revealCutOff(
+            pending.name,
             state?.maxListEntries ?? MAX_LIST_ENTRIES,
-          )} items. Use the filter to find it.`
-        : `${pending.name} is not in this folder any more.`,
+          )
+        : messagesNow(messages).revealGone(pending.name),
     );
   }, [
     directory.data,
@@ -1005,7 +1096,7 @@ export function FileManagerSurface({
         try {
           await rpc.call("savePreferences", values);
         } catch (failure) {
-          toast.error(errorToastText(failure, "Could not save your preferences."));
+          toast.error(errorToastText(failure, messagesNow(messages).preferencesFailed));
         }
       })();
     },
@@ -1118,7 +1209,7 @@ export function FileManagerSurface({
         return;
       }
       if (answer.status === "failed") {
-        toast.error(`Could not find this thread's folder. ${answer.message}`);
+        toast.error(messagesNow(messages).threadFolderFailed(answer.message));
       }
     })();
   }, [navigateTo]);
@@ -1217,7 +1308,7 @@ export function FileManagerSurface({
             // really resolves outside the root. One sentence has to be true of
             // both, so it says what is certain — the link leads nowhere this
             // panel can open (§5.2).
-            setPathError(`That link does not lead anywhere inside ${rootPhrase(root)}.`);
+            setPathError(messagesNow(messages).linkLeadsNowhere(rootPhrase(root)));
             return;
           }
           if (effectiveKind(entry) === "directory") {
@@ -1241,7 +1332,7 @@ export function FileManagerSurface({
             // preference is worse than the empty-looking folder it prevents.
             setShowHidden(true);
             since = directoryDataRef.current;
-            toast.message(`Showing hidden files so ${entry.name} is visible.`);
+            toast.message(messagesNow(messages).showingHidden(entry.name));
           }
           // Same rule for a file: revealing a row in the folder already on
           // screen is a selection, not a navigation.
@@ -1320,7 +1411,7 @@ export function FileManagerSurface({
           applyBatch(result, "move", { destinationDir });
         } catch (failure) {
           restore();
-          toast.error(errorToastText(failure, "Could not move those items."));
+          toast.error(errorToastText(failure, messagesNow(messages).moveFailed));
         }
       })();
     },
@@ -1338,7 +1429,7 @@ export function FileManagerSurface({
           });
           applyBatch(result, "copy");
         } catch (failure) {
-          toast.error(errorToastText(failure, "Could not copy those items."));
+          toast.error(errorToastText(failure, messagesNow(messages).copyFailed));
         }
       })();
     },
@@ -1355,7 +1446,7 @@ export function FileManagerSurface({
         });
         applyBatch(result, "delete");
       } catch (failure) {
-        toast.error(errorToastText(failure, "Could not delete those items."));
+        toast.error(errorToastText(failure, messagesNow(messages).deleteFailed));
       }
     },
     [applyBatch, rpc],
@@ -1387,7 +1478,7 @@ export function FileManagerSurface({
         if (result === null) return;
         applyBatch(result, pending.mode === "cut" ? "move" : "copy", { destinationDir });
       } catch (failure) {
-        toast.error(errorToastText(failure, "Could not paste here."));
+        toast.error(errorToastText(failure, messagesNow(messages).pasteFailed));
       }
     })();
   }, [applyBatch, clipboard]);
@@ -1396,8 +1487,8 @@ export function FileManagerSurface({
     if (paths.length === 0) return;
     void (async () => {
       const ok = await writeClipboardText(paths.join("\n"));
-      if (ok) toast.success(paths.length === 1 ? "Path copied" : `${String(paths.length)} paths copied`);
-      else toast.error("This browser did not allow copying to the clipboard.");
+      if (ok) toast.success(messagesNow(messages).pathsCopied(paths.length));
+      else toast.error(messagesNow(messages).clipboardDenied);
     })();
   }, []);
 
@@ -1419,7 +1510,7 @@ export function FileManagerSurface({
     }
     if (paths.length === 0) return;
     if (downloadZip(paths) === null) {
-      toast.error("Too many items to download at once. Select their folder instead.");
+      toast.error(messagesNow(messages).downloadTooMany);
     }
   }, []);
 
@@ -1435,14 +1526,14 @@ export function FileManagerSurface({
   const addToChat = useCallback((entries: readonly FileEntry[]) => {
     const files = entries.filter(isFileEntry);
     if (files.length === 0) {
-      toast.error("Only files can be added to the chat.");
+      toast.error(messagesNow(messages).onlyFilesToChat);
       return;
     }
     addFileMentions(composerRef.current, files);
     toast.success(
       files.length === 1 && files[0] !== undefined
-        ? `${files[0].name} added to the chat`
-        : `${String(files.length)} files added to the chat`,
+        ? messagesNow(messages).addedToChat(files[0].name)
+        : messagesNow(messages).filesAddedToChat(files.length),
     );
   }, []);
 
@@ -1497,7 +1588,7 @@ export function FileManagerSurface({
   const openEntry = useCallback(
     (entry: FileEntry) => {
       if (entry.escapesRoot) {
-        toast.error(`Link points outside ${root}`);
+        toast.error(messagesNow(messages).linkOutside(root));
         return;
       }
       const kind = effectiveKind(entry);
@@ -1541,9 +1632,9 @@ export function FileManagerSurface({
       void (async () => {
         try {
           await saveStartFolder(rpc, path);
-          toast.success(START_FOLDER_SAVED_TEXT);
+          toast.success(messagesNow(startFolderMessages).saved);
         } catch (failure) {
-          toast.error(errorToastText(failure, START_FOLDER_SAVE_FAILED_TEXT));
+          toast.error(errorToastText(failure, messagesNow(startFolderMessages).saveFailed));
         }
       })();
     },
@@ -1569,23 +1660,23 @@ export function FileManagerSurface({
     if (path === "" || state.loading) return;
     if (state.isBookmarked(path)) {
       void state.remove(path).catch((failure: unknown) => {
-        toast.error(errorToastText(failure, BOOKMARK_REMOVE_FAILED_TEXT));
+        toast.error(errorToastText(failure, messagesNow(bookmarkMessages).removeFailed));
       });
       return;
     }
     if (state.full) {
-      toast.error(BOOKMARKS_FULL_TEXT);
+      toast.error(messagesNow(bookmarkMessages).full);
       return;
     }
     void state.add(path).catch((failure: unknown) => {
-      toast.error(errorToastText(failure, BOOKMARK_ADD_FAILED_TEXT));
+      toast.error(errorToastText(failure, messagesNow(bookmarkMessages).addFailed));
     });
   }, []);
 
   /** The list's own "this folder is gone" row; see components/BookmarksMenu.tsx. */
   const removeBookmark = useCallback((path: string) => {
     void bookmarksRef.current.remove(path).catch((failure: unknown) => {
-      toast.error(errorToastText(failure, BOOKMARK_REMOVE_FAILED_TEXT));
+      toast.error(errorToastText(failure, messagesNow(bookmarkMessages).removeFailed));
     });
   }, []);
 
@@ -1870,7 +1961,7 @@ export function FileManagerSurface({
         if (entries === null) {
           const files = Array.from(event.dataTransfer.files);
           if (files.length === 0) return;
-          toast.message("Folder upload is not supported in this browser — drop individual files.");
+          toast.message(messagesNow(messages).folderUploadUnsupported);
           enqueueUploads(files.map((file) => ({ file, dirPath: destination, relativeDir: "" })));
           return;
         }
@@ -2482,7 +2573,7 @@ export function FileManagerSurface({
       {stateError === null ? null : (
         <ErrorBanner
           error={stateError}
-          title="The file manager backend did not answer"
+          title={t.backendSilent}
           onRetry={() => {
             setReady(false);
             setStateError(null);
@@ -2498,15 +2589,17 @@ export function FileManagerSurface({
       {directory.error === null || restoreFallbackMoves || directory.error === swallowedError ? null : (
         <ErrorBanner
           error={directory.error.rawMessage}
-          title="Could not open this folder"
+          title={t.folderOpenFailed}
           onRetry={handleRefresh}
         />
       )}
 
       {truncated ? (
         <div className="flex items-center gap-2 border-b border-border bg-surface-attention px-3 py-1.5 text-xs text-warning-text">
-          Showing the first {String(state?.maxListEntries ?? directory.entries.length)} of{" "}
-          {String(directory.data?.totalEntries ?? 0)} items. Use the filter to narrow it down.
+          {t.listingTruncated(
+            state?.maxListEntries ?? directory.entries.length,
+            directory.data?.totalEntries ?? 0,
+          )}
         </div>
       ) : null}
 
@@ -2515,7 +2608,7 @@ export function FileManagerSurface({
           a surface that is not on screen. */}
       {tree.rowsTruncated && !galleryView ? (
         <div className="flex items-center gap-2 border-b border-border bg-surface-attention px-3 py-1.5 text-xs text-warning-text">
-          Showing the first {String(MAX_TREE_ROWS)} rows. Collapse a folder to see more.
+          {t.treeTruncated(MAX_TREE_ROWS)}
         </div>
       ) : null}
 
@@ -2635,7 +2728,7 @@ export function FileManagerSurface({
         }}
         onCancelJob={(jobId) => {
           void jobs.cancel(jobId).catch((failure: unknown) => {
-            toast.error(errorToastText(failure, "Could not cancel that job."));
+            toast.error(errorToastText(failure, messagesNow(messages).cancelJobFailed));
           });
         }}
         onDismissJob={jobs.dismiss}
@@ -2740,7 +2833,7 @@ export function FileManagerSurface({
           // dialog the user is still looking at.
           onSubmit={async (name) => {
             await bookmarksRef.current.rename(dialog.path, name).catch((failure: unknown) => {
-              throw new Error(errorToastText(failure, BOOKMARK_RENAME_FAILED_TEXT));
+              throw new Error(errorToastText(failure, messagesNow(bookmarkMessages).renameFailed));
             });
           }}
         />
@@ -2772,11 +2865,11 @@ export function FileManagerSurface({
       {dialog.kind === "picker" ? (
         <FolderPickerDialog
           open
-          title={dialog.mode === "move" ? "Move to…" : "Copy to…"}
+          title={dialog.mode === "move" ? t.moveTo : t.copyTo}
           initialPath={currentPath}
           root={root}
           showHidden={showHidden}
-          confirmLabel="Choose this folder"
+          confirmLabel={t.chooseFolder}
           onOpenChange={(open) => {
             if (!open) setDialog({ kind: "none" });
           }}
@@ -2795,7 +2888,7 @@ export function FileManagerSurface({
           open
           conflicts={dialog.conflicts}
           destinationDir={dialog.destinationDir}
-          operation={dialog.operation === "move" ? "Move" : "Copy"}
+          operation={dialog.operation === "move" ? t.move : t.copy}
           onOpenChange={(open) => {
             if (!open) setDialog({ kind: "none" });
           }}
@@ -2822,7 +2915,7 @@ export function FileManagerSurface({
                       });
                 applyBatch(result, operation);
               } catch (failure) {
-                toast.error(errorToastText(failure, "Could not finish that operation."));
+                toast.error(errorToastText(failure, messagesNow(messages).finishFailed));
               }
             })();
           }}

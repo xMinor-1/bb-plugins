@@ -24,6 +24,9 @@ import {
 } from "./menu-item-hover.js";
 import { LIST_HOVER_TRANSITION } from "./motion.js";
 import { Icon } from "../../components/ui/icon.js";
+import { defineMessages, useMessages } from "../../lib/i18n";
+
+const messages = defineMessages({ menu: "Menu" }, { menu: "Меню" });
 
 // Item state by variant: hover (focus) and the persistent last-hovered tile use
 // the same fill, so the highlight reads identically and simply persists on the
@@ -159,6 +162,7 @@ const DropdownMenuContent = React.forwardRef<
     // Unconditional (rules of hooks — the compact branch returns early); the
     // compact drawer path is covered by the persistent drawer shell.
     const scopeProps = usePortalScopeProps();
+    const t = useMessages(messages);
 
     if (isCompactViewport) {
       const domProps = stripRadixContentProps(props);
@@ -166,7 +170,7 @@ const DropdownMenuContent = React.forwardRef<
         <ResponsiveDrawerShell
           open={open}
           onOpenChange={onOpenChange}
-          srLabel={mobileTitle ?? "Menu"}
+          srLabel={mobileTitle ?? t.menu}
         >
           <div
             ref={ref}

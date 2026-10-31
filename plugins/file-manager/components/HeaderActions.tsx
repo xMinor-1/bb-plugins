@@ -16,13 +16,17 @@ import {
 } from "./ui/dropdown-menu";
 import { Icon } from "./ui/icon";
 import { sendPanelCommand, usePanelSnapshot } from "./panel-bus";
+import { actionMessages } from "./action-messages";
+import { LanguageSwitch, useMessages } from "../lib/i18n";
 
 export function HeaderActions(_props: PluginNavPanelProps) {
+  const t = useMessages(actionMessages);
   const panel = usePanelSnapshot();
   const disabled = !panel.ready || !panel.writable;
 
   return (
     <div className="flex items-center gap-1" data-testid="fm-header-actions">
+      <LanguageSwitch className="mr-1" />
       <Button
         type="button"
         variant="ghost"
@@ -33,7 +37,7 @@ export function HeaderActions(_props: PluginNavPanelProps) {
         onClick={() => sendPanelCommand({ type: "upload" })}
       >
         <Icon name="PackageReceive" className="size-4" aria-hidden="true" />
-        <span className="hidden sm:inline">Upload</span>
+        <span className="hidden sm:inline">{t.upload}</span>
       </Button>
 
       <Button
@@ -46,7 +50,7 @@ export function HeaderActions(_props: PluginNavPanelProps) {
         onClick={() => sendPanelCommand({ type: "new-folder" })}
       >
         <Icon name="FolderPlus" className="size-4" aria-hidden="true" />
-        <span className="hidden sm:inline">New folder</span>
+        <span className="hidden sm:inline">{t.newFolder}</span>
       </Button>
 
       <DropdownMenu>
@@ -56,7 +60,7 @@ export function HeaderActions(_props: PluginNavPanelProps) {
             variant="ghost"
             size="sm"
             className="h-8 w-8 p-0"
-            aria-label="More actions"
+            aria-label={t.moreActions}
             data-testid="fm-header-overflow"
           >
             <Icon name="MoreHorizontal" className="size-4" aria-hidden="true" />
@@ -68,21 +72,21 @@ export function HeaderActions(_props: PluginNavPanelProps) {
             onSelect={() => sendPanelCommand({ type: "refresh" })}
           >
             <Icon name="ArrowReloadHorizontal" className="size-4" aria-hidden="true" />
-            Refresh
+            {t.refresh}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!panel.ready}
             onSelect={() => sendPanelCommand({ type: "toggle-hidden" })}
           >
             <Icon name={panel.showHidden ? "EyeOff" : "Eye"} className="size-4" aria-hidden="true" />
-            {panel.showHidden ? "Hide hidden files" : "Show hidden files"}
+            {panel.showHidden ? t.hideHidden : t.showHiddenAction}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!panel.ready}
             onSelect={() => sendPanelCommand({ type: "select-all" })}
           >
             <Icon name="Check" className="size-4" aria-hidden="true" />
-            Select all
+            {t.selectAll}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -90,21 +94,21 @@ export function HeaderActions(_props: PluginNavPanelProps) {
             onSelect={() => sendPanelCommand({ type: "paste" })}
           >
             <Icon name="Copy" className="size-4" aria-hidden="true" />
-            Paste
+            {t.paste}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!panel.ready}
             onSelect={() => sendPanelCommand({ type: "copy-path" })}
           >
             <Icon name="Paperclip" className="size-4" aria-hidden="true" />
-            Copy folder path
+            {t.copyFolderPath}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!panel.ready}
             onSelect={() => sendPanelCommand({ type: "set-start-folder" })}
           >
             <Icon name="Pin" className="size-4" aria-hidden="true" />
-            Set as start folder
+            {t.setStartFolder}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

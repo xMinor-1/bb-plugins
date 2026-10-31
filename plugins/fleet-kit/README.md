@@ -57,9 +57,8 @@ bb fleet-kit secret clear <name>
 ```
 
 Secrets are entered in the panel's password field or piped on stdin with
-`--value-stdin`. bb's CLI hands a piped value to the plugin as `--value`, so
-that option exists, but it is hidden and should never be typed: a value on the
-command line lands in shell history. No command prints a secret.
+`--value-stdin`, so a value never lands in shell history. No command prints a
+secret.
 
 ## The manifest
 
@@ -129,8 +128,11 @@ a newer Fleet Kit can still deliver it.
   be in `allowedProviders`. `{secret:name}` is allowed only as a provider's whole
   `settings.apiKey` or inside `settings.headers`, and such a provider needs an
   `https://` `settings.baseURL`. OpenCode's own `{env:...}` and `{file:...}` are
-  refused anywhere in the manifest: OpenCode would send the client's value to
-  the manifest's address.
+  refused anywhere in the manifest, in names as well as in values (a header
+  named `x-{env:GITHUB_TOKEN}` is refused too): OpenCode would send the
+  client's value to the manifest's address. A provider's `package` must be one
+  of OpenCode's own, `@opencode/ai/providers/<name>`; any other package is
+  accepted only on a machine with `allowDevSources`.
 - `mcp`, `skills` — validated; this version does not apply them yet.
 
 A manifest whose remote MCP server has no URL yet, or that names a pre-release
@@ -150,33 +152,49 @@ Fleet Kit saves the plugin's plain settings, removes it, installs it from the
 new source, puts the settings back, and applies the manifest's `config`. Secret
 settings cannot be read back, so the panel shows a notice asking to enter them
 again. If the new source does not install, Fleet Kit puts the previous one back
-and reports the error. A source that installs a plugin with another id is
-removed again and reported.
+(with the same subdirectory or plugin name), shows the same notice, and reports
+the error. It tries a new source at most twice a day, an hour apart; between
+tries the plugin stays on its previous source and the sync leaves it alone. A
+source that installs a plugin with another id is removed again and reported.
+
+An install that does not finish in ten minutes may still finish in bb, so
+Fleet Kit never installs another source under the same id after it. It looks
+at what bb lists: the new source counts as switched, a running install is
+left to the next sync, and only an install that is gone without a result gets
+the previous source back. A first install that times out is waited for the
+same way. If the build drops the plugin, or marks it `planned`, while such a
+switch is unfinished, Fleet Kit still puts the previous source back rather than
+leave the plugin removed.
 
 Fleet Kit's own update is the first step of every sync and reads only its own
 entry, before the rest of the manifest is checked. When its source offers a
 newer release, Fleet Kit finishes the sync and asks bb to install it. If the
 new version does not come up, bb rolls back; Fleet Kit tries the same version at
-most twice a day.
+most twice a day. A sync that runs while the update is still going neither
+counts a try nor starts a second update.
 
 Fleet Kit removes only plugins listed in `removePlugins`, never one bundled
 with bb. A plugin dropped from `plugins` stays and the sync says so once.
 
 ### opencode.json
 
-Other writers share this file — the person who uses OpenCode, and plugins such
-as an MCP integration. Fleet Kit follows the contract they share:
+The person who uses OpenCode edits this file too, so Fleet Kit:
 
 - It writes only the keys that come from the manifest: `providers.<id>` for each
   build provider, the other top-level keys of the `opencode` block (such as
   `model` and `update`), and `enabled_providers`. It remembers which keys it
   wrote and removes one only when the build drops it. Comments and formatting of
   the rest of the file are kept.
-- Writers take a lock directory `<config>.bb-config-lock` with an `owner.json`
-  (plugin, pid, host, time), wait and retry while another writer holds it, and
-  recover an abandoned lock under `.recovery`. The panel shows who holds the
-  lock; when it has been held for more than two minutes, **Reset lock** breaks
-  it. Fleet Kit never breaks a lock on its own.
+- Writes under a lock directory `<config>.bb-config-lock` with an `owner.json`
+  (plugin, pid, host, time, token), so two syncs — or a sync and a lock reset —
+  never write at once. `owner.json` is written whole (a synced temporary file
+  linked into place), so a writer killed half way leaves no empty owner file. A writer waits and retries while the lock is held,
+  recovers an abandoned one under `.recovery`, and removes only a directory
+  that still carries its own token. The panel shows who holds the lock; when it
+  has been held for more than two minutes — or a minute, when its `owner.json`
+  is missing, empty or broken — **Reset lock** breaks it under the same
+  recovery guard, after checking again that it is the lock it saw. Fleet
+  Kit never breaks a live lock on its own.
 - The file is re-read and its hash compared just before the atomic rename; a
   change made in between restarts the write.
 - Before its first change Fleet Kit saves the original as
@@ -204,7 +222,9 @@ without `apiKey`, and Fleet Kit installs a small OpenCode plugin,
 the `Authorization` header (or the headers the manifest names) only when the
 request goes to the origin of the provider's `baseURL` in the manifest. A
 project's `opencode.json` can override a provider's address; the key does not
-follow it there. A wrong address or a missing key leaves the header out and
+follow it there, and a keyed request does not follow redirects either: a
+gateway answering with a redirect gets an error, not the key at a second
+address. A wrong address or a missing key leaves the header out and
 writes a warning, without the value, to `fleet-kit.log` in OpenCode's log
 directory (`~/.local/share/opencode/log/`, next to `opencode.log`). A changed key takes
 effect within a minute without restarting anything.
@@ -272,23 +292,44 @@ and limits:
 
 ```sh
 e2e/run.sh                                     # build the image, start the container, prepare a fixture build
-e2e/x.sh 'bb plugin install "git:/home/tester/fleet.git@semver:fleet-kit/:^0.1.0" --plugin fleet-kit --yes'
-e2e/x.sh 'bb plugin config fleet-kit set allowDevSources true'   # local git source, gateway on 127.0.0.1
-e2e/x.sh 'bb plugin config fleet-kit set manifestUrl file:///home/tester/build/manifest.json'
-e2e/x.sh 'bb fleet-kit sync'                  # the first sync learns the build's secrets
-e2e/x.sh 'bb fleet-kit secret set gateway-key --value-stdin < ~/.fk-e2e/expected-key'
-e2e/x.sh 'bb fleet-kit status'
+e2e/x.sh 'bash /tmp/scenario.sh'               # install, sync, enter the key, run threads; one line per check
 ```
 
-The fixture build installs a local fixture plugin and a public one, removes a
-plugin, sets bb settings, and points OpenCode at a fake OpenAI-compatible
-gateway on `127.0.0.1:4010`. The gateway answers "Pong" and logs whether each
-request carried the expected key (`~/.fk-e2e/gateway.log`), never the key
-itself, so a thread on `acp-opencode` with `corp/model-large` shows the whole
-path. A second gateway on `127.0.0.1:4011` (`~/.fk-e2e/other-gateway.log`)
-stands in for another address: a project `opencode.json` that points
-`providers.corp.settings.baseURL` there must reach it without the key. `e2e/run.sh --build-arg OPENCODE_PACKAGE=opencode-ai@1.19.5` checks the
-OpenCode 1.x path.
+The run takes several minutes. To survive a lost terminal, start it detached
+and read its log from the container:
+
+```sh
+docker exec -d fleet-kit-e2e bash -c 'bash /tmp/scenario.sh > /tmp/scenario.log 2>&1; echo "exit=$?" >> /tmp/scenario.log'
+docker exec fleet-kit-e2e cat /tmp/scenario.log
+```
+
+`e2e/scenario.sh` installs Fleet Kit from the container's git repository, sets
+`allowDevSources` (the fixture uses a local git source and a gateway on
+`127.0.0.1`), points it at the fixture manifest, enters the key with
+`--value-stdin`, and checks the result. The fixture build installs a local
+fixture plugin and a public one, removes a plugin, sets bb settings, and points
+OpenCode at a fake OpenAI-compatible gateway on `127.0.0.1:4010`. The gateway
+answers "Pong" and logs whether each request carried the expected key
+(`~/.fk-e2e/gateway.log`), never the key itself. A thread on `acp-opencode`
+with `corp/model-large` must get "Pong" with the key. A second gateway on
+`127.0.0.1:4011` (`~/.fk-e2e/other-gateway.log`) stands in for another
+address: a project whose `opencode.json` points `providers.corp.settings.baseURL`
+there must reach it without the key, and `fleet-kit.log` must name it. Last,
+the key must not appear in any log, configuration or project file.
+
+To check Fleet Kit's own update, start from an earlier release:
+
+```sh
+FLEET_KIT_BASE_REF=fleet-kit/v0.1.0 e2e/run.sh
+e2e/x.sh 'bash /tmp/scenario.sh'
+```
+
+The container's repository then holds only that release. The scenario
+installs it, releases the working copy as a new tag (`e2e/release-current.sh`),
+sets the sync interval to five minutes, and waits for the installed version
+to update itself on its schedule, without a manual sync, then for the new
+version's first sync. `e2e/run.sh --build-arg OPENCODE_PACKAGE=opencode-ai@1.19.5`
+checks the OpenCode 1.x path.
 
 `e2e/panel-smoke.mjs` clicks through the panel in headless Chromium inside the
 container — Sync now, removing the key and entering it again through the form —

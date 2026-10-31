@@ -227,6 +227,7 @@ describe("extractArchive", () => {
       state: "done",
       kind: "extract",
       label: 'Extracting "photos.tar.gz"',
+      subject: "photos.tar.gz",
       resultPath: path.join(root, "photos"),
       errorCode: null,
     });

@@ -8,7 +8,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { promisify } from "node:util";
 import { PDFDocument } from "pdf-lib";
-import { annotatePdf, pdfFromImages, readShared, UnreadablePdfError } from "./annotate.js";
+import { annotatePdf, pdfFromImages, readShared, UnreadablePdfError, type ExportLang } from "./annotate.js";
 import type { DocFiles } from "./files.js";
 import { exportFonts } from "./fonts.js";
 import { renderWidth, type Renderer } from "./render.js";
@@ -26,9 +26,9 @@ const EXPORT_KEEP_MS = 2 * 60 * 60 * 1000;
 const SCAN_MAX_BYTES = 64 * 1024 * 1024;
 
 /** `deck.pptx` → `deck (comments).pdf`; an export of an export keeps one suffix. */
-export function exportName(fileName: string): string {
-  const stem = fileName.replace(/\.[^.]+$/, "").replace(/ \(comments\)$/, "");
-  return `${stem} (comments).pdf`;
+export function exportName(fileName: string, lang: ExportLang = "en"): string {
+  const stem = fileName.replace(/\.[^.]+$/, "").replace(/ \((comments|комментарии)\)$/, "");
+  return `${stem} (${lang === "ru" ? "комментарии" : "comments"}).pdf`;
 }
 
 export interface SharedSummary {
@@ -57,12 +57,16 @@ export function createExchange(deps: {
   const scans = new Map<string, { version: string; shared: Promise<SharedReview | null> }>();
 
   /** The PDF for `doc` with its comments in it. */
-  async function exportPdf(doc: DocRow, signer: string | null): Promise<{ bytes: Uint8Array; count: number; name: string }> {
+  async function exportPdf(
+    doc: DocRow,
+    signer: string | null,
+    lang: ExportLang = "en",
+  ): Promise<{ bytes: Uint8Array; count: number; name: string }> {
     if (!isPaged(doc.kind)) throw new Error("Only PDF, Word, and PowerPoint files are exported with comments.");
     const version = await deps.currentVersion(doc);
     const pdf = await deps.pdfFor(doc);
     const name = path.posix.basename(doc.absPath);
-    const options = { kind: doc.kind, name, signer, fonts: await exportFonts() };
+    const options = { kind: doc.kind, name, signer, fonts: await exportFonts(), lang };
     const comments = store.listComments(doc.id);
     let result: { bytes: Uint8Array; count: number };
     try {
@@ -79,7 +83,7 @@ export function createExchange(deps: {
       }
       result = await annotatePdf(await pdfFromImages(pages), comments, options);
     }
-    return { ...result, name: exportName(name) };
+    return { ...result, name: exportName(name, lang) };
   }
 
   /** Writes an export where the plugin keeps them, clearing old ones; returns its path. */

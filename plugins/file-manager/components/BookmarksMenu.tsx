@@ -27,6 +27,25 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Icon } from "./ui/icon";
+import { actionMessages } from "./action-messages";
+import { defineMessages, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    bookmarks: "Bookmarks",
+    renameBookmark: "Rename this bookmark…",
+    empty: "No bookmarks yet",
+    gone: (path: string) => `${path} is gone — choose this row to remove the bookmark`,
+    missing: "Missing — remove",
+  },
+  {
+    bookmarks: "Закладки",
+    renameBookmark: "Переименовать закладку…",
+    empty: "Закладок пока нет",
+    gone: (path) => `${path} больше нет — выберите строку, чтобы убрать закладку`,
+    missing: "Нет — убрать",
+  },
+);
 
 export interface BookmarkMenuItemsProps {
   bookmarks: readonly Bookmark[];
@@ -58,6 +77,8 @@ export function BookmarkMenuItems({
   onRemove,
   onRefresh,
 }: BookmarkMenuItemsProps) {
+  const t = useMessages(messages);
+  const a = useMessages(actionMessages);
   // Through a ref so the effect stays a mount effect: the callback is rebuilt
   // on every render of the panel, and a dependency on it would re-read the
   // list on every keystroke in the filter field.
@@ -69,7 +90,7 @@ export function BookmarkMenuItems({
 
   return (
     <>
-      <DropdownMenuLabel>Bookmarks</DropdownMenuLabel>
+      <DropdownMenuLabel>{t.bookmarks}</DropdownMenuLabel>
 
       {/* A full list does *not* disable this. A control that goes grey with no
           explanation is worse than one that answers: the panel knows the
@@ -80,13 +101,13 @@ export function BookmarkMenuItems({
         onSelect={onToggleCurrent}
       >
         <Icon name={currentBookmarked ? "PinOff" : "Star"} className="size-4" aria-hidden="true" />
-        {currentBookmarked ? "Remove bookmark" : "Bookmark this folder"}
+        {currentBookmarked ? a.removeBookmark : a.bookmarkFolder}
       </DropdownMenuItem>
 
       {currentBookmarked ? (
         <DropdownMenuItem data-testid="fm-bookmark-rename" onSelect={onRenameCurrent}>
           <Icon name="Edit" className="size-4" aria-hidden="true" />
-          Rename this bookmark…
+          {t.renameBookmark}
         </DropdownMenuItem>
       ) : null}
 
@@ -94,7 +115,7 @@ export function BookmarkMenuItems({
 
       {bookmarks.length === 0 ? (
         <DropdownMenuItem disabled data-testid="fm-bookmarks-empty">
-          No bookmarks yet
+          {t.empty}
         </DropdownMenuItem>
       ) : (
         bookmarks.map((bookmark) =>
@@ -114,14 +135,14 @@ export function BookmarkMenuItems({
               key={bookmark.path}
               data-testid="fm-bookmark-missing"
               data-fm-path={bookmark.path}
-              title={`${bookmark.path} is gone — choose this row to remove the bookmark`}
+              title={t.gone(bookmark.path)}
               onSelect={() => onRemove(bookmark.path)}
             >
               <Icon name="Trash2" className="size-4" aria-hidden="true" />
               <span className="truncate text-muted-foreground line-through">{bookmark.name}</span>
               {/* `tracking-widest` is for key caps; this is a sentence. */}
               <DropdownMenuShortcut className="tracking-normal">
-                Missing — remove
+                {t.missing}
               </DropdownMenuShortcut>
             </DropdownMenuItem>
           ),
@@ -137,6 +158,7 @@ export interface BookmarksMenuProps extends BookmarkMenuItemsProps {
 
 /** The wide toolbar's trigger: the list, one click away from the star. */
 export function BookmarksMenu({ className, ...items }: BookmarksMenuProps) {
+  const t = useMessages(messages);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -145,7 +167,7 @@ export function BookmarksMenu({ className, ...items }: BookmarksMenuProps) {
           variant="ghost"
           size="sm"
           className={cn("h-8 w-8 shrink-0 p-0", className)}
-          aria-label="Bookmarks"
+          aria-label={t.bookmarks}
           data-testid="fm-bookmarks-menu"
         >
           <Icon name="ChevronDown" className="size-4" aria-hidden="true" />

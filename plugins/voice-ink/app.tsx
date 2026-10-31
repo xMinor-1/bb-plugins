@@ -16,11 +16,30 @@ import { HistoryDisclosure } from "@/components/HistoryDisclosure";
 import { HistoryPanel } from "@/components/HistoryPanel";
 import { Icon } from "@/components/ui/icon";
 import { useDictation } from "@/hooks/useDictation";
+import { defineMessages, getLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { PANEL_PATH } from "./contract";
 import type { rpcContract } from "./server";
 
+const messages = defineMessages(
+  {
+    dictationFailed: "Dictation failed",
+    stop: "Stop dictation (Esc cancels)",
+    finishing: "Finishing transcription",
+    dictate: "Dictate with the local model",
+    historyLabel: "Voice Ink history",
+  },
+  {
+    dictationFailed: "Не удалось надиктовать",
+    stop: "Остановить диктовку (Esc — отменить)",
+    finishing: "Дораспознаю последний кусок",
+    dictate: "Диктовать локальной моделью",
+    historyLabel: "История Voice Ink",
+  },
+);
+
 function VoiceButton() {
+  const t = useMessages(messages);
   const composer = useComposer();
   const rpc = useRpc<typeof rpcContract>();
   const settings = useSettings();
@@ -47,7 +66,7 @@ function VoiceButton() {
       rpc.call("transcribe_segment", { ...input, language: null }),
     onText: appendText,
     onError: (message) => {
-      toast.error("Dictation failed", { description: message });
+      toast.error(t.dictationFailed, { description: message });
     },
     warmUp: () => {
       // Loading the model takes seconds; starting it with the recording means
@@ -76,11 +95,7 @@ function VoiceButton() {
   // phone app, so a second button in the composer is opt-in.
   if (settings.values?.composerButton !== true) return null;
 
-  const label = listening
-    ? "Stop dictation (Esc cancels)"
-    : busy
-      ? "Finishing transcription"
-      : "Dictate with the local model";
+  const label = listening ? t.stop : busy ? t.finishing : t.dictate;
 
   return (
     <button
@@ -138,6 +153,8 @@ export default definePluginApp((app) => {
     component: HistoryPanel,
   });
 
+  // Registered once at load: a language switch shows up here after a reload.
+  //
   // The microphone in the sidebar footer, next to settings and the theme
   // switch: the sidebar row above can be folded away under "More", and the
   // question this answers ("did all of it get through?") comes up right after
@@ -145,7 +162,7 @@ export default definePluginApp((app) => {
   app.experimental_sidebarFooter.register({
     kind: "disclosure",
     id: "history",
-    label: "Voice Ink history",
+    label: messages[getLang()].historyLabel,
     icon: "Mic",
     component: HistoryDisclosure,
   });

@@ -18,6 +18,39 @@ import {
 } from "../ui/dialog";
 import { Icon } from "../ui/icon";
 import { effectiveKind } from "../FileRow";
+import { defineMessages, pluralRu, useMessages } from "../../lib/i18n";
+
+const messages = defineMessages(
+  {
+    deleteOne: (name: string) => `Delete “${name}”?`,
+    deleteMany: (count: number) => `Delete ${String(count)} items?`,
+    noUndo: "This cannot be undone — there is no trash in this plugin.",
+    more: (count: number) => `and ${String(count)} more…`,
+    folders: (count: number) =>
+      `${count === 1 ? "One folder" : `${String(count)} folders`} will be deleted with all of their contents.`,
+    links: (count: number) =>
+      `${count === 1 ? "One symbolic link" : `${String(count)} symbolic links`} will be removed; the files they point at are left alone.`,
+    cancel: "Cancel",
+    delete: "Delete",
+  },
+  {
+    deleteOne: (name) => `Удалить «${name}»?`,
+    deleteMany: (count) =>
+      `Удалить ${String(count)} ${pluralRu(count, ["элемент", "элемента", "элементов"])}?`,
+    noUndo: "Это не отменить — корзины у этого плагина нет.",
+    more: (count) => `и ещё ${String(count)}…`,
+    folders: (count) =>
+      count === 1
+        ? "Папка будет удалена вместе со всем содержимым."
+        : `${String(count)} ${pluralRu(count, ["папка будет удалена", "папки будут удалены", "папок будут удалены"])} вместе со всем содержимым.`,
+    links: (count) =>
+      count === 1
+        ? "Символическая ссылка будет удалена; файлы, на которые она указывает, останутся."
+        : `${String(count)} ${pluralRu(count, ["символическая ссылка будет удалена", "символические ссылки будут удалены", "символических ссылок будут удалены"])}; файлы, на которые они указывают, останутся.`,
+    cancel: "Отмена",
+    delete: "Удалить",
+  },
+);
 
 export interface ConfirmDeleteDialogProps {
   open: boolean;
@@ -32,6 +65,7 @@ export function ConfirmDeleteDialog({
   entries,
   onConfirm,
 }: ConfirmDeleteDialogProps) {
+  const t = useMessages(messages);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (open) setBusy(false);
@@ -44,8 +78,8 @@ export function ConfirmDeleteDialog({
   const links = entries.filter((entry) => entry.isSymlink).length;
   const title =
     entries.length === 1 && first !== undefined
-      ? `Delete “${first.name}”?`
-      : `Delete ${String(entries.length)} items?`;
+      ? t.deleteOne(first.name)
+      : t.deleteMany(entries.length);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -59,7 +93,7 @@ export function ConfirmDeleteDialog({
             {title}
           </DialogTitle>
           <DialogDescription>
-            This cannot be undone — there is no trash in this plugin.
+            {t.noUndo}
           </DialogDescription>
         </DialogHeader>
 
@@ -72,7 +106,7 @@ export function ConfirmDeleteDialog({
             ))}
             {entries.length > 50 ? (
               <li className="py-0.5 text-muted-foreground">
-                and {String(entries.length - 50)} more…
+                {t.more(entries.length - 50)}
               </li>
             ) : null}
           </ul>
@@ -80,20 +114,18 @@ export function ConfirmDeleteDialog({
 
         {folders > 0 ? (
           <p className="rounded-md bg-surface-attention px-2 py-1.5 text-xs text-warning-text">
-            {folders === 1 ? "One folder" : `${String(folders)} folders`} will be deleted with all
-            of their contents.
+            {t.folders(folders)}
           </p>
         ) : null}
         {links > 0 ? (
           <p className="text-xs text-muted-foreground">
-            {links === 1 ? "One symbolic link" : `${String(links)} symbolic links`} will be removed;
-            the files they point at are left alone.
+            {t.links(links)}
           </p>
         ) : null}
 
         <DialogFooter className="gap-2">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t.cancel}
           </Button>
           <Button
             type="button"
@@ -111,7 +143,7 @@ export function ConfirmDeleteDialog({
               })();
             }}
           >
-            Delete
+            {t.delete}
           </Button>
         </DialogFooter>
       </DialogContent>

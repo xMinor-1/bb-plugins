@@ -10,6 +10,62 @@ import { cn } from "../lib/utils";
 import { formatBytes, formatEta, formatPercent, formatSpeed, progressRatio } from "../lib/format";
 import { Button } from "./ui/button";
 import { Icon, type IconName } from "./ui/icon";
+import { describeErrorCode } from "../lib/errors";
+import { defineMessages, messagesNow, pluralRu, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    failed: "Failed",
+    retry: (name: string) => `Retry ${name}`,
+    dismiss: (name: string) => `Dismiss ${name}`,
+    cancel: (name: string) => `Cancel ${name}`,
+    uploadFailed: "Upload failed",
+    queued: "Queued",
+    finishing: "Finishing…",
+    paused: "Paused",
+    uploading: (count: number) => `Uploading ${String(count)} file${count === 1 ? "" : "s"}`,
+    activity: "Activity",
+    clear: "Clear",
+    extracting: (name: string) => `Extracting "${name}"`,
+    jobFinished: (label: string) => `${label} finished`,
+    jobFailed: (label: string) => `${label} failed`,
+  },
+  {
+    failed: "Ошибка",
+    retry: (name) => `Повторить ${name}`,
+    dismiss: (name) => `Убрать ${name}`,
+    cancel: (name) => `Отменить ${name}`,
+    uploadFailed: "Не удалось загрузить",
+    queued: "В очереди",
+    finishing: "Завершение…",
+    paused: "Пауза",
+    uploading: (count) =>
+      `${pluralRu(count, ["Загружается", "Загружаются", "Загружаются"])} ${String(count)} ${pluralRu(count, ["файл", "файла", "файлов"])}`,
+    activity: "Активность",
+    clear: "Очистить",
+    extracting: (name) => `Распаковка «${name}»`,
+    jobFinished: (label) => `${label}: готово`,
+    jobFailed: (label) => `${label}: не удалось`,
+  },
+);
+
+/** A job's label in the interface language; the server's own label is English. */
+export function jobLabel(job: Job): string {
+  const t = messagesNow(messages);
+  if (job.kind === "extract" && job.subject !== "") return t.extracting(job.subject);
+  return job.label;
+}
+
+/** Toast text for a job that just settled. */
+export function jobSettledText(job: Job): string {
+  const t = messagesNow(messages);
+  const label = jobLabel(job);
+  if (job.state === "done") return t.jobFinished(label);
+  if (job.errorCode === null) return job.errorMessage ?? t.jobFailed(label);
+  // "Extraction failed" would only repeat the label.
+  if (job.errorCode === "archive_failed") return t.jobFailed(label);
+  return `${t.jobFailed(label)}. ${describeErrorCode(job.errorCode)}`;
+}
 
 export interface ActivityTrayProps {
   uploads: readonly UploadState[];
@@ -64,6 +120,7 @@ function UploadRow({
   onRetry: (id: string) => void;
   onDismiss: (id: string) => void;
 }) {
+  const t = useMessages(messages);
   const ratio = progressRatio(upload.sentBytes, upload.sizeBytes);
   const settled = upload.status === "done" || upload.status === "canceled";
   const failed = upload.status === "error";
@@ -85,7 +142,7 @@ function UploadRow({
           {upload.fileName}
         </span>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {failed ? "Failed" : settled ? formatBytes(upload.sizeBytes) : formatPercent(ratio)}
+          {failed ? t.failed : settled ? formatBytes(upload.sizeBytes) : formatPercent(ratio)}
         </span>
         {settled || failed ? (
           <>
@@ -95,7 +152,7 @@ function UploadRow({
                 variant="ghost"
                 size="sm"
                 className="size-6 p-0"
-                aria-label={`Retry ${upload.fileName}`}
+                aria-label={t.retry(upload.fileName)}
                 onClick={() => onRetry(upload.id)}
               >
                 <Icon name="ArrowReloadHorizontal" className="size-3.5" aria-hidden="true" />
@@ -106,7 +163,7 @@ function UploadRow({
               variant="ghost"
               size="sm"
               className="size-6 p-0"
-              aria-label={`Dismiss ${upload.fileName}`}
+              aria-label={t.dismiss(upload.fileName)}
               onClick={() => onDismiss(upload.id)}
             >
               <Icon name="X" className="size-3.5" aria-hidden="true" />
@@ -118,7 +175,7 @@ function UploadRow({
             variant="ghost"
             size="sm"
             className="size-6 p-0"
-            aria-label={`Cancel ${upload.fileName}`}
+            aria-label={t.cancel(upload.fileName)}
             onClick={() => onCancel(upload.id)}
           >
             <Icon name="X" className="size-3.5" aria-hidden="true" />
@@ -132,7 +189,7 @@ function UploadRow({
           <p className="flex items-center gap-2 text-[0.6875rem] tabular-nums text-muted-foreground">
             {failed ? (
               <span className="truncate text-destructive">
-                {upload.errorMessage ?? "Upload failed"}
+                {upload.errorMessage ?? t.uploadFailed}
               </span>
             ) : (
               <>
@@ -143,9 +200,9 @@ function UploadRow({
                   <span>{formatSpeed(upload.bytesPerSecond)}</span>
                 ) : null}
                 {upload.status === "uploading" ? <span>{formatEta(upload.etaMs)}</span> : null}
-                {upload.status === "queued" ? <span>Queued</span> : null}
-                {upload.status === "finishing" ? <span>Finishing…</span> : null}
-                {upload.status === "paused" ? <span>Paused</span> : null}
+                {upload.status === "queued" ? <span>{t.queued}</span> : null}
+                {upload.status === "finishing" ? <span>{t.finishing}</span> : null}
+                {upload.status === "paused" ? <span>{t.paused}</span> : null}
               </>
             )}
           </p>
@@ -164,8 +221,14 @@ function JobRow({
   onCancel: (jobId: string) => void;
   onDismiss: (jobId: string) => void;
 }) {
+  const t = useMessages(messages);
   const running = job.state === "running";
   const ratio = progressRatio(job.processedBytes, job.totalBytes);
+  const label = jobLabel(job);
+  // The code's sentence is in the interface language; the server's detail
+  // (tool output, exit codes) stays in the tooltip.
+  const failure =
+    job.errorCode === null ? job.errorMessage : describeErrorCode(job.errorCode);
 
   return (
     <li data-testid="fm-job-item" data-job-state={job.state} className="px-3 py-2">
@@ -180,15 +243,15 @@ function JobRow({
           )}
           aria-hidden="true"
         />
-        <span className="min-w-0 flex-1 truncate text-xs" title={job.label}>
-          {job.label}
+        <span className="min-w-0 flex-1 truncate text-xs" title={label}>
+          {label}
         </span>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           className="size-6 p-0"
-          aria-label={running ? `Cancel ${job.label}` : `Dismiss ${job.label}`}
+          aria-label={running ? t.cancel(label) : t.dismiss(label)}
           onClick={() => (running ? onCancel(job.jobId) : onDismiss(job.jobId))}
         >
           <Icon name="X" className="size-3.5" aria-hidden="true" />
@@ -205,8 +268,13 @@ function JobRow({
           )}
         </div>
       ) : null}
-      {job.state === "failed" && job.errorMessage !== null ? (
-        <p className="mt-1 truncate text-[0.6875rem] text-destructive">{job.errorMessage}</p>
+      {job.state === "failed" && failure !== null ? (
+        <p
+          className="mt-1 truncate text-[0.6875rem] text-destructive"
+          title={job.errorMessage ?? undefined}
+        >
+          {failure}
+        </p>
       ) : null}
     </li>
   );
@@ -223,6 +291,7 @@ export function ActivityTray({
   onDismissJob,
   className,
 }: ActivityTrayProps) {
+  const t = useMessages(messages);
   if (uploads.length === 0 && jobs.length === 0) return null;
 
   const activeUploads = uploads.filter(
@@ -244,9 +313,7 @@ export function ActivityTray({
       <div className="pointer-events-auto overflow-hidden rounded-lg border border-border bg-surface-raised shadow-md">
         <div className="flex items-center gap-2 border-b border-border-hairline px-3 py-1.5">
           <span className="flex-1 text-xs font-medium">
-            {activeUploads > 0
-              ? `Uploading ${String(activeUploads)} file${activeUploads === 1 ? "" : "s"}`
-              : "Activity"}
+            {activeUploads > 0 ? t.uploading(activeUploads) : t.activity}
           </span>
           {finished > 0 ? (
             <Button
@@ -256,7 +323,7 @@ export function ActivityTray({
               className="h-6 px-2 text-xs"
               onClick={onClearFinished}
             >
-              Clear
+              {t.clear}
             </Button>
           ) : null}
         </div>

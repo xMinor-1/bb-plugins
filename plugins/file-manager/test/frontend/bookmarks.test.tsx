@@ -10,7 +10,7 @@ import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { PluginRpcTestHandlers, RenderedSlot, RpcCall } from "@get-bb/plugin-sdk/testing/app";
 
 import { MAX_BOOKMARKS, type Bookmark, type FileEntry, type FileManagerContract } from "../../contract";
-import { BOOKMARKS_FULL_TEXT, findBookmark, isBookmarked } from "../../lib/bookmarks";
+import { bookmarkMessages, findBookmark, isBookmarked } from "../../lib/bookmarks";
 
 const HOST_ID = "host_test";
 
@@ -325,7 +325,7 @@ describe("the toolbar star", () => {
     fireEvent.click(slot.getByTestId("fm-bookmark-toggle"));
 
     await waitFor(() => {
-      expect(toasts.error).toContain(BOOKMARKS_FULL_TEXT);
+      expect(toasts.error).toContain(bookmarkMessages.en.full);
     });
     expect(callsTo(slot, "addBookmark")).toEqual([]);
   });

@@ -350,8 +350,13 @@ export const jobSchema = z.strictObject({
   jobId: z.string(),
   kind: z.literal("extract"),
   state: z.enum(["running", "done", "failed", "canceled"]),
-  /** Short human label, e.g. 'Extracting "archive.tar.gz"'. */
+  /** Short English label, e.g. 'Extracting "archive.tar.gz"' (agents, logs). */
   label: z.string(),
+  /**
+   * What the job works on, e.g. "archive.tar.gz"; "" when nothing is named.
+   * The panel phrases its own label from `kind` and this, in its language.
+   */
+  subject: z.string(),
   startedAtMs: z.number(),
   finishedAtMs: z.number().nullable(),
   /** Bytes read from the archive so far; 0 when unknown. */

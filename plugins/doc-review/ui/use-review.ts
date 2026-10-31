@@ -9,16 +9,23 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { RpcContract } from "../src/contract";
 import type { ReviewComment, ReviewDoc } from "../src/types";
+import { localizeError } from "./labels";
 
 /** How often an open panel checks whether the file changed on disk. */
 const VERSION_POLL_MS = 4000;
 
-export function errorText(cause: unknown): string {
+/** An error's message as the server or the browser wrote it, in English. */
+export function rawErrorText(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   if (typeof cause === "object" && cause && "message" in cause) {
     return String((cause as { message: unknown }).message);
   }
   return String(cause);
+}
+
+/** An error's message for a person, in the panel's language where it is known. */
+export function errorText(cause: unknown): string {
+  return localizeError(rawErrorText(cause));
 }
 
 export function useReviewRpc() {

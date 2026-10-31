@@ -5,7 +5,16 @@
 // panel route carries the *root-relative* form, URL-encoded per segment
 // (§8): decode with `decodeSubPath`, and hand the raw relative path to
 // `navigate.toPluginPanel` — the host encodes each segment itself.
+import { defineMessages, messagesNow } from "./i18n";
+
 export const SEPARATOR = "/";
+
+// The Russian phrase is in the genitive: every sentence that names the root
+// says "outside", "inside" or "under" it ("вне", "внутри" take the genitive).
+const messages = defineMessages(
+  { homeFolder: "the home folder" },
+  { homeFolder: "домашней папки" },
+);
 
 /**
  * The hard root, as reported by the backend bootstrap (`state.root`). The panel
@@ -37,7 +46,7 @@ export function isAbsolutePath(path: string): boolean {
  */
 export function rootPhrase(root: string = getClientRoot()): string {
   const normalized = normalizePath(root);
-  if (normalized === "" || normalized === SEPARATOR) return "the home folder";
+  if (normalized === "" || normalized === SEPARATOR) return messagesNow(messages).homeFolder;
   return normalized;
 }
 

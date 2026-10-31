@@ -6,8 +6,23 @@
 // unmounts, and this is the only place that still shows them.
 import { useUploads } from "../hooks/useUploads";
 import { formatPercent } from "../lib/format";
+import { defineMessages, pluralRu, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    inProgress: (count: number) => `${String(count)} upload${count === 1 ? "" : "s"} in progress`,
+    uploading: (count: number, percent: string) => `${String(count)} uploading — ${percent}`,
+  },
+  {
+    inProgress: (count) =>
+      `${pluralRu(count, ["Идёт", "Идут", "Идёт"])} ${String(count)} ${pluralRu(count, ["загрузка", "загрузки", "загрузок"])}`,
+    uploading: (count, percent) =>
+      `${pluralRu(count, ["Загружается", "Загружаются", "Загружаются"])} ${String(count)} — ${percent}`,
+  },
+);
 
 export function SidebarAccessory() {
+  const t = useMessages(messages);
   const { activeCount, progress } = useUploads();
   if (activeCount === 0) return null;
 
@@ -16,8 +31,8 @@ export function SidebarAccessory() {
       data-testid="fm-sidebar-accessory"
       title={
         progress === null
-          ? `${String(activeCount)} upload${activeCount === 1 ? "" : "s"} in progress`
-          : `${String(activeCount)} uploading — ${formatPercent(progress.ratio)}`
+          ? t.inProgress(activeCount)
+          : t.uploading(activeCount, formatPercent(progress.ratio))
       }
       className="text-xs tabular-nums text-muted-foreground"
     >

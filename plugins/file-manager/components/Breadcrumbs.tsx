@@ -8,6 +8,12 @@ import type { DragEvent } from "react";
 import { Icon } from "./ui/icon";
 import { cn } from "../lib/utils";
 import { breadcrumbs } from "../lib/fm-paths";
+import { defineMessages, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  { home: "Home", breadcrumb: "Breadcrumb" },
+  { home: "Домашняя папка", breadcrumb: "Путь к папке" },
+);
 
 export interface BreadcrumbsProps {
   /** Absolute path of the directory being shown. */
@@ -41,11 +47,12 @@ export function Breadcrumbs({
   onEmptyAreaClick,
   className,
 }: BreadcrumbsProps) {
-  const crumbs = breadcrumbs(path, root, "Home");
+  const t = useMessages(messages);
+  const crumbs = breadcrumbs(path, root, t.home);
 
   return (
     <nav
-      aria-label="Breadcrumb"
+      aria-label={t.breadcrumb}
       data-testid="fm-breadcrumbs"
       className={cn("flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto", className)}
       onClick={(event) => {

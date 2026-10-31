@@ -32,6 +32,7 @@ describe("createJobs", () => {
       kind: "extract",
       state: "running",
       label: 'Extracting "a.zip"',
+      subject: "",
       finishedAtMs: null,
       processedBytes: 0,
       totalBytes: 1024,

@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-doc-review",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Read and comment on Markdown, PDF, Word, PowerPoint, Excel, and HTML files in a panel tab, hand every comment to an agent in one message, or send them to someone as a PDF with comments.",
   "license": "MIT",
   "author": "Foma",

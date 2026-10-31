@@ -801,11 +801,11 @@ export default async function plugin(bb: BbPluginApi) {
       return { signer: await readSigner() };
     },
 
-    async "doc.export"({ docId, signer }) {
+    async "doc.export"({ docId, signer, lang }) {
       const doc = requireDoc(docId);
       const name = signer?.trim() || null;
       await bb.storage.kv.set(SIGNER_KEY, name ?? "");
-      const exported = await exchange.exportPdf(doc, name);
+      const exported = await exchange.exportPdf(doc, name, lang ?? "en");
       const file = await exchange.saveExport(exported.bytes);
       const link = await viewer.mintOwnFile({ path: file, name: exported.name, contentType: "application/pdf" });
       return { link, name: exported.name, count: exported.count };

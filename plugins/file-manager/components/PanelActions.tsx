@@ -28,13 +28,8 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Icon } from "./ui/icon";
-
-const SORT_LABELS: Record<SortField, string> = {
-  name: "Name",
-  size: "Size",
-  modified: "Modified",
-  kind: "Kind",
-};
+import { actionMessages, sortLabels, viewLabels } from "./action-messages";
+import { LanguageSwitch, useMessages } from "../lib/i18n";
 
 /**
  * §10.3 — the jump into the thread's own checkout. Only the panel tab of an
@@ -47,10 +42,6 @@ export interface ThreadFolderAction {
   blockedReason: string | null;
   onOpen: () => void;
 }
-const VIEW_LABELS: Record<ViewMode, string> = {
-  list: "List",
-  gallery: "Gallery",
-};
 
 export interface PanelActionsProps {
   /** False until the bootstrap lands: every action needs a folder to act on. */
@@ -100,6 +91,9 @@ export function PanelActions({
   threadFolder = null,
   onViewModeChange,
 }: PanelActionsProps) {
+  const t = useMessages(actionMessages);
+  const SORT_LABELS: Record<SortField, string> = sortLabels(t);
+  const VIEW_LABELS: Record<ViewMode, string> = viewLabels(t);
   const mutationsDisabled = !ready || !writable;
   /*
    * Where the thread folder lives, and why it has two homes rather than one.
@@ -125,7 +119,7 @@ export function PanelActions({
           variant="ghost"
           size="sm"
           className="h-8 w-8 shrink-0 p-0"
-          aria-label="Open this thread's workspace folder"
+          aria-label={t.openThreadFolder}
           data-testid="fm-panel-thread-folder"
           onClick={threadFolder.onOpen}
         >
@@ -139,7 +133,7 @@ export function PanelActions({
         size="sm"
         className="h-8 w-8 shrink-0 p-0"
         disabled={mutationsDisabled}
-        aria-label="Upload files"
+        aria-label={t.uploadFilesButton}
         data-testid="fm-panel-upload"
         // Dispatched straight from the click handler: the panel's hidden
         // <input type="file"> only opens while the user gesture is still live.
@@ -154,7 +148,7 @@ export function PanelActions({
         size="sm"
         className="h-8 w-8 shrink-0 p-0"
         disabled={mutationsDisabled}
-        aria-label="New folder"
+        aria-label={t.newFolder}
         data-testid="fm-panel-new-folder"
         onClick={() => onCommand({ type: "new-folder" })}
       >
@@ -168,7 +162,7 @@ export function PanelActions({
             variant="ghost"
             size="sm"
             className="h-8 w-8 shrink-0 p-0"
-            aria-label="More actions"
+            aria-label={t.moreActions}
             data-testid="fm-panel-overflow"
           >
             <Icon name="MoreHorizontal" className="size-4" aria-hidden="true" />
@@ -196,7 +190,7 @@ export function PanelActions({
             onSelect={() => onCommand({ type: "refresh" })}
           >
             <Icon name="ArrowReloadHorizontal" className="size-4" aria-hidden="true" />
-            Refresh
+            {t.refresh}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!ready}
@@ -204,7 +198,7 @@ export function PanelActions({
             onSelect={() => onCommand({ type: "toggle-hidden" })}
           >
             <Icon name={showHidden ? "EyeOff" : "Eye"} className="size-4" aria-hidden="true" />
-            {showHidden ? "Hide hidden files" : "Show hidden files"}
+            {showHidden ? t.hideHidden : t.showHiddenAction}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={expandedCount === 0}
@@ -212,7 +206,7 @@ export function PanelActions({
             onSelect={() => onCommand({ type: "collapse-all" })}
           >
             <Icon name="Minimize2" className="size-4" aria-hidden="true" />
-            Collapse all folders
+            {t.collapseAll}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!ready}
@@ -220,7 +214,7 @@ export function PanelActions({
             onSelect={() => onCommand({ type: "select-all" })}
           >
             <Icon name="Check" className="size-4" aria-hidden="true" />
-            Select all
+            {t.selectAll}
           </DropdownMenuItem>
 
           <DropdownMenuSeparator />
@@ -231,7 +225,7 @@ export function PanelActions({
             onSelect={() => onCommand({ type: "paste" })}
           >
             <Icon name="Copy" className="size-4" aria-hidden="true" />
-            Paste
+            {t.paste}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!ready}
@@ -239,7 +233,7 @@ export function PanelActions({
             onSelect={() => onCommand({ type: "copy-path" })}
           >
             <Icon name="Paperclip" className="size-4" aria-hidden="true" />
-            Copy folder path
+            {t.copyFolderPath}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!ready}
@@ -247,7 +241,7 @@ export function PanelActions({
             onSelect={() => onCommand({ type: "set-start-folder" })}
           >
             <Icon name="Pin" className="size-4" aria-hidden="true" />
-            Set as start folder
+            {t.setStartFolder}
           </DropdownMenuItem>
 
           <DropdownMenuSeparator />
@@ -257,7 +251,7 @@ export function PanelActions({
               in ~450px, and a sixth control there costs the path bar more
               width than a view switch is worth. It sits next to "Sort by"
               because it answers the same question — how this folder is shown. */}
-          <DropdownMenuLabel>View</DropdownMenuLabel>
+          <DropdownMenuLabel>{t.view}</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={viewMode}
             onValueChange={(value) => onViewModeChange(value as ViewMode)}
@@ -275,7 +269,7 @@ export function PanelActions({
 
           <DropdownMenuSeparator />
 
-          <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+          <DropdownMenuLabel>{t.sortBy}</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={sortField}
             onValueChange={(value) => onSortFieldChange(value as SortField)}
@@ -291,9 +285,18 @@ export function PanelActions({
             value={sortDirection}
             onValueChange={(value) => onSortDirectionChange(value as SortDirection)}
           >
-            <DropdownMenuRadioItem value="asc">Ascending</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="desc">Descending</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="asc">{t.ascending}</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="desc">{t.descending}</DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
+
+          {/* The panel tab has no title bar, so the language switch rides at
+              the bottom of the overflow menu. Its buttons are not menu items:
+              picking a language keeps the menu open. */}
+          <DropdownMenuSeparator />
+          <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-sm">
+            <span className="text-muted-foreground">{t.language}</span>
+            <LanguageSwitch />
+          </div>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

@@ -3,6 +3,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { defineMessages, useMessages } from "@/lib/i18n";
 import { MAX_ZOOM, MIN_ZOOM } from "./page-layout";
 
 function BarButton({
@@ -35,11 +36,28 @@ function BarButton({
   );
 }
 
+const messages = defineMessages(
+  {
+    number: (slides: boolean) => (slides ? "Slide number" : "Page number"),
+    goTo: (slides: boolean) => (slides ? "Go to a slide" : "Go to a page"),
+    zoomOut: "Zoom out",
+    fit: "Fit the width",
+    zoomIn: "Zoom in",
+  },
+  {
+    number: (slides) => (slides ? "Номер слайда" : "Номер страницы"),
+    goTo: (slides) => (slides ? "Перейти к слайду" : "Перейти к странице"),
+    zoomOut: "Уменьшить",
+    fit: "По ширине",
+    zoomIn: "Увеличить",
+  },
+);
+
 export function ZoomBar({
   zoom,
   page,
   count,
-  noun,
+  slides,
   onStep,
   onFit,
   onJump,
@@ -47,11 +65,13 @@ export function ZoomBar({
   zoom: number;
   page: number;
   count: number;
-  noun: string;
+  /** A deck counts slides, everything else pages. */
+  slides: boolean;
   onStep: (direction: 1 | -1) => void;
   onFit: () => void;
   onJump: (page: number) => void;
 }) {
+  const t = useMessages(messages);
   const [editing, setEditing] = useState(false);
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -75,25 +95,25 @@ export function ZoomBar({
               onFocus={(event) => event.currentTarget.select()}
               onBlur={() => setEditing(false)}
               onKeyDown={(event) => event.key === "Escape" && setEditing(false)}
-              aria-label={`${noun} number`}
+              aria-label={t.number(slides)}
               className="h-7 w-16 rounded-md border border-input bg-background px-1.5 text-base tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:text-xs"
             />
             <span className="text-muted-foreground">/ {count}</span>
           </form>
         ) : (
-          <BarButton label={`Go to a ${noun.toLowerCase()}`} onClick={() => setEditing(true)} className="px-2">
+          <BarButton label={t.goTo(slides)} onClick={() => setEditing(true)} className="px-2">
             {page} / {count}
           </BarButton>
         )
       ) : null}
       {count > 1 ? <span className="mx-0.5 h-4 w-px bg-border" aria-hidden /> : null}
-      <BarButton label="Zoom out" disabled={zoom <= MIN_ZOOM + 1e-3} onClick={() => onStep(-1)}>
+      <BarButton label={t.zoomOut} disabled={zoom <= MIN_ZOOM + 1e-3} onClick={() => onStep(-1)}>
         <Icon name="ZoomOut" className="size-4" />
       </BarButton>
-      <BarButton label="Fit the width" onClick={onFit} className="min-w-12">
+      <BarButton label={t.fit} onClick={onFit} className="min-w-12">
         {Math.round(zoom * 100)}%
       </BarButton>
-      <BarButton label="Zoom in" disabled={zoom >= MAX_ZOOM - 1e-3} onClick={() => onStep(1)}>
+      <BarButton label={t.zoomIn} disabled={zoom >= MAX_ZOOM - 1e-3} onClick={() => onStep(1)}>
         <Icon name="ZoomIn" className="size-4" />
       </BarButton>
     </div>

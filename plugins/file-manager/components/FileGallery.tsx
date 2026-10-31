@@ -16,6 +16,20 @@ import { cn } from "../lib/utils";
 import { entryIconName, isDirectoryEntry, rowDomId } from "./FileRow";
 import { Checkbox } from "./ui/checkbox";
 import { Icon } from "./ui/icon";
+import { defineMessages, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    select: (name: string) => `Select ${name}`,
+    symlink: "Symbolic link",
+    files: "Files",
+  },
+  {
+    select: (name) => `Выбрать ${name}`,
+    symlink: "Символическая ссылка",
+    files: "Файлы",
+  },
+);
 
 const SKELETON_TILES = 8;
 
@@ -103,6 +117,7 @@ function GalleryTileImpl({
   onRowDrop,
   onRowDragEnd,
 }: GalleryTileProps) {
+  const t = useMessages(messages);
   /**
    * The src that failed, not a bare boolean: a renewed preview URL gives the
    * same file a new src, and that attempt deserves its own chance instead of
@@ -184,7 +199,7 @@ function GalleryTileImpl({
           <Checkbox
             checked={selected}
             tabIndex={-1}
-            aria-label={`Select ${entry.name}`}
+            aria-label={t.select(entry.name)}
             onCheckedChange={() => undefined}
           />
         </div>
@@ -196,7 +211,7 @@ function GalleryTileImpl({
           <Icon
             name="ExternalLink"
             className="size-3 shrink-0 text-muted-foreground"
-            aria-label="Symbolic link"
+            aria-label={t.symlink}
           />
         ) : null}
       </div>
@@ -208,6 +223,7 @@ function GalleryTileImpl({
 const GalleryTile = memo(GalleryTileImpl);
 
 export function FileGallery(props: FileGalleryProps) {
+  const t = useMessages(messages);
   const {
     entries,
     loading,
@@ -256,7 +272,7 @@ export function FileGallery(props: FileGalleryProps) {
         ref={gridRef}
         role="listbox"
         aria-multiselectable="true"
-        aria-label="Files"
+        aria-label={t.files}
         tabIndex={0}
         // Same rule as the table: point only at a tile that is really rendered,
         // because a dangling id is worse than none.

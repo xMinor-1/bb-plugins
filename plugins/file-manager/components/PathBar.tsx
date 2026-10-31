@@ -20,6 +20,22 @@ import { Breadcrumbs } from "./Breadcrumbs";
 import { Button } from "./ui/button";
 import { Icon } from "./ui/icon";
 import { Input } from "./ui/input";
+import { defineMessages, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    editPathHint: "Edit path (Ctrl+L)",
+    editPath: "Edit path",
+    folderPath: "Folder path",
+    help: "Type or paste a path and press Enter. Escape cancels.",
+  },
+  {
+    editPathHint: "Изменить путь (Ctrl+L)",
+    editPath: "Изменить путь",
+    folderPath: "Путь к папке",
+    help: "Введите или вставьте путь и нажмите Enter. Escape — отмена.",
+  },
+);
 
 export interface PathBarProps {
   /** Absolute path of the directory being shown. */
@@ -67,6 +83,7 @@ export function PathBar({
   onDragLeaveCrumb,
   onDropOnCrumb,
 }: PathBarProps) {
+  const t = useMessages(messages);
   return (
     <div
       className="relative flex min-w-0 flex-1 items-center gap-1"
@@ -102,13 +119,13 @@ export function PathBar({
       {/* The shortcut is written down exactly once, and it has to be here —
           the vendored `Button` omits `title` on purpose, so it hangs on the
           wrapper, where a hover over the button still picks it up. */}
-      <span className="shrink-0" title="Edit path (Ctrl+L)">
+      <span className="shrink-0" title={t.editPathHint}>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           className="h-8 w-8 shrink-0 p-0"
-          aria-label="Edit path"
+          aria-label={t.editPath}
           aria-pressed={editing}
           data-testid="fm-path-edit"
           // Keep the click a pure toggle: without this the button steals focus
@@ -167,6 +184,7 @@ function PathEditor({
   onCancel,
   onDirty,
 }: PathEditorProps) {
+  const t = useMessages(messages);
   const [value, setValue] = useState(initialValue);
   const localRef = useRef<HTMLInputElement | null>(null);
 
@@ -182,7 +200,7 @@ function PathEditor({
   return (
     <div
       role="group"
-      aria-label="Folder path"
+      aria-label={t.folderPath}
       aria-busy={busy}
       className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-input px-2"
       data-testid="fm-path-group"
@@ -193,7 +211,7 @@ function PathEditor({
         id="fm-path-input"
         type="text"
         value={value}
-        aria-label="Folder path"
+        aria-label={t.folderPath}
         aria-describedby="fm-path-hint"
         aria-invalid={invalid || undefined}
         aria-errormessage={invalid ? "fm-path-error" : undefined}
@@ -240,7 +258,7 @@ function PathEditor({
         }}
       />
       <span id="fm-path-hint" className="sr-only">
-        Type or paste a path and press Enter. Escape cancels.
+        {t.help}
       </span>
     </div>
   );

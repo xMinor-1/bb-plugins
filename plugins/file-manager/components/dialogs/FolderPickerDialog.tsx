@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type FileEntry } from "../../contract";
 import { parseRpcError } from "../../lib/errors";
+import { defineMessages, useMessages } from "../../lib/i18n";
 import { breadcrumbs, getClientRoot, joinPath, parentPath } from "../../lib/fm-paths";
 import { useFmRpc } from "../../lib/fm-rpc";
 import { cn } from "../../lib/utils";
@@ -23,6 +24,25 @@ import {
 } from "../ui/dialog";
 import { Icon } from "../ui/icon";
 import { effectiveKind } from "../FileRow";
+
+const messages = defineMessages(
+  {
+    home: "Home",
+    breadcrumb: "Breadcrumb",
+    loading: "Loading…",
+    cancel: "Cancel",
+    chooseFolder: "Choose this folder",
+    noSubfolders: "No sub-folders here.",
+  },
+  {
+    home: "Домашняя папка",
+    breadcrumb: "Путь к папке",
+    loading: "Загрузка…",
+    cancel: "Отмена",
+    chooseFolder: "Выбрать эту папку",
+    noSubfolders: "Вложенных папок нет.",
+  },
+);
 
 export interface FolderPickerDialogProps {
   open: boolean;
@@ -49,9 +69,10 @@ export function FolderPickerDialog({
   root = getClientRoot(),
   showHidden = false,
   disabledPaths,
-  confirmLabel = "Choose this folder",
+  confirmLabel,
   onChoose,
 }: FolderPickerDialogProps) {
+  const t = useMessages(messages);
   const rpc = useFmRpc();
   const [path, setPath] = useState(initialPath ?? root);
   const [folders, setFolders] = useState<FileEntry[]>([]);
@@ -96,7 +117,7 @@ export function FolderPickerDialog({
   }, [open, path, load]);
 
   const up = parentPath(path, root);
-  const crumbs = breadcrumbs(path, root, "Home");
+  const crumbs = breadcrumbs(path, root, t.home);
   const disabled = disabledPaths?.has(path) === true;
 
   return (
@@ -112,7 +133,7 @@ export function FolderPickerDialog({
           )}
         </DialogHeader>
 
-        <nav aria-label="Breadcrumb" className="flex items-center gap-0.5 overflow-x-auto">
+        <nav aria-label={t.breadcrumb} className="flex items-center gap-0.5 overflow-x-auto">
           {crumbs.map((crumb, index) => (
             <div key={crumb.path} className="flex shrink-0 items-center gap-0.5">
               {index === 0 ? null : (
@@ -145,7 +166,7 @@ export function FolderPickerDialog({
             </button>
           )}
           {loading && folders.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground">Loading…</p>
+            <p className="px-3 py-2 text-xs text-muted-foreground">{t.loading}</p>
           ) : null}
           {error !== null ? (
             <p role="alert" className="px-3 py-2 text-xs text-destructive">
@@ -153,7 +174,7 @@ export function FolderPickerDialog({
             </p>
           ) : null}
           {!loading && error === null && folders.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground">No sub-folders here.</p>
+            <p className="px-3 py-2 text-xs text-muted-foreground">{t.noSubfolders}</p>
           ) : null}
           {folders.map((folder) => {
             const blocked = disabledPaths?.has(folder.path) === true;
@@ -182,7 +203,7 @@ export function FolderPickerDialog({
 
         <DialogFooter className="gap-2">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t.cancel}
           </Button>
           <Button
             type="button"
@@ -195,7 +216,7 @@ export function FolderPickerDialog({
               onOpenChange(false);
             }}
           >
-            {confirmLabel}
+            {confirmLabel ?? t.chooseFolder}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -26,7 +26,7 @@ import { lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { applyEdits, findNodeAtLocation, modify, parseTree, type Node, type ParseError } from "jsonc-parser/lib/esm/main.js";
 import { acquireConfigLock, type LockOptions } from "./config-lock.js";
-import { baseUrlProblem, OPENCODE_KEYS } from "../manifest.js";
+import { baseUrlProblem, OPENCODE_KEYS, providerPackageProblem } from "../manifest.js";
 
 export const WRITER = "fleet-kit";
 
@@ -87,6 +87,8 @@ export function planOpenCode(block: Record<string, unknown>, allowedProviders: s
   const providers = (block.providers ?? {}) as Record<string, Record<string, unknown>>;
 
   for (const [providerId, original] of Object.entries(providers)) {
+    const packageProblem = providerPackageProblem(original.package, options.allowDevSources === true);
+    if (packageProblem !== null) throw new Error(`providers.${providerId}: ${packageProblem}`);
     const provider = clone(original);
     const settings = (provider.settings ?? undefined) as Record<string, unknown> | undefined;
     const headers: ResolverHeader[] = [];

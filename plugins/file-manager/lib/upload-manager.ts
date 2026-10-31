@@ -32,6 +32,31 @@ import {
   type FileManagerContract,
 } from "../contract";
 import { errorToastText, parseRpcError } from "./errors";
+import { defineMessages, messagesNow } from "./i18n";
+
+/** Failures without a domain code, shown as they are in the activity tray. */
+const messages = defineMessages(
+  {
+    tokenFetchFailed: (status: number) => `Could not get the plugin token (HTTP ${String(status)}).`,
+    uploadFailed: "Upload failed.",
+    tokenRejected: "The plugin token was rejected. Reload the panel and try again.",
+    chunkRejected: "The server rejected the chunk request (HTTP 400)",
+    connectionDropped: "The connection dropped mid-chunk",
+    httpFailed: (status: number) => `The upload failed (HTTP ${String(status)})`,
+    networkError: "network error",
+    timedOut: "request timed out",
+  },
+  {
+    tokenFetchFailed: (status) => `Не удалось получить токен плагина (HTTP ${String(status)}).`,
+    uploadFailed: "Не удалось загрузить.",
+    tokenRejected: "Токен плагина отклонён. Перезагрузите панель и попробуйте ещё раз.",
+    chunkRejected: "Сервер отклонил запрос с частью файла (HTTP 400)",
+    connectionDropped: "Соединение оборвалось посреди передачи",
+    httpFailed: (status) => `Загрузка не удалась (HTTP ${String(status)})`,
+    networkError: "ошибка сети",
+    timedOut: "запрос не дождался ответа",
+  },
+);
 import { etaFromRate } from "./format";
 
 /* ------------------------------------------------------------------ */
@@ -517,7 +542,7 @@ export class UploadManager {
           ? (json as { token: unknown }).token
           : undefined;
       if (!response.ok || typeof token !== "string" || token === "") {
-        throw new Error(`failed to fetch the plugin token (HTTP ${response.status})`);
+        throw new Error(messagesNow(messages).tokenFetchFailed(response.status));
       }
       return token;
     })();
@@ -579,7 +604,7 @@ export class UploadManager {
         this.setStatus(item, "paused");
         return;
       }
-      item.state.errorMessage = errorToastText(error, "Upload failed.");
+      item.state.errorMessage = errorToastText(error, messagesNow(messages).uploadFailed);
       item.state.sentBytes = item.offset;
       item.state.bytesPerSecond = 0;
       item.state.etaMs = null;
@@ -651,7 +676,7 @@ export class UploadManager {
     if (status === 401) {
       // The token can be rotated under us; refresh once, then treat it as fatal.
       if (item.tokenRefreshed) {
-        throw new Error("The plugin token was rejected. Reload the panel and try again.");
+        throw new Error(messagesNow(messages).tokenRejected);
       }
       item.tokenRefreshed = true;
       await this.token(true);
@@ -695,7 +720,7 @@ export class UploadManager {
     }
 
     if (status === 400) {
-      throw new Error("The server rejected the chunk request (HTTP 400)");
+      throw new Error(messagesNow(messages).chunkRejected);
     }
 
     if (status === 499) {
@@ -704,14 +729,14 @@ export class UploadManager {
         item.offset = Math.min(Math.max(0, received), item.state.sizeBytes);
         item.state.sentBytes = item.offset;
       }
-      await this.backoffAndResync(item, new Error("The connection dropped mid-chunk"));
+      await this.backoffAndResync(item, new Error(messagesNow(messages).connectionDropped));
       return;
     }
 
     const message = stringField(body, "message") ?? stringField(body, "error");
     await this.backoffAndResync(
       item,
-      new Error(message ?? `The upload failed (HTTP ${status})`),
+      new Error(message ?? messagesNow(messages).httpFailed(status)),
     );
   }
 
@@ -755,10 +780,10 @@ export class UploadManager {
         resolve({ status: xhr.status, body: parseJson(xhr.responseText) });
       };
       xhr.onerror = () => {
-        reject(new ChunkNetworkError("network error"));
+        reject(new ChunkNetworkError(messagesNow(messages).networkError));
       };
       xhr.ontimeout = () => {
-        reject(new ChunkNetworkError("request timed out"));
+        reject(new ChunkNetworkError(messagesNow(messages).timedOut));
       };
       xhr.onabort = () => {
         reject(new ChunkAbortedError());

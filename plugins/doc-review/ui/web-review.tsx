@@ -13,11 +13,81 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { defineMessages, messagesNow, useMessages } from "@/lib/i18n";
 import { BRIDGE_SCRIPT } from "../src/html-bridge";
-import { WEB_UI_SCRIPT } from "../src/web-ui";
+import { WEB_UI_SCRIPT, WEB_UI_TEXT } from "../src/web-ui";
 import { anchorPage, samePage, type ReviewComment } from "../src/types";
 import { readAnchor } from "./html-doc";
+import { countWords } from "./labels";
 import { errorText, useReviewRpc } from "./use-review";
+
+/** The controls drawn inside the page (src/web-ui.ts). */
+const pageText = defineMessages(WEB_UI_TEXT, {
+  replyPlaceholder: "Ответьте агенту",
+  statusDraft: "Черновик",
+  statusSent: "Отправлен",
+  statusReplied: "Есть ответ",
+  statusResolved: "Готово",
+  sentToChat: "Отправлено в тред",
+  element: "Элемент <{tag}>",
+  drawing: "Рисунок",
+  text: "Текст",
+  page: "Страница",
+  cancel: "Отмена",
+  modeText: "Текст",
+  modeTextTitle: "Выделите текст, чтобы прокомментировать его",
+  modeElement: "Элемент",
+  modeElementTitle: "Нажмите на блок, кнопку или картинку, чтобы прокомментировать",
+  modeDraw: "Рисовать",
+  modeDrawTitle: "Рисуйте поверх страницы, затем прокомментируйте рисунок",
+  pen: "Перо",
+  line: "Линия",
+  arrow: "Стрелка",
+  box: "Рамка",
+  comments: "Комментарии",
+  sending: "Отправляем…",
+  send: "Отправить",
+  sendTitle: "Отправить в тред все черновики этого сайта",
+  stop: "Закончить ревью страницы",
+  placeholder: "Что здесь поменять?",
+  comment: "Комментировать",
+  agent: "Агент",
+  you: "Вы",
+  youNotSent: "Вы, не отправлено",
+  discardReply: "Удалить ответ",
+  delete: "Удалить",
+  deleteComment: "Удалить комментарий",
+  drawingPicture: "Рисунок со снимком страницы",
+  elementGone: "Этого элемента сейчас нет на странице.",
+  quoteGone: "Процитированного текста сейчас нет на странице.",
+  reply: "Ответить",
+  empty: "На этой странице пока нет комментариев. Выделите текст или переключитесь на «Элемент» или «Рисовать».",
+  listTitle: "Комментарии к странице",
+  close: "Закрыть",
+  undo: "Отменить",
+  undoTitle: "Отменить последний штрих (⌘Z)",
+  clearAll: "Стереть всё",
+  clear: "Стереть",
+  clearTitle: "Стереть весь рисунок",
+  pin: "Комментарий {n}",
+});
+
+const messages = defineMessages(
+  {
+    notSaved: "This comment could not be saved.",
+    writeReply: "Write the reply first.",
+    notReady: "This page is not ready yet.",
+    stopLabel: "Stop reviewing this page",
+    startLabel: "Review this page: comment on text, elements, or a drawing",
+  },
+  {
+    notSaved: "Не удалось сохранить комментарий.",
+    writeReply: "Сначала напишите ответ.",
+    notReady: "Страница ещё не готова.",
+    stopLabel: "Закончить ревью страницы",
+    startLabel: "Ревью страницы: комментарии к тексту, элементам или рисунку",
+  },
+);
 
 /** How often an active tab is checked for a reload that dropped the controls. */
 const CHECK_MS = 2500;
@@ -104,6 +174,9 @@ function WebReview({
   isCompactViewport,
   page,
 }: ExperimentalPluginBrowserToolbarActionProps & { page: ExperimentalPluginBrowserPage }) {
+  const t = useMessages(messages);
+  const words = useMessages(countWords);
+  const text = useMessages(pageText);
   const rpc = useReviewRpc();
   const site = siteOf(url);
   const [active, setActive] = useState(false);
@@ -126,7 +199,7 @@ function WebReview({
   );
 
   const install = useCallback(async () => {
-    await page.evaluate(installExpression({ theme: themeColors() }));
+    await page.evaluate(installExpression({ theme: themeColors(), text: messagesNow(pageText) }));
     setInstalls((count) => count + 1);
   }, [page]);
 
@@ -201,8 +274,9 @@ function WebReview({
         return where !== null && samePage(where, url);
       }),
       drafts,
+      text,
     });
-  }, [active, comments, drafts, url, installs, tell]);
+  }, [active, comments, drafts, url, installs, tell, text]);
 
   const handle = useCallback(
     async (data: Record<string, unknown>) => {
@@ -216,7 +290,7 @@ function WebReview({
         switch (data.type) {
           case "create": {
             const anchor = readAnchor(data.anchor);
-            if (!docId || !anchor || !body) throw new Error("This comment could not be saved.");
+            if (!docId || !anchor || !body) throw new Error(messagesNow(messages).notSaved);
             const token = anchor.kind === "html-drawing" ? capture.current : null;
             capture.current = null;
             const comment = await rpc.call("comments.create", {
@@ -231,7 +305,7 @@ function WebReview({
             return;
           }
           case "reply":
-            if (!body) throw new Error("Write the reply first.");
+            if (!body) throw new Error(messagesNow(messages).writeReply);
             await rpc.call("comments.reply", { id, body });
             break;
           case "discard-reply":
@@ -241,7 +315,7 @@ function WebReview({
             await rpc.call("comments.delete", { id });
             break;
           case "send":
-            if (!docId) throw new Error("This page is not ready yet.");
+            if (!docId) throw new Error(messagesNow(messages).notReady);
             await rpc.call("comments.send", { docId, target: { kind: "thread", threadId } });
             break;
           case "capture": {
@@ -298,7 +372,7 @@ function WebReview({
     }
   };
 
-  const label = active ? "Stop reviewing this page" : "Review this page: comment on text, elements, or a drawing";
+  const label = active ? t.stopLabel : t.startLabel;
   // Drafts waiting to be sent, otherwise the agent's answers waiting for you.
   const badge = drafts || comments.filter((comment) => comment.status === "replied").length;
   return (
@@ -312,7 +386,7 @@ function WebReview({
       className={cn(buttonClass, isCompactViewport ? "w-7" : "px-2", active && "bg-state-hover text-foreground")}
     >
       <Icon name={busy ? "Loading" : "MessageSquarePlus"} className={cn("size-4", busy && "animate-spin")} />
-      {isCompactViewport ? null : <span>Review</span>}
+      {isCompactViewport ? null : <span>{words.reviewButton}</span>}
       {active && badge ? (
         <span className="rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground">
           {badge}

@@ -23,10 +23,13 @@ import {
   ContextMenuShortcut,
 } from "./ui/context-menu";
 import { Icon } from "./ui/icon";
+import { useLang } from "../lib/i18n";
 
 export type RowContextMenuProps = SelectedEntryActionsProps;
 
 export function RowContextMenu(props: RowContextMenuProps) {
+  // The model reads the language; subscribing re-renders the menu when it changes.
+  useLang();
   const model = selectedEntryActionModel(props);
   // Letting go of the right button must not run whatever it landed on.
   const pointerGuard = useMenuPointerGuard();

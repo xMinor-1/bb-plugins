@@ -40,7 +40,8 @@ changes one and triggers a sync.
 - `secretStore`: `auto` (OS credential store) or `file` (0600 file).
 - `paused`: stop syncing.
 - `allowDevSources`: test machines only; allows `path:`, `npm:` and local git
-  plugin sources and `http://localhost` gateways. Never turn it on for a person.
+  plugin sources, `http://localhost` gateways and OpenCode provider packages
+  other than `@opencode/ai/providers/*`. Never turn it on for a person.
 
 ## What not to do
 
@@ -49,6 +50,9 @@ changes one and triggers a sync.
   `opencode` block); the next sync puts them back. Other keys are safe.
 - Do not edit `plugins/fleet-kit-secrets.js` in the OpenCode configuration
   directory; Fleet Kit rewrites it.
+- Do not reinstall a plugin that the sync reports as "Kept on its previous
+  source": switching to the manifest's source failed, and Fleet Kit tries again
+  at most twice a day, an hour apart. Fix the source in the manifest instead.
 - Do not install or remove plugins that the manifest lists; change the
   manifest instead. Fleet Kit removes a plugin only when the manifest lists it
   in `removePlugins`; dropping it from `plugins` leaves it installed.

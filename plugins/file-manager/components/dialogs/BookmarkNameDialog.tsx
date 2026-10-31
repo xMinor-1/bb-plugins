@@ -19,17 +19,40 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { defineMessages, messagesNow, useMessages } from "../../lib/i18n";
+
+const messages = defineMessages(
+  {
+    enterName: "Enter a name.",
+    control: "A name cannot contain control characters.",
+    tooLong: (max: number) => `That name is too long (max ${String(max)} characters).`,
+    title: "Rename bookmark",
+    bookmarkName: "Bookmark name",
+    cancel: "Cancel",
+    save: "Save",
+  },
+  {
+    enterName: "Введите имя.",
+    control: "Имя не может содержать управляющие символы.",
+    tooLong: (max) => `Имя слишком длинное (не больше ${String(max)} символов).`,
+    title: "Переименовать закладку",
+    bookmarkName: "Имя закладки",
+    cancel: "Отмена",
+    save: "Сохранить",
+  },
+);
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f]/u;
 
 /** Client mirror of `src/bookmarks.ts#validateBookmarkName`. */
 export function validateBookmarkName(name: string): string | null {
-  if (name === "") return "Enter a name.";
-  if (CONTROL_CHARACTERS.test(name)) return "A name cannot contain control characters.";
+  const t = messagesNow(messages);
+  if (name === "") return t.enterName;
+  if (CONTROL_CHARACTERS.test(name)) return t.control;
   // Code points, like the server: this label never becomes a file name, so a
   // byte budget would only punish names that are not written in Latin.
   if ([...name].length > MAX_BOOKMARK_NAME_LENGTH) {
-    return `That name is too long (max ${String(MAX_BOOKMARK_NAME_LENGTH)} characters).`;
+    return t.tooLong(MAX_BOOKMARK_NAME_LENGTH);
   }
   return null;
 }
@@ -51,6 +74,7 @@ export function BookmarkNameDialog({
   pathLabel,
   onSubmit,
 }: BookmarkNameDialogProps) {
+  const t = useMessages(messages);
   const [name, setName] = useState(initialName);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -89,7 +113,7 @@ export function BookmarkNameDialog({
         data-testid="fm-bookmark-name-dialog"
       >
         <DialogHeader>
-          <DialogTitle>Rename bookmark</DialogTitle>
+          <DialogTitle>{t.title}</DialogTitle>
           <DialogDescription className="truncate">{pathLabel}</DialogDescription>
         </DialogHeader>
         <form
@@ -102,7 +126,7 @@ export function BookmarkNameDialog({
             ref={inputRef}
             autoFocus
             value={name}
-            aria-label="Bookmark name"
+            aria-label={t.bookmarkName}
             aria-invalid={error !== null}
             className={cn("h-9", error !== null && "border-surface-destructive-border")}
             onFocus={(event) => event.currentTarget.select()}
@@ -118,14 +142,14 @@ export function BookmarkNameDialog({
           )}
           <DialogFooter className="mt-4 gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t.cancel}
             </Button>
             <Button
               type="submit"
               className="bg-primary text-primary-foreground hover:bg-primary/90"
               disabled={busy}
             >
-              Save
+              {t.save}
             </Button>
           </DialogFooter>
         </form>

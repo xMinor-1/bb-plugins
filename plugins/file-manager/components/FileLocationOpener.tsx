@@ -34,6 +34,32 @@ import { ArchiveContents } from "./ArchiveContents";
 import { FileManagerSurface } from "./FileManagerPanel";
 import { Button } from "./ui/button";
 import { Icon } from "./ui/icon";
+import { defineMessages, messagesNow, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    notThere: (name: string, dir: string) => `${name} is not there. Opened ${dir} instead.`,
+    findingFile: "Finding this file…",
+    locationFailed: "Could not open this location",
+    findingArchive: "Finding this archive…",
+    archiveFailed: "Could not open this archive",
+    namesFolder: "This link names a folder",
+    missing: (name: string) => `${name} is not there`,
+    openLocationHint: "Open location shows the folder it points into.",
+    openLocation: "Open location",
+  },
+  {
+    notThere: (name, dir) => `${name} здесь нет. Вместо этого открыта папка ${dir}.`,
+    findingFile: "Ищу файл…",
+    locationFailed: "Не удалось открыть это расположение",
+    findingArchive: "Ищу архив…",
+    archiveFailed: "Не удалось открыть архив",
+    namesFolder: "Эта ссылка ведёт на папку",
+    missing: (name) => `${name} здесь нет`,
+    openLocationHint: "«Открыть расположение» покажет папку, на которую она указывает.",
+    openLocation: "Открыть расположение",
+  },
+);
 
 type Located = RpcOutput<"resolveFileLocation">;
 
@@ -117,24 +143,25 @@ function LocationView({
   /** Open the archive's Extract dialog once it is selected (§8.13). */
   extract?: boolean;
 }) {
+  const t = useMessages(messages);
   const state = useLocatedFile(path, source, (located) => {
     if (!located.exists) {
       // Say it once, and say which folder opened instead — a panel that
       // silently lands somewhere else reads as the wrong folder.
-      toast.message(`${basename(path)} is not there. Opened ${located.dirPath} instead.`);
+      toast.message(messagesNow(messages).notThere(basename(path), located.dirPath));
     }
   });
 
   const location = useLocalLocation("");
 
   if (state.status === "loading") {
-    return <Centered>Finding this file…</Centered>;
+    return <Centered>{t.findingFile}</Centered>;
   }
 
   if (state.status === "failed") {
     return (
       <Centered>
-        <p className="font-medium text-foreground">Could not open this location</p>
+        <p className="font-medium text-foreground">{t.locationFailed}</p>
         <p>{state.message}</p>
       </Centered>
     );
@@ -163,15 +190,16 @@ function ArchiveLinkView({
   source,
   onExtract,
 }: Pick<PluginFileOpenerProps, "path" | "source"> & { onExtract: () => void }) {
+  const t = useMessages(messages);
   const state = useLocatedFile(path, source);
 
   if (state.status === "loading") {
-    return <Centered>Finding this archive…</Centered>;
+    return <Centered>{t.findingArchive}</Centered>;
   }
   if (state.status === "failed") {
     return (
       <Centered>
-        <p className="font-medium text-foreground">Could not open this archive</p>
+        <p className="font-medium text-foreground">{t.archiveFailed}</p>
         <p>{state.message}</p>
       </Centered>
     );
@@ -181,9 +209,9 @@ function ArchiveLinkView({
     return (
       <Centered>
         <p className="font-medium text-foreground">
-          {located.isDirectory ? "This link names a folder" : `${basename(path)} is not there`}
+          {located.isDirectory ? t.namesFolder : t.missing(basename(path))}
         </p>
-        <p>Open location shows the folder it points into.</p>
+        <p>{t.openLocationHint}</p>
       </Centered>
     );
   }
@@ -205,6 +233,7 @@ export function FileLocationOpener({ path, source }: PluginFileOpenerProps) {
  */
 export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerProps) {
   /** Null while previewing; once switched, whether to extract on arrival. */
+  const t = useMessages(messages);
   const [reveal, setReveal] = useState<{ extract: boolean } | null>(null);
   const folder = folderLabel(path);
   // Decided from the link's own name, before anything is resolved — the same
@@ -246,7 +275,7 @@ export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerPr
           onClick={() => setReveal({ extract: false })}
         >
           <Icon name="FolderOpen" className="size-4" aria-hidden />
-          <span className="hidden @md:inline">Open location</span>
+          <span className="hidden @md:inline">{t.openLocation}</span>
         </Button>
       </div>
       {/*
