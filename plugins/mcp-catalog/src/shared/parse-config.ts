@@ -97,7 +97,44 @@ export function urlProblem(raw: string, allowHttp: boolean): Skip["reason"] | nu
   if (url.username || url.password) return "url-secret";
   if (url.protocol !== "https:" && !(url.protocol === "http:" && allowHttp)) return url.protocol === "http:" ? "insecure-url" : "bad-url";
   if ([...url.searchParams.keys()].some((key) => SECRET_PARAM.test(key))) return "url-secret";
+  if (url.pathname.split("/").some(isSecretSegment)) return "url-secret";
   return null;
+}
+
+/** Prefixes of well-known token formats: GitLab, GitHub, Slack, OpenAI-style keys, JWTs. */
+const TOKEN_PREFIX = /^(glpat-|glptt-|gldt-|ghp_|gho_|ghs_|ghu_|github_pat_|xox[abposr]-|sk-|sk_live_|rk_live_|eyJ)/;
+
+/**
+ * A path segment that is a credential rather than an instance id: a known token
+ * format, or one random-looking run of 32+ letters and digits. Ids such as
+ * `corp_wiki_ab12cd34` or a UUID are left alone: their runs are short.
+ */
+function isSecretSegment(raw: string): boolean {
+  let segment: string;
+  try {
+    segment = decodeURIComponent(raw);
+  } catch {
+    segment = raw;
+  }
+  if (TOKEN_PREFIX.test(segment) && segment.length >= 16) return true;
+  return segment.split(/[-_.~]/).some((run) => run.length >= 32 && /[A-Za-z]/.test(run) && /\d/.test(run));
+}
+
+/**
+ * An address as it may leave the machine: host and path, with id-like parts
+ * shortened and the query dropped. The full address stays in the host's state.
+ */
+export function maskAddress(raw: string): string {
+  try {
+    const url = new URL(raw);
+    const path = url.pathname
+      .split("/")
+      .map((segment) => (segment.length >= 8 && /\d/.test(segment) ? `${segment.slice(0, 3)}…` : segment))
+      .join("/");
+    return `${url.host}${path === "/" ? "" : path}${url.search ? "?…" : ""}`;
+  } catch {
+    return "…";
+  }
 }
 
 function server(name: string, entry: unknown, allowHttp: boolean): ParsedServer | Skip["reason"] {
@@ -147,20 +184,16 @@ export function parseClientConfig(text: string, options: { allowHttp?: boolean }
   return { servers, skipped };
 }
 
-/** Headers whose names say they carry a credential. */
-export function isSecretHeader(name: string): boolean {
-  return /^(authorization|proxy-authorization|cookie)$/i.test(name) || /token|key|secret|auth|password|pass$|pat$|jwt|session|credential|signature/i.test(name);
-}
+/** Headers that never carry a credential; their values may sit in state.json and opencode.json. */
+const PLAIN_HEADERS = new Set(["accept", "accept-language", "accept-encoding", "content-type", "user-agent", "cache-control", "mcp-protocol-version"]);
 
-/** A value that looks like a token whatever the header is called: long, no spaces, letters and digits. */
-function looksLikeToken(value: string): boolean {
-  const { secret } = splitScheme(value);
-  return secret.length >= 16 && /^[A-Za-z0-9._~+/=-]+$/.test(secret) && /[A-Za-z]/.test(secret) && /\d/.test(secret);
-}
-
-/** Whether a header goes to the OS store: by its name, or by a value that looks like a token. */
+/**
+ * Whether a header's value goes to the OS store: every header except the few
+ * known to be harmless. A guess by name or by length leaves short or oddly
+ * named secrets in plain text, so there is no guess.
+ */
 export function isCredential(name: string, value: string): boolean {
-  return isSecretHeader(name) || looksLikeToken(value);
+  return value.trim() !== "" && !PLAIN_HEADERS.has(name.toLowerCase());
 }
 
 /**

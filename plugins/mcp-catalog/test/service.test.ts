@@ -34,7 +34,7 @@ const pasted = (tokenA = TOKEN_A) =>
     $schema: "https://opencode.ai/config.json",
     mcp: {
       wiki_ab12: { type: "remote", url: stubA.url, headers: { Authorization: `Bearer ${tokenA}` } },
-      tracker_cd34: { type: "remote", url: stubB.url, headers: { "X-Api-Key": TOKEN_B, "X-Tenant": "team-1" } },
+      tracker_cd34: { type: "remote", url: stubB.url, headers: { "X-Api-Key": TOKEN_B, "X-Tenant": "team-1", Accept: "application/json" } },
     },
   });
 
@@ -84,12 +84,18 @@ describe("connecting servers", () => {
     expect(reference).not.toBeNull();
     expect(await readFile(reference![1]!, "utf8")).toBe(TOKEN_A);
     expect((await stat(reference![1]!)).mode & 0o777).toBe(0o600);
-    expect(file.mcp.servers.tracker_cd34.headers["X-Tenant"]).toBe("team-1");
+    // Every header but the harmless ones goes to the store, whatever it is called.
+    expect(file.mcp.servers.tracker_cd34.headers["X-Tenant"]).toMatch(/^\{file:.+\}$/);
+    expect(file.mcp.servers.tracker_cd34.headers.Accept).toBe("application/json");
+    expect(await stateText()).not.toContain("team-1");
     expect(file.mcp.servers.tracker_cd34.headers["X-Api-Key"]).toMatch(/^\{file:.+\}$/);
 
     const store = openFileSecretStore(join(root, "store"));
     expect(await store.get(await keyOf("wiki_ab12", "Authorization"))).toBe(TOKEN_A);
-    expect(result.status.servers[0]?.secretHeaders).toEqual(["X-Api-Key"]);
+    expect(result.status.servers[0]?.secretHeaders).toEqual(["X-Api-Key", "X-Tenant"]);
+    // The full address stays on the machine; answers carry host and path only.
+    expect(result.status.servers.map((server) => server.address)).toEqual([stubB.url, stubA.url].map((url) => url.replace("http://", "")));
+    expect(JSON.stringify(result)).not.toContain("http://");
   });
 
   it("checks servers with their tokens and remembers since when", async () => {
@@ -132,7 +138,7 @@ describe("connecting servers", () => {
     const store = openFileSecretStore(join(root, "store"));
     expect(await store.get(oldKey)).toBeNull();
     expect(await store.get(await keyOf("wiki_ab12", "Authorization"))).toBe(TOKEN_NEW);
-    expect((await storeFiles()).length).toBe(2);
+    expect((await storeFiles()).length).toBe(3);
     const fixed = await service.check(["wiki_ab12"], 0, config);
     expect(fixed.servers.find((server) => server.name === "wiki_ab12")!.health.status).toBe("ok");
   });
@@ -147,7 +153,7 @@ describe("connecting servers", () => {
       delete: (name) => files.delete(name),
       async set(name, value) {
         // The second token of the paste is refused, after the first is already stored.
-        if (failNext && (await storeFiles()).length >= 3) throw new Error("store locked");
+        if (failNext && (await storeFiles()).length >= 4) throw new Error("store locked");
         await files.set(name, value);
       },
     };
@@ -175,7 +181,8 @@ describe("on, off, timeouts, removal", () => {
     const key = await keyOf("wiki_ab12", "Authorization");
     const files = await readdir(join(root, "data", "tokens"));
     expect(files).not.toContain(key);
-    expect(files.length).toBe(1);
+    // tracker_cd34's two credential headers stay.
+    expect(files.length).toBe(2);
     expect(await openFileSecretStore(join(root, "store")).get(key)).toBe(TOKEN_A);
 
     await service.setEnabled("wiki_ab12", true, false, config);
@@ -190,6 +197,21 @@ describe("on, off, timeouts, removal", () => {
     const file = await readOpencode();
     expect(file.mcp.servers.wiki_ab12.timeout).toEqual({ execution: 45_000 });
     expect(file.mcp.servers.tracker_cd34.timeout).toEqual({ execution: 30_000 });
+  });
+
+  it("a removal opencode.json cannot take puts the server back as it was", async () => {
+    const service = make();
+    await service.importConfig(pasted(), config);
+    const key = await keyOf("wiki_ab12", "Authorization");
+    const broken = `${await readFile(opencodeFile(), "utf8")}\n{`;
+    await writeFile(opencodeFile(), broken);
+    await expect(service.remove("wiki_ab12", config)).rejects.toThrow(/^\[mcp:remove-failed\]/);
+    const status = await service.status();
+    expect(status.servers.find((server) => server.name === "wiki_ab12")).toMatchObject({ enabled: true });
+    expect(JSON.parse(await stateText()).servers.wiki_ab12.enabled).toBe(true);
+    expect(await openFileSecretStore(join(root, "store")).get(key)).toBe(TOKEN_A);
+    expect(await readdir(join(root, "data", "tokens"))).toContain(key);
+    expect(await readFile(opencodeFile(), "utf8")).toBe(broken);
   });
 
   it("removal clears the entry, the files and the store", async () => {

@@ -60,7 +60,8 @@ export type Health = z.infer<typeof healthSchema>;
 export const serverViewSchema = z
   .object({
     name: z.string(),
-    url: z.string(),
+    /** Host and path with id-like parts shortened (maskAddress); the full address never leaves the machine. */
+    address: z.string(),
     enabled: z.boolean(),
     /** This server's own call timeout (s), or null for the plugin's default. */
     timeoutSec: z.number().int().nullable(),

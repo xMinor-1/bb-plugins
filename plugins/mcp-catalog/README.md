@@ -70,10 +70,13 @@ company:
   machine where the agent runs (the plugin's host entry), the one inside the
   company network. The bb server keeps only counts (for `setupStatus`) and
   which machine was last used.
-- **Tokens.** A credential header (`Authorization`, `*token*`, `*key*`, …) is
-  split into its scheme and the token; the token goes to the macOS Keychain,
-  Windows Credential Manager or, elsewhere, a 0600 file under
-  `~/.local/share/bb-mcp-catalog/secrets`. For a server that is on, the token
+- **Tokens.** Every pasted header except a few harmless ones (`Accept`,
+  `Content-Type`, `User-Agent` and the like) is treated as a credential,
+  whatever its name: its value is split into a scheme (`Bearer `) and the
+  token, and the token goes to the macOS Keychain, Windows Credential Manager
+  or, on Linux and elsewhere, a 0600 file under
+  `~/.local/share/bb-mcp-catalog/secrets` (not libsecret or GNOME Keyring).
+  For a server that is on, the token
   is also written to a 0600 file in the plugin's data directory, and
   `opencode.json` refers to it: `"Authorization": "Bearer {file:/…/tokens/t-…}"`.
   OpenCode 2 replaces the reference with the file's content when it loads the
@@ -82,9 +85,13 @@ company:
   remove the server. A new token is stored under a new name, so its file name
   changes too and OpenCode, which watches `opencode.json`, picks it up; the
   old token is deleted only after `opencode.json` stops referring to it. A
-  paste that cannot be saved completely changes nothing. Headers are treated
-  as credentials by name or by a token-like value (long, no spaces, letters
-  and digits).
+  paste that cannot be saved completely changes nothing.
+- **Addresses.** An address with a credential in it — user and password, a
+  query parameter such as `token=` or `api_key=`, or a path part that looks
+  like a token (a known token format or a random run of 32+ letters and
+  digits) — is refused; ask the platform for settings with the token in a
+  header. The full address stays on the machine: the page and agents see the
+  host and the path with id-like parts shortened (`mcp.example.com/u/srv…/mcp`).
 - **`opencode.json`.** The plugin writes only `mcp.servers.<name>` for servers
   that are on, with `oauth: false` and `timeout.execution`, under the same
   write lock as Fleet Kit (`<file>.bb-config-lock`), and keeps one backup of
@@ -107,6 +114,24 @@ company:
   `todo` before anything is connected, `problem` otherwise. It answers from
   the last status heard, without network calls. All other methods answer only
   bb clients.
+
+## Limits
+
+- **`allowedModels` covers the chat tools only.** The page's RPC methods
+  answer any bb client, and the bb SDK reports a call from the `bb` CLI as a
+  client call, the same as the page. An agent of any model that can run shell
+  commands with the person's bb access can therefore switch servers on or off
+  or remove them through `bb`. It still never gets a token: no method returns
+  one.
+- **Windows.** The 0600 and 0700 modes on the token files and folders do
+  nothing there. The tokens are protected by Credential Manager, and the
+  copies OpenCode reads sit in the plugin's data folder inside the user
+  profile, which by default only that user and administrators can open.
+- **macOS.** Any program running as the same user can read the plugin's
+  Keychain items through `/usr/bin/security` without a prompt: the item has
+  to allow `security`, because node cannot read the Keychain itself.
+- **Linux.** The OS store is a 0600 file in the home folder, readable by
+  anything running as that user and by root.
 
 ## Development
 

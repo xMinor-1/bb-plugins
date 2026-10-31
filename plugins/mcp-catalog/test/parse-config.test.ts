@@ -1,6 +1,6 @@
 // Pasted client settings → remote servers, in every shape the plugin accepts.
 import { describe, expect, it } from "vitest";
-import { ConfigTextError, isCredential, isSecretHeader, parseClientConfig, splitScheme } from "../src/shared/parse-config";
+import { ConfigTextError, isCredential, maskAddress, parseClientConfig, splitScheme } from "../src/shared/parse-config";
 
 const TOKEN = "tok-synthetic-0123456789";
 const remote = (url = "https://mcp.example.com/u/1/srv/mcp") => ({ type: "remote", url, headers: { Authorization: `Bearer ${TOKEN}` } });
@@ -71,6 +71,21 @@ describe("parseClientConfig", () => {
     expect(JSON.stringify(parseClientConfig(text).skipped)).not.toContain(TOKEN);
   });
 
+  it("refuses an address with a token in its path, and leaves instance ids alone", () => {
+    const at = (url: string) => parseClientConfig(JSON.stringify({ mcp: { s: { type: "remote", url } } }));
+    for (const url of [
+      "https://mcp.example.com/mcp/glpat-0123456789abcdefXYZ",
+      "https://mcp.example.com/sse/eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln",
+      "https://mcp.example.com/k/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08/mcp",
+      "https://mcp.example.com/k/tok%2Dsynthetic%2D0123456789abcdefghijklmnopqrstuvwxyz/mcp",
+    ]) expect(at(url).skipped[0]?.reason, url).toBe("url-secret");
+    for (const url of [
+      "https://mcp.example.com/u/1/corp_wiki_ab12cd34/mcp",
+      "https://mcp.example.com/servers/3f2a8c1e-9b7d-4e21-a5c3-0d6f4b8e2a17/mcp",
+      "https://mcp.example.com/streamable-http/mcp",
+    ]) expect(at(url).servers[0]?.url, url).toBe(url);
+  });
+
   it("skips a substitution even when it is not closed", () => {
     const text = JSON.stringify({
       mcp: {
@@ -84,16 +99,17 @@ describe("parseClientConfig", () => {
 });
 
 describe("credentials", () => {
-  it("knows which headers hold secrets", () => {
-    for (const name of ["Authorization", "authorization", "X-Api-Key", "X-Auth-Token", "Cookie", "Proxy-Authorization"]) expect(isSecretHeader(name), name).toBe(true);
-    for (const name of ["X-Tenant", "Accept-Language"]) expect(isSecretHeader(name), name).toBe(false);
+  it("stores every header except the known harmless ones, short values included", () => {
+    for (const name of ["Authorization", "X-Api-Key", "Cookie", "X-Pat", "X-Tenant", "X-Custom", "Private-Token"]) expect(isCredential(name, "s3"), name).toBe(true);
+    for (const name of ["Accept", "accept-language", "Content-Type", "User-Agent", "MCP-Protocol-Version"]) expect(isCredential(name, "application/json"), name).toBe(false);
+    expect(isCredential("X-Custom", "  ")).toBe(false);
   });
 
-  it("treats a token-like value as a secret whatever the header is called", () => {
-    for (const name of ["X-Pat", "X-JWT", "X-Gitlab-Pass"]) expect(isCredential(name, "short"), name).toBe(true);
-    expect(isCredential("X-Custom", TOKEN)).toBe(true);
-    expect(isCredential("X-Custom", "Bearer glpat-0123456789abcdefXYZ")).toBe(true);
-    for (const value of ["team-1", "application/json", "ru-RU,ru;q=0.9", "a value with spaces 1234567890"]) expect(isCredential("X-Tenant", value), value).toBe(false);
+  it("shows an address without the parts that identify the instance", () => {
+    expect(maskAddress("https://mcp.example.com/u/1/corp_wiki_ab12cd34/mcp")).toBe("mcp.example.com/u/1/cor…/mcp");
+    expect(maskAddress("https://mcp.example.com/servers/3f2a8c1e-9b7d-4e21-a5c3-0d6f4b8e2a17/mcp?tenant=7")).toBe("mcp.example.com/servers/3f2…/mcp?…");
+    expect(maskAddress("https://mcp.example.com/")).toBe("mcp.example.com");
+    expect(maskAddress("not an address")).toBe("…");
   });
 
   it("keeps only the token part of a scheme", () => {

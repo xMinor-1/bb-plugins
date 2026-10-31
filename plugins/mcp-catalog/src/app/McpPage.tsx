@@ -123,15 +123,6 @@ function HealthBadge({ server }: { server: ServerView }) {
   );
 }
 
-function hostOf(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.host}${parsed.pathname.length > 1 ? parsed.pathname : ""}`;
-  } catch {
-    return url;
-  }
-}
-
 function ServerRow({
   server,
   defaultTimeout,
@@ -165,8 +156,8 @@ function ServerRow({
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
             <span className="break-all font-mono text-sm">{server.name}</span>
-            <span className="min-w-0 truncate text-xs text-muted-foreground" title={server.url}>
-              {hostOf(server.url)}
+            <span className="min-w-0 truncate text-xs text-muted-foreground" title={server.address}>
+              {server.address}
             </span>
           </div>
           <HealthBadge server={server} />

@@ -12,7 +12,7 @@ import plugin, { describeStatus, setupAnswer, summarize } from "../server";
 
 const server = (name: string, patch: Partial<ServerView> = {}): ServerView => ({
   name,
-  url: `https://mcp.example.com/u/1/${name}/mcp`,
+  address: `mcp.example.com/u/1/${name}/mcp`,
   enabled: true,
   timeoutSec: null,
   headers: ["Authorization"],

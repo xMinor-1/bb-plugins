@@ -18,7 +18,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { CatalogItem, Health, ImportResult, ServerView, Status, WriteConfig } from "../../contract.js";
-import { ConfigTextError, isCredential, parseClientConfig, splitScheme, urlProblem } from "../shared/parse-config.js";
+import { ConfigTextError, isCredential, maskAddress, parseClientConfig, splitScheme, urlProblem } from "../shared/parse-config.js";
 import { CatalogError, fetchCatalog } from "./catalog.js";
 import { findOpenCode } from "./find-opencode.js";
 import { ConfigFileError, writeMcpServers, type McpEntry } from "./opencode-mcp.js";
@@ -180,7 +180,7 @@ export class McpService {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, server]) => ({
         name,
-        url: server.url,
+        address: maskAddress(server.url),
         enabled: server.enabled,
         timeoutSec: server.timeoutSec,
         headers: server.headers.map((header) => header.name),
@@ -319,11 +319,14 @@ export class McpService {
       const state = await this.load();
       const server = serverOf(state, name);
       if (!server) return this.view(state);
+      const wasEnabled = server.enabled;
       server.enabled = false;
       await this.syncLocked(config, new Set());
       if (state.owned.includes(name)) {
-        // opencode.json could not be written: keep the server so its entry is not orphaned.
-        throw new TaggedError("config-failed", `${name} is still in opencode.json; try again.`);
+        // opencode.json could not be written: put the server back as it was, so the list says what OpenCode uses.
+        server.enabled = wasEnabled;
+        await this.save();
+        throw new TaggedError("remove-failed", `${name} was not removed because opencode.json could not be written (${state.configError ?? "unknown error"}). Nothing changed; try again.`);
       }
       for (const key of secretsOf(server)) await this.forgetSecret(key);
       delete state.servers[name];

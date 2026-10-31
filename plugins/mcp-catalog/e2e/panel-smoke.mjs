@@ -22,12 +22,17 @@ try {
     if (message.type() === "error") consoleErrors.push(message.text().slice(0, 300));
   });
   await page.goto(base, { waitUntil: "domcontentloaded" });
-  const skip = page.getByRole("button", { name: /Skip setup/i });
-  await skip.waitFor({ timeout: 20_000 }).then(() => skip.click(), () => undefined);
+  // A fresh bb opens its first-run setup over any page until it is skipped.
+  const skipSetup = async (timeout) => {
+    const skip = page.getByRole("button", { name: /Skip setup/i });
+    await skip.waitFor({ timeout }).then(() => skip.click(), () => undefined);
+  };
+  await skipSetup(20_000);
 
   const open = async (lang) => {
     await page.evaluate((value) => localStorage.setItem("xminor-plugins.lang", value), lang);
     await page.goto(`${base}/plugins/mcp-catalog/mcp`, { waitUntil: "domcontentloaded" });
+    await skipSetup(3_000);
     try {
       await page.getByRole("group", { name: /Interface language|Язык интерфейса/ }).waitFor({ timeout: 30_000 });
       await page.locator("[data-server]").first().waitFor({ timeout: 30_000 });
