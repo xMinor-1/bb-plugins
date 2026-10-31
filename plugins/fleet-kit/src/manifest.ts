@@ -63,6 +63,35 @@ const mcpEntry = z
   })
   .strict();
 
+/**
+ * A step of the "First run" page: a build secret the page asks for itself, or
+ * a plugin the page asks for its state (RPC `setupStatus`). `path` is where the
+ * step's button leads when the plugin cannot say.
+ */
+const onboardingStep = z
+  .object({
+    id,
+    title: z.string().min(1),
+    hint: z.string().optional(),
+    optional: z.boolean().optional(),
+    secret: id.optional(),
+    plugin: id.optional(),
+    path: z
+      .string()
+      .regex(/^\/plugins\/[a-z0-9][a-z0-9-]*(\/[A-Za-z0-9._~-]+)*$/, "use a bb page such as /plugins/<id>/<panel>")
+      .optional(),
+  })
+  .strict()
+  .superRefine((step, ctx) => {
+    if ((step.secret === undefined) === (step.plugin === undefined)) {
+      ctx.addIssue({ code: "custom", message: "name exactly one of secret and plugin" });
+    }
+    if (step.secret !== undefined && step.path !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["path"], message: "a secret step is done on the First run page itself" });
+    }
+  });
+export type OnboardingStep = z.infer<typeof onboardingStep>;
+
 const providerBlock = z
   .object({
     name: z.string().min(1).optional(),
@@ -130,6 +159,8 @@ const rootShape = {
    * every other provider, including ones a later bb adds, is turned off.
    */
   agents: z.object({ allowed: z.array(providerId).min(1) }).strict().optional(),
+  /** Steps of the "First run" page, in order. */
+  onboarding: z.array(onboardingStep).optional(),
 };
 
 export const manifestSchema = z.object(rootShape).strict();
@@ -378,6 +409,22 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
       errors.push(`agents.allowed: the default agent "${defaultProvider}" (bb.settings.defaultProviderId) would be turned off`);
     }
     if (new Set(manifest.agents.allowed).size !== manifest.agents.allowed.length) errors.push("agents.allowed: an agent is listed twice");
+  }
+  if (manifest.onboarding !== undefined) {
+    // A wrong step only hides that step: the page is a guide, and it must not hold back the rest of the build.
+    const seen = new Set<string>();
+    manifest.onboarding = manifest.onboarding.filter((step) => {
+      const problem = seen.has(step.id)
+        ? "is listed twice"
+        : step.secret !== undefined && !declaredSecrets.has(step.secret)
+          ? `refers to the secret "${step.secret}", which is not in secrets`
+          : step.plugin !== undefined && !ids.has(step.plugin)
+            ? `refers to the plugin "${step.plugin}", which is not in plugins`
+            : null;
+      seen.add(step.id);
+      if (problem !== null) warnings.push(`onboarding.${step.id}: ${problem}; the step is not shown`);
+      return problem === null;
+    });
   }
   if (compareVersions(manifest.install.bb, manifest.bb.minVersion) < 0) {
     errors.push("install.bb: lower than bb.minVersion");

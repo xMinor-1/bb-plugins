@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-qlik-sense",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Let agents read Qlik Sense Enterprise reports: two-step setup, a report catalog, and a guard that keeps company data with approved models.",
   "license": "MIT",
   "author": "Foma",
@@ -25,7 +25,7 @@
     "name": "Qlik Sense",
     "description": "Agents read Qlik Sense Enterprise sheets and charts with filters. Sign in once, tick the reports agents may use, and choose which models may see the data.",
     "branding": {
-      "icon": "ChartColumn"
+      "icon": "./icon.svg"
     },
     "server": "./server.ts",
     "app": "./app.tsx",
@@ -42,7 +42,8 @@
     "lib",
     "skills",
     "README.md",
-    "PLUGIN_OVERVIEW.md"
+    "PLUGIN_OVERVIEW.md",
+    "icon.svg"
   ],
   "scripts": {
     "build": "env -u BB_CLI bb plugin build .",

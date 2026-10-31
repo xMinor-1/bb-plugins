@@ -74,6 +74,47 @@ export const statusSchema = z.object({
 });
 export type Status = z.infer<typeof statusSchema>;
 
+/** `checking`: the plugin has not answered within the page's wait; its answer comes with the next update. */
+export const setupStateSchema = z.enum(["done", "todo", "problem", "installing", "later", "checking"]);
+export type SetupState = z.infer<typeof setupStateSchema>;
+export const setupMarkSchema = z.enum(["done", "skipped"]);
+export type SetupMark = z.infer<typeof setupMarkSchema>;
+
+/** One step of the "First run" page (manifest `onboarding[]`) with its state now. */
+export const setupStepSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  hint: z.string().nullable(),
+  optional: z.boolean(),
+  kind: z.enum(["secret", "plugin"]),
+  /** The secret's name for a secret step, the plugin's id for a plugin step. */
+  target: z.string(),
+  state: setupStateSchema,
+  /** The plugin's own line, already in the requested language. */
+  summary: z.string().nullable(),
+  /** Why, when Fleet Kit decided the state itself: the panel says it in the person's language. */
+  reason: z.enum(["manual", "no-answer", "install-failed"]).nullable(),
+  /** The bb page where the person does the step. */
+  path: z.string().nullable(),
+  /** The plugin cannot report its state: the person marks the step done. */
+  manual: z.boolean(),
+  mark: setupMarkSchema.nullable(),
+});
+export type SetupStep = z.infer<typeof setupStepSchema>;
+
+export const setupSchema = z.object({
+  /** Fleet Kit has read a build manifest at least once. */
+  configured: z.boolean(),
+  /** This machine has a manifest address: without one there will never be steps. */
+  manifestSet: z.boolean(),
+  steps: z.array(setupStepSchema),
+  /** Steps still to do: not done, not skipped, not waiting for a plugin that is not built yet. */
+  remaining: z.number().int(),
+  complete: z.boolean(),
+  secretStore: z.string(),
+});
+export type Setup = z.infer<typeof setupSchema>;
+
 export const STATUS_CHANNEL = "status-changed";
 
 export const rpcContract = defineRpcContract({
@@ -92,4 +133,9 @@ export const rpcContract = defineRpcContract({
     output: z.object({ dismissed: z.boolean() }),
   },
   lock_reset: { input: z.null(), output: z.object({ reset: z.boolean() }) },
+  setup_status: { input: z.object({ lang: z.enum(["en", "ru"]) }).strict(), output: setupSchema },
+  setup_mark: {
+    input: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), mark: setupMarkSchema.nullable() }).strict(),
+    output: z.object({ marked: z.boolean() }),
+  },
 });

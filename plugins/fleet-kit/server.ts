@@ -5,22 +5,36 @@
 // bb settings, and merges the build's OpenCode block into opencode.json.
 // The panel (app.tsx) and `bb fleet-kit` show the result and run a sync on
 // demand. Secrets are stored in the operating system's credential store.
-import { PluginCliError, cliCommand, defineCli, type BbPluginApi } from "@get-bb/plugin-sdk";
+import { PluginCliError, cliCommand, defineCli, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { rpcContract, STATUS_CHANNEL, type Notice, type OpenCodeStatus, type Status, type SyncReport } from "./contract.js";
+import { rpcContract, STATUS_CHANNEL, type Notice, type OpenCodeStatus, type Setup, type SetupMark, type Status, type SyncReport } from "./contract.js";
 import { checkSecretValue, openSecretStore, SECRET_NAME, type SecretStore, type SecretStorePreference } from "./src/secret-store.js";
 import { emptyManaged, runSync, SELF_ID, type FleetKitSettings, type ManagedState } from "./src/sync.js";
 import { maskManifestUrl, parseManifestLocation } from "./src/fetch-manifest.js";
 import { opencodeConfigDirSchema } from "./src/shared/settings.js";
 import { resolveOpenCodeLocation } from "./src/host/opencode-location.js";
 import { lockState, resetStuckLock } from "./src/host/lock-state.js";
+import { collectSetup, markProblem, SetupAsker, type StoredOnboarding } from "./src/setup.js";
 
 export { rpcContract };
 
 const START_DELAY_MS = 15_000;
+/** The page, its banner and the sidebar badge ask at once; one answer serves them all. */
+const SETUP_FRESH_MS = 3_000;
 
 interface StoredSecrets {
   list: { name: string; title: string; hint: string | null }[];
+}
+
+/** The CLI's note after a First run step. */
+function setupNote(step: Setup["steps"][number], shown: string): string {
+  if (shown === "skipped") return "";
+  if (step.state === "checking") return "the plugin has not answered yet; run the command again in a few seconds";
+  if (step.summary !== null) return step.summary;
+  if (step.reason === "manual") {
+    return step.state === "done" ? "marked done by hand" : "the plugin cannot report its state; mark it on the First run page";
+  }
+  return step.reason ?? "";
 }
 
 export default async function plugin(bb: BbPluginApi) {
@@ -89,8 +103,35 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
+  const setupAnswers = new Map<"en" | "ru", { at: number; answer: Promise<Setup> }>();
+
   function publish() {
+    setupAnswers.clear();
     bb.realtime.publish(STATUS_CHANNEL, { at: Date.now() });
+  }
+
+  // A plugin that answers after the page stopped waiting: the page asks again and gets the answer.
+  const asker = new SetupAsker((args) => bb.sdk.plugins.callRpc(args), () => publish());
+
+  async function setup(lang: "en" | "ru"): Promise<Setup> {
+    const cached = setupAnswers.get(lang);
+    if (cached && Date.now() - cached.at < SETUP_FRESH_MS) return cached.answer;
+    const answer = (async () =>
+      collectSetup({
+        listPlugins: async () => (await bb.sdk.plugins.list()).plugins,
+        ask: (pluginId, language) => asker.ask(pluginId, language),
+        manifestSet: (await settings.get()).manifestUrl.trim() !== "",
+        onboarding: (await kv.get<StoredOnboarding>("onboarding")) ?? null,
+        marks: (await kv.get<Record<string, SetupMark>>("setupMarks")) ?? {},
+        secrets: ((await kv.get<StoredSecrets>("secrets")) ?? { list: [] }).list,
+        secretSet: (name) => store.has(name),
+        secretStore: store.label,
+        lastSync: (await kv.get<SyncReport>("lastSync")) ?? null,
+        lang,
+      }))();
+    setupAnswers.set(lang, { at: Date.now(), answer });
+    answer.catch(() => setupAnswers.delete(lang));
+    return answer;
   }
 
   async function secretsStatus(): Promise<Status["secrets"]> {
@@ -162,6 +203,10 @@ export default async function plugin(bb: BbPluginApi) {
       await kv.set("secrets", {
         list: outcome.manifest.secrets.map((secret) => ({ name: secret.name, title: secret.title, hint: secret.hint ?? null })),
       } satisfies StoredSecrets);
+      await kv.set("onboarding", {
+        steps: outcome.manifest.onboarding ?? [],
+        planned: outcome.manifest.plugins.filter((entry) => entry.status === "planned").map((entry) => entry.id),
+      } satisfies StoredOnboarding);
     }
     if (outcome.notices.length > 0) {
       const notices = (await kv.get<Notice[]>("notices")) ?? [];
@@ -309,6 +354,21 @@ export default async function plugin(bb: BbPluginApi) {
       publish();
       return { reset };
     },
+    setup_status: ({ lang }) => setup(lang),
+    setup_mark: async ({ id, mark }) => {
+      const onboarding = (await kv.get<StoredOnboarding>("onboarding")) ?? null;
+      const step = onboarding?.steps.find((candidate) => candidate.id === id);
+      // Only a plugin without setupStatus is marked done by hand.
+      const answer = mark === "done" && step?.plugin !== undefined ? (asker.known(step.plugin) ?? (await asker.ask(step.plugin, "en"))) : null;
+      const problem = markProblem(step, mark, answer);
+      if (problem !== null) throw new experimental_PluginRpcRefusal({ code: "invalid", message: problem });
+      const marks = { ...((await kv.get<Record<string, SetupMark>>("setupMarks")) ?? {}) };
+      if (mark === null) delete marks[id];
+      else marks[id] = mark;
+      await kv.set("setupMarks", marks);
+      publish();
+      return { marked: true };
+    },
   });
 
   const summary = (report: SyncReport | null) => {
@@ -345,6 +405,22 @@ export default async function plugin(bb: BbPluginApi) {
               );
             }
             for (const secret of value.secrets) lines.push(`Secret ${secret.name}: ${secret.set ? "set" : "not set"} (${value.secretStore})`);
+            return { exitCode: 0, stdout: lines.join("\n") };
+          },
+        }),
+        setup: cliCommand({
+          summary: "Show the First run steps and which are done",
+          options: { json: { type: "boolean", description: "Print JSON" } },
+          async run(input) {
+            const value = await setup("en");
+            if (input.options.json) return { exitCode: 0, stdout: JSON.stringify(value, null, 2) };
+            if (!value.configured) return { exitCode: 0, stdout: "No build read yet: the steps appear after the first sync." };
+            const lines = value.steps.map((step) => {
+              const state = step.optional && step.mark === "skipped" && step.state !== "done" ? "skipped" : step.state;
+              const why = setupNote(step, state);
+              return `  ${state.padEnd(10)} ${step.id}: ${step.title}${why ? ` (${why})` : ""}`;
+            });
+            lines.unshift(value.complete ? "First run: all set." : `First run: ${value.remaining} ${value.remaining === 1 ? "step" : "steps"} left.`);
             return { exitCode: 0, stdout: lines.join("\n") };
           },
         }),

@@ -14,6 +14,8 @@ paths:
   На bb 0.48 есть, например: `Lock`, `SecurityCheck`, `PackageReceive`,
   `ArrowReloadHorizontal`, `Loading`, `ListTodo`, `AlertTriangle`, `CircleX`, `Bot`.
 - Своя картинка — `./icon.svg` в `bb.branding.icon`.
+- Просят иконку по имени — сначала сверить со списком. `ChartPie` в bb 0.48 нет (есть только
+  `ChartColumn`): для qlik-sense 0.1.1 круговая диаграмма нарисована своей `./icon.svg` и компонентом.
 - Проверять глазами на снимке панели: тест и сборка неверное имя не ловят.
 - Цветной значок (градиенты, несколько цветов) `bb.branding.icon` не даст: это маска
   `currentColor`. Для навигации и кнопки в футере — React-компонент через
