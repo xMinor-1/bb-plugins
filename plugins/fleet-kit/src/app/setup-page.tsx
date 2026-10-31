@@ -16,6 +16,40 @@ import { errorText, Frame, SecretInput, STATUS_CHANNEL, useSavedIn } from "./par
 
 /** The panel path of this page: the installer opens bb on /plugins/fleet-kit/setup. */
 export const SETUP_PANEL = "setup";
+
+/**
+ * Whether the build has setup steps, as this browser last saw it. bb draws a
+ * sidebar entry for every registered panel, so the First run entry is
+ * registered only while the build has steps; a change shows from the next page
+ * load, like the language of the entry's title. Unknown (a fresh bb, which the
+ * installer opens on this page) counts as having steps.
+ */
+const SETUP_SEEN_KEY = "fleet-kit.setup-steps";
+
+export function setupEntryWanted(): boolean {
+  try {
+    return window.localStorage.getItem(SETUP_SEEN_KEY) !== "none";
+  } catch {
+    return true;
+  }
+}
+
+function rememberSteps(setup: Setup): void {
+  // Read but not synced yet: keep what was seen before.
+  const has = setup.configured ? setup.steps.length > 0 : setup.manifestSet ? null : false;
+  if (has === null) return;
+  try {
+    window.localStorage.setItem(SETUP_SEEN_KEY, has ? "steps" : "none");
+  } catch {
+    // Private mode: the entry follows the default.
+  }
+}
+
+/** Set by the app when it registers the First run entry this page load. */
+let entryRegistered = false;
+export function markSetupEntryRegistered(): void {
+  entryRegistered = true;
+}
 const PAGE_POLL_MS = 15_000;
 const BADGE_POLL_MS = 60_000;
 
@@ -35,12 +69,13 @@ const messages = defineMessages(
     start: "Start working",
     optional: "optional",
     state: (state: SetupStep["state"] | "skipped") =>
-      ({ done: "Done", todo: "To do", problem: "Didn't work", installing: "Installing the plugin", later: "Coming later", skipped: "Skipped" })[state],
+      ({ done: "Done", todo: "To do", problem: "Didn't work", installing: "Installing the plugin", later: "Coming later", checking: "Checking…", skipped: "Skipped" })[state],
     manual: "This plugin cannot report its state: mark the step yourself once it is done.",
     noAnswer: "The plugin did not answer. Open its page or check again.",
     installFailed: "The plugin did not install. Details are on the Fleet Kit page.",
     installing: "Fleet Kit is installing the plugin; the step appears here when it is ready.",
     later: "The plugin is not in the build yet.",
+    checking: "The plugin is answering slowly; its state appears here as soon as it answers.",
     open: "Open",
     markDone: "Mark as done",
     notDone: "Not done yet",
@@ -64,12 +99,13 @@ const messages = defineMessages(
     start: "Начать работу",
     optional: "необязательно",
     state: (state) =>
-      ({ done: "Готово", todo: "Нужно сделать", problem: "Не получилось", installing: "Плагин ещё ставится", later: "Появится позже", skipped: "Пропущено" })[state],
+      ({ done: "Готово", todo: "Нужно сделать", problem: "Не получилось", installing: "Плагин ещё ставится", later: "Появится позже", checking: "Проверяю…", skipped: "Пропущено" })[state],
     manual: "Этот плагин не сообщает о готовности: когда сделаете шаг, отметьте его сами.",
     noAnswer: "Плагин не ответил. Откройте его страницу или проверьте снова.",
     installFailed: "Плагин не установился. Подробности на странице пульта.",
     installing: "Пульт ставит плагин, шаг станет доступен, когда он будет готов.",
     later: "Плагина ещё нет в сборке.",
+    checking: "Плагин отвечает медленно, его состояние появится здесь, как только он ответит.",
     open: "Открыть",
     markDone: "Отметить готовым",
     notDone: "Ещё не готово",
@@ -108,6 +144,7 @@ export function useSetup(pollMs: number) {
     if (shown) setChecking(true);
     rpc.call("setup_status", { lang }).then(
       (value) => {
+        rememberSteps(value);
         setSetup(value);
         setError(null);
         setChecking(false);
@@ -147,6 +184,7 @@ const STATE_ICON: Record<SetupStep["state"] | "skipped", { name: string; classNa
   todo: { name: "Circle", className: "text-muted-foreground" },
   problem: { name: "AlertTriangle", className: "text-amber-600 dark:text-amber-400" },
   installing: { name: "Loading", className: "animate-spin text-muted-foreground" },
+  checking: { name: "Loading", className: "animate-spin text-muted-foreground" },
   later: { name: "Clock", className: "text-muted-foreground" },
   skipped: { name: "Minus", className: "text-muted-foreground" },
 };
@@ -156,6 +194,7 @@ function explanation(t: Texts, step: SetupStep): string | null {
   if (step.summary !== null && step.state !== "installing" && step.state !== "later") return step.summary;
   if (step.state === "installing") return t.installing;
   if (step.state === "later") return t.later;
+  if (step.state === "checking") return t.checking;
   if (step.reason === "install-failed") return t.installFailed;
   if (step.reason === "no-answer") return t.noAnswer;
   if (step.reason === "manual" && step.state !== "done") return t.manual;
@@ -174,7 +213,7 @@ function StepCard({ step, secretStore, onMark, onSecret }: {
   const state = shownState(step);
   const icon = STATE_ICON[state];
   const why = explanation(t, step);
-  const actionable = state !== "later" && state !== "installing";
+  const actionable = state !== "later" && state !== "installing" && state !== "checking";
   const openable = step.kind === "plugin" && step.path !== null && actionable && state !== "skipped";
   const primary = state === "todo" || state === "problem";
   useEffect(() => setReplacing(false), [step.state]);
@@ -284,7 +323,16 @@ export function SetupPage() {
                 step={step}
                 secretStore={setup.secretStore}
                 onMark={(mark) => void rpc.call("setup_mark", { id: step.id, mark }).then(() => refetch(), fail)}
-                onSecret={(value) => rpc.call("secret_set", { name: step.target, value }).then(() => refetch(), fail)}
+                onSecret={(value) =>
+                  rpc.call("secret_set", { name: step.target, value }).then(
+                    () => refetch(),
+                    (cause) => {
+                      // Shown here; the rejection keeps the typed key in the field.
+                      fail(cause);
+                      throw cause;
+                    },
+                  )
+                }
               />
             ))}
           </ol>
@@ -304,7 +352,13 @@ export function SetupBanner() {
     <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 px-4 py-2.5 text-sm">
       <Icon name="Target" className="size-4 text-amber-600 dark:text-amber-400" />
       <span className="min-w-0 flex-1">{t.left(setup.remaining)}</span>
-      <Button size="sm" onClick={() => navigate.toPluginPanel(SETUP_PANEL)}>
+      <Button
+        size="sm"
+        onClick={() =>
+          // Without the entry this page load (the build had no steps before), only a reload brings the page.
+          entryRegistered ? navigate.toPluginPanel(SETUP_PANEL) : window.location.assign(`/plugins/fleet-kit/${SETUP_PANEL}`)
+        }
+      >
         {t.continue}
       </Button>
     </div>

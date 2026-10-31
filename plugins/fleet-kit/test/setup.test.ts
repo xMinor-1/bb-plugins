@@ -3,13 +3,35 @@
 import { describe, expect, it } from "vitest";
 import type { SyncReport } from "../contract";
 import { checkManifest } from "../src/manifest";
-import { collectSetup, markProblem, type SetupDeps, type StoredOnboarding } from "../src/setup";
+import { collectSetup, markProblem, SetupAsker, type AskerOptions, type SetupDeps, type StoredOnboarding } from "../src/setup";
 import { clone, sampleManifest } from "./fixtures";
 
-type Answer = { state: string; summary: string; path?: string } | Error | "hang";
+type Answer = { state: string; summary: string; path?: string } | Error | "hang" | { after: number; answer: { state: string; summary: string } };
 
 function rpcError(code: string) {
   return Object.assign(new Error(code), { code });
+}
+
+type CallArgs = { pluginId: string; method: string; input?: unknown; outputSchema: { parse: (v: unknown) => unknown }; signal?: AbortSignal };
+
+/** A fake bb.sdk.plugins.callRpc over the given answers; a plugin without one has no setupStatus. */
+function fakePlugins(answers: Record<string, Answer>) {
+  const calls: { pluginId: string; method: string; input: unknown }[] = [];
+  const callRpc = async (args: CallArgs) => {
+    calls.push({ pluginId: args.pluginId, method: args.method, input: args.input });
+    const answer = answers[args.pluginId];
+    if (answer === undefined) throw rpcError("unknown_method");
+    if (answer instanceof Error) throw answer;
+    if (answer === "hang") {
+      return new Promise((_, reject) => args.signal?.addEventListener("abort", () => reject(rpcError("transport_error"))));
+    }
+    if ("after" in answer) {
+      await new Promise((resolve) => setTimeout(resolve, answer.after));
+      return args.outputSchema.parse(answer.answer);
+    }
+    return args.outputSchema.parse(answer);
+  };
+  return { calls, callRpc: callRpc as never };
 }
 
 function deps(options: {
@@ -19,27 +41,19 @@ function deps(options: {
   marks?: SetupDeps["marks"];
   secrets?: string[];
   lastSync?: SyncReport | null;
+  asker?: AskerOptions;
 }) {
-  const calls: { pluginId: string; method: string; input: unknown }[] = [];
+  const answers: Record<string, Answer> = { ...options.answers };
+  const { calls, callRpc } = fakePlugins(answers);
+  const late = { count: 0 };
+  const asker = new SetupAsker(callRpc, () => late.count++, { waitMs: 1_000, timeoutMs: 50, ...options.asker });
   const value: SetupDeps = {
-    sdk: {
-      plugins: {
-        list: async () => {
-          if (options.installed instanceof Error) throw options.installed;
-          return { plugins: options.installed ?? [{ id: "mail", enabled: true }, { id: "qlik", enabled: true }, { id: "notes", enabled: true }] };
-        },
-        callRpc: async (args: { pluginId: string; method: string; input?: unknown; outputSchema: { parse: (v: unknown) => unknown }; signal?: AbortSignal }) => {
-          calls.push({ pluginId: args.pluginId, method: args.method, input: args.input });
-          const answer = options.answers?.[args.pluginId];
-          if (answer === undefined) throw rpcError("unknown_method");
-          if (answer instanceof Error) throw answer;
-          if (answer === "hang") {
-            return new Promise((_, reject) => args.signal?.addEventListener("abort", () => reject(rpcError("transport_error"))));
-          }
-          return args.outputSchema.parse(answer);
-        },
-      },
-    } as never,
+    listPlugins: async () => {
+      if (options.installed instanceof Error) throw options.installed;
+      return options.installed ?? [{ id: "mail", enabled: true }, { id: "qlik", enabled: true }, { id: "notes", enabled: true }];
+    },
+    ask: (pluginId, lang) => asker.ask(pluginId, lang),
+    manifestSet: true,
     onboarding:
       options.onboarding === undefined
         ? {
@@ -59,17 +73,18 @@ function deps(options: {
     secretStore: "macOS Keychain",
     lastSync: options.lastSync ?? null,
     lang: "ru",
-    timeoutMs: 50,
   };
-  return { value, calls };
+  return { value, calls, late, answers, asker };
 }
 
 const byId = (setup: Awaited<ReturnType<typeof collectSetup>>, id: string) => setup.steps.find((step) => step.id === id)!;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("collectSetup", () => {
-  it("has nothing to show before the first sync", async () => {
-    const setup = await collectSetup(deps({ onboarding: null }).value);
-    expect(setup).toMatchObject({ configured: false, steps: [], complete: false });
+  it("has nothing to show before the first sync, and says whether a manifest is set", async () => {
+    const { value } = deps({ onboarding: null });
+    expect(await collectSetup(value)).toMatchObject({ configured: false, manifestSet: true, steps: [], complete: false });
+    expect(await collectSetup({ ...value, manifestSet: false })).toMatchObject({ configured: false, manifestSet: false });
   });
 
   it("a build without steps is complete and asks nobody", async () => {
@@ -134,13 +149,39 @@ describe("collectSetup", () => {
     expect(byId(await collectSetup(value), "mail")).toMatchObject({ state: "todo", manual: false, mark: "done" });
   });
 
-  it("shows a plugin that fails or does not answer in time as a problem, without waiting for it", async () => {
-    const { value } = deps({ answers: { mail: rpcError("handler_error"), qlik: "hang" } });
+  it("does not offer a hand mark for a plugin that failed: only a missing method does", async () => {
+    const { value } = deps({ answers: { mail: rpcError("not_found"), qlik: rpcError("handler_error") }, marks: { mail: "done" } });
+    const setup = await collectSetup(value);
+    expect(byId(setup, "mail")).toMatchObject({ state: "problem", reason: "no-answer", manual: false });
+    expect(byId(setup, "qlik")).toMatchObject({ state: "problem", reason: "no-answer", manual: false });
+  });
+
+  it("shows a plugin that does not answer before the call's limit as a problem", async () => {
+    const { value } = deps({ answers: { mail: "hang" } });
     const started = Date.now();
     const setup = await collectSetup(value);
-    expect(Date.now() - started).toBeLessThan(2_000);
-    expect(byId(setup, "mail")).toMatchObject({ state: "problem", reason: "no-answer", manual: false });
-    expect(byId(setup, "qlik")).toMatchObject({ state: "problem", reason: "no-answer" });
+    expect(Date.now() - started).toBeLessThan(900);
+    expect(byId(setup, "mail")).toMatchObject({ state: "problem", reason: "no-answer" });
+  });
+
+  it("does not wait for a slow plugin: its step is checking, and the page hears when the answer comes", async () => {
+    const { value, calls, late } = deps({
+      answers: { mail: { after: 150, answer: { state: "done", summary: "Почта подключена" } }, qlik: { state: "todo", summary: "Нужен вход" } },
+      asker: { waitMs: 30, timeoutMs: 2_000 },
+    });
+    const started = Date.now();
+    const first = await collectSetup(value);
+    expect(Date.now() - started).toBeLessThan(140);
+    expect(byId(first, "mail")).toMatchObject({ state: "checking", summary: null, manual: false });
+    expect(byId(first, "qlik")).toMatchObject({ state: "todo", summary: "Нужен вход" });
+    // The key, the checking mail step, Qlik, and the MCP plugin still installing.
+    expect(first.remaining).toBe(4);
+    expect(late.count).toBe(0);
+    await sleep(200);
+    expect(late.count).toBe(1);
+    const second = await collectSetup(value);
+    expect(byId(second, "mail")).toMatchObject({ state: "done", summary: "Почта подключена" });
+    expect(calls.filter((call) => call.pluginId === "mail")).toHaveLength(1);
   });
 
   it("refuses a plugin's answer of the wrong shape and a page outside bb", async () => {
@@ -170,21 +211,66 @@ describe("collectSetup", () => {
   });
 });
 
+describe("SetupAsker", () => {
+  it("makes one call for questions asked at once, and serves the answer for a while", async () => {
+    const { calls, callRpc } = fakePlugins({ mail: { after: 20, answer: { state: "done", summary: "ok" } } });
+    const asker = new SetupAsker(callRpc, () => {}, { waitMs: 1_000, freshMs: 60_000 });
+    const [a, b] = await Promise.all([asker.ask("mail", "en"), asker.ask("mail", "en")]);
+    expect(a).toEqual(b);
+    expect(await asker.ask("mail", "en")).toMatchObject({ kind: "answer", state: "done" });
+    expect(calls).toHaveLength(1);
+    await asker.ask("mail", "ru");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("keeps showing the previous answer while a new call is slow", async () => {
+    const answers: Record<string, Answer> = { mail: { state: "todo", summary: "not yet" } };
+    const { callRpc } = fakePlugins(answers);
+    let late = 0;
+    const asker = new SetupAsker(callRpc, () => late++, { waitMs: 20, freshMs: 0 });
+    expect(await asker.ask("mail", "en")).toMatchObject({ state: "todo" });
+    answers.mail = { after: 80, answer: { state: "done", summary: "connected" } };
+    expect(await asker.ask("mail", "en")).toMatchObject({ state: "todo" });
+    await sleep(120);
+    expect(late).toBe(1);
+    expect(asker.known("mail")).toMatchObject({ state: "done" });
+    expect(await asker.ask("mail", "en")).toMatchObject({ state: "done" });
+  });
+
+  it("tells a missing method from a plugin that is not there or failed", async () => {
+    const { callRpc } = fakePlugins({ gone: rpcError("not_found"), broken: new Error("boom") });
+    const asker = new SetupAsker(callRpc, () => {});
+    expect(await asker.ask("notes", "en")).toEqual({ kind: "manual" });
+    expect(await asker.ask("gone", "en")).toEqual({ kind: "error" });
+    expect(await asker.ask("broken", "en")).toEqual({ kind: "error" });
+    expect(asker.known("notes")).toEqual({ kind: "manual" });
+    expect(asker.known("never-asked")).toBeNull();
+  });
+});
+
 describe("markProblem", () => {
   const steps = [
     { id: "key", title: "Key", secret: "gateway-key" },
     { id: "mail", title: "Mail", plugin: "mail" },
     { id: "mcp", title: "MCP", plugin: "mcp", optional: true },
   ];
-  it("allows marking plugin steps done, skipping optional ones, and clearing", () => {
-    expect(markProblem(steps[1], "done")).toBeNull();
+  const answered = { kind: "answer" as const, state: "todo" as const, summary: null, path: null };
+  it("allows marking done a plugin step without setupStatus, skipping optional ones, and clearing", () => {
+    expect(markProblem(steps[1], "done", { kind: "manual" })).toBeNull();
     expect(markProblem(steps[2], "skipped")).toBeNull();
+    expect(markProblem(steps[2], "skipped", answered)).toBeNull();
     expect(markProblem(steps[0], null)).toBeNull();
+    expect(markProblem(steps[1], null, answered)).toBeNull();
   });
   it("refuses unknown steps, skipping required ones and marking a secret by hand", () => {
     expect(markProblem(undefined, "done")).toMatch(/no such/);
     expect(markProblem(steps[1], "skipped")).toMatch(/optional/);
     expect(markProblem(steps[0], "done")).toMatch(/secret/);
+  });
+  it("refuses marking done a step whose plugin reports its state, or has not been heard from", () => {
+    expect(markProblem(steps[1], "done", answered)).toMatch(/reports its state itself/);
+    expect(markProblem(steps[1], "done", { kind: "error" })).toMatch(/could not ask/);
+    expect(markProblem(steps[1], "done", null)).toMatch(/could not ask/);
   });
 });
 

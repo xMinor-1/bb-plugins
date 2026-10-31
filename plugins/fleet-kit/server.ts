@@ -14,7 +14,7 @@ import { maskManifestUrl, parseManifestLocation } from "./src/fetch-manifest.js"
 import { opencodeConfigDirSchema } from "./src/shared/settings.js";
 import { resolveOpenCodeLocation } from "./src/host/opencode-location.js";
 import { lockState, resetStuckLock } from "./src/host/lock-state.js";
-import { collectSetup, markProblem, type StoredOnboarding } from "./src/setup.js";
+import { collectSetup, markProblem, SetupAsker, type StoredOnboarding } from "./src/setup.js";
 
 export { rpcContract };
 
@@ -29,6 +29,7 @@ interface StoredSecrets {
 /** The CLI's note after a First run step. */
 function setupNote(step: Setup["steps"][number], shown: string): string {
   if (shown === "skipped") return "";
+  if (step.state === "checking") return "the plugin has not answered yet; run the command again in a few seconds";
   if (step.summary !== null) return step.summary;
   if (step.reason === "manual") {
     return step.state === "done" ? "marked done by hand" : "the plugin cannot report its state; mark it on the First run page";
@@ -109,12 +110,17 @@ export default async function plugin(bb: BbPluginApi) {
     bb.realtime.publish(STATUS_CHANNEL, { at: Date.now() });
   }
 
+  // A plugin that answers after the page stopped waiting: the page asks again and gets the answer.
+  const asker = new SetupAsker((args) => bb.sdk.plugins.callRpc(args), () => publish());
+
   async function setup(lang: "en" | "ru"): Promise<Setup> {
     const cached = setupAnswers.get(lang);
     if (cached && Date.now() - cached.at < SETUP_FRESH_MS) return cached.answer;
     const answer = (async () =>
       collectSetup({
-        sdk: bb.sdk,
+        listPlugins: async () => (await bb.sdk.plugins.list()).plugins,
+        ask: (pluginId, language) => asker.ask(pluginId, language),
+        manifestSet: (await settings.get()).manifestUrl.trim() !== "",
         onboarding: (await kv.get<StoredOnboarding>("onboarding")) ?? null,
         marks: (await kv.get<Record<string, SetupMark>>("setupMarks")) ?? {},
         secrets: ((await kv.get<StoredSecrets>("secrets")) ?? { list: [] }).list,
@@ -351,7 +357,10 @@ export default async function plugin(bb: BbPluginApi) {
     setup_status: ({ lang }) => setup(lang),
     setup_mark: async ({ id, mark }) => {
       const onboarding = (await kv.get<StoredOnboarding>("onboarding")) ?? null;
-      const problem = markProblem(onboarding?.steps.find((step) => step.id === id), mark);
+      const step = onboarding?.steps.find((candidate) => candidate.id === id);
+      // Only a plugin without setupStatus is marked done by hand.
+      const answer = mark === "done" && step?.plugin !== undefined ? (asker.known(step.plugin) ?? (await asker.ask(step.plugin, "en"))) : null;
+      const problem = markProblem(step, mark, answer);
       if (problem !== null) throw new experimental_PluginRpcRefusal({ code: "invalid", message: problem });
       const marks = { ...((await kv.get<Record<string, SetupMark>>("setupMarks")) ?? {}) };
       if (mark === null) delete marks[id];

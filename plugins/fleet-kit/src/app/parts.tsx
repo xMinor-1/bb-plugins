@@ -76,6 +76,8 @@ export function SecretInput({ label, onSave, onCancel, className }: {
     try {
       await onSave(value);
       setValue("");
+    } catch {
+      // Not saved: the caller shows why, and the value stays in the field to try again.
     } finally {
       setPending(false);
     }

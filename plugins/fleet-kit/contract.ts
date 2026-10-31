@@ -74,7 +74,8 @@ export const statusSchema = z.object({
 });
 export type Status = z.infer<typeof statusSchema>;
 
-export const setupStateSchema = z.enum(["done", "todo", "problem", "installing", "later"]);
+/** `checking`: the plugin has not answered within the page's wait; its answer comes with the next update. */
+export const setupStateSchema = z.enum(["done", "todo", "problem", "installing", "later", "checking"]);
 export type SetupState = z.infer<typeof setupStateSchema>;
 export const setupMarkSchema = z.enum(["done", "skipped"]);
 export type SetupMark = z.infer<typeof setupMarkSchema>;
@@ -104,6 +105,8 @@ export type SetupStep = z.infer<typeof setupStepSchema>;
 export const setupSchema = z.object({
   /** Fleet Kit has read a build manifest at least once. */
   configured: z.boolean(),
+  /** This machine has a manifest address: without one there will never be steps. */
+  manifestSet: z.boolean(),
   steps: z.array(setupStepSchema),
   /** Steps still to do: not done, not skipped, not waiting for a plugin that is not built yet. */
   remaining: z.number().int(),

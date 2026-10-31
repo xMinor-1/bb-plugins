@@ -30,7 +30,8 @@ brings bb to that description and keeps it there.
   key, mail, reports and so on), each done or still to do, with a button to the
   plugin's own page or the key's field right on the page. Until every step is
   done or skipped, the sidebar entry shows how many are left and the Fleet Kit
-  page shows a reminder. An installer can open bb on `/plugins/fleet-kit/setup`.
+  page shows a reminder. A build without steps has no First run entry in the
+  sidebar. An installer can open bb on `/plugins/fleet-kit/setup`.
 
 ## Install
 
@@ -361,9 +362,23 @@ every 15 seconds while it is open:
   last, else bb's primary machine). Fleet Kit always sends `lang`. Exchange
   Mail and Qlik Sense answer it.
 
-A plugin without `setupStatus` gets **Mark as done**; one that is not installed
-or enabled yet shows as installing; one the manifest lists as `planned` shows as
-coming later and does not count. An optional step can be skipped. Passwords and
+The page waits up to 1.5 seconds for each plugin: a slower one shows as
+**Checking**, and its answer appears on its own once it comes (a call gives up
+after 8 seconds and the step shows as not answering). An answer serves for 4
+seconds, so the page, its banner and the sidebar badge do not ask a plugin
+three times.
+
+A plugin without `setupStatus` (bb answers `unknown_method`) gets **Mark as
+done**; Fleet Kit refuses a hand mark on a step whose plugin reports its state
+itself, or one it could not ask. A plugin that fails or is gone is a problem,
+not a manual step. One that is not installed or enabled yet shows as
+installing; one the manifest lists as `planned` shows as coming later and does
+not count. An optional step can be skipped.
+
+bb draws a sidebar entry for every registered page, so the First run entry is
+registered only when the build had steps the last time this browser looked;
+a build that gains or loses its steps changes the entry from the next page
+load, and until then the Fleet Kit entry shows the count. Passwords and
 tokens of plugins never pass through Fleet Kit: the person types them in the
 plugin's own form. **Start working** on the finished page opens a new thread.
 

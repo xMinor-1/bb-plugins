@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { defineMessages, getLang, intlLocale, LanguageSwitch, useLang, useMessages, type Lang } from "@/lib/i18n";
 import { render } from "./src/shared/texts";
 import { Frame, Section, SecretRow, STATUS_CHANNEL } from "./src/app/parts";
-import { SETUP_PANEL, SetupBanner, SetupPage, setupTitle, useSetupBadge } from "./src/app/setup-page";
+import { markSetupEntryRegistered, SETUP_PANEL, SetupBanner, SetupPage, setupEntryWanted, setupTitle, useSetupBadge } from "./src/app/setup-page";
 type Outcome = NonNullable<Status["lastSync"]>["outcome"];
 
 const messages = defineMessages(
@@ -279,7 +279,13 @@ function FleetKitPage() {
                   key={secret.name}
                   secret={secret}
                   store={status.secretStore}
-                  onSave={(value) => rpc.call("secret_set", { name: secret.name, value }).then(refetch, report)}
+                  onSave={(value) =>
+                    rpc.call("secret_set", { name: secret.name, value }).then(refetch, (cause) => {
+                      // Shown above; the rejection keeps the typed key in the field.
+                      report(cause);
+                      throw cause;
+                    })
+                  }
                   onClear={() => rpc.call("secret_clear", { name: secret.name }).then(refetch, report)}
                 />
               ))}
@@ -341,13 +347,17 @@ function FleetKitPage() {
 }
 
 export default definePluginApp((app) => {
+  const withSetup = setupEntryWanted();
   app.slots.navPanel({
     id: "fleet-kit",
     title: "Fleet Kit",
     icon: "PackageReceive",
     path: "status",
     component: FleetKitPage,
+    // Without the First run entry, steps that appear later are counted here.
+    ...(withSetup ? {} : { experimental_useBadge: useSetupBadge }),
   });
+  if (!withSetup) return;
   // The installer opens bb on this page: /plugins/fleet-kit/setup.
   app.slots.navPanel({
     id: "fleet-kit-setup",
@@ -357,4 +367,5 @@ export default definePluginApp((app) => {
     component: SetupPage,
     experimental_useBadge: useSetupBadge,
   });
+  markSetupEntryRegistered();
 });
