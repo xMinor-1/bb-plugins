@@ -4,6 +4,7 @@
 // reads the way it was spoken even when a later segment comes back first.
 import { useCallback, useRef, useState } from "react";
 import { startDictation, toBase64, type DictationSession } from "@/lib/dictation";
+import { describeError, describeFailure, droppedText } from "@/lib/failures";
 import type { TranscriptionResult } from "@/contract";
 
 export type DictationStatus = "idle" | "listening" | "finishing" | "error";
@@ -12,6 +13,7 @@ interface UseDictationOptions {
   transcribe(input: { audioBase64: string; mimeType: string }): Promise<TranscriptionResult>;
   /** Append recognized text to wherever it belongs. */
   onText(text: string): void;
+  /** A failure, already worded in the interface language. */
   onError(message: string): void;
   /** Called once per session so the model can load while the user talks. */
   warmUp(): void;
@@ -82,8 +84,8 @@ export function useDictation(options: UseDictationOptions) {
             SEGMENT_TIMEOUT_MS,
             () => ({
               ok: false as const,
-              code: "timeout",
-              message: "Recognition took too long and was dropped",
+              code: "dropped",
+              message: droppedText(),
             }),
           )
             .then((result) => {
@@ -91,14 +93,12 @@ export function useDictation(options: UseDictationOptions) {
                 commit(index, result.text);
               } else {
                 commit(index, "");
-                optionsRef.current.onError(result.message);
+                optionsRef.current.onError(describeFailure(result.code, result.message));
               }
             })
             .catch((error: unknown) => {
               commit(index, "");
-              optionsRef.current.onError(
-                error instanceof Error ? error.message : String(error),
-              );
+              optionsRef.current.onError(describeError(error));
             })
             .finally(() => {
               setPending((count) => Math.max(0, count - 1));
@@ -108,12 +108,7 @@ export function useDictation(options: UseDictationOptions) {
     } catch (error) {
       sessionRef.current = null;
       setStatus("error");
-      const message = error instanceof Error ? error.message : String(error);
-      optionsRef.current.onError(
-        message.includes("Permission denied") || message.includes("NotAllowedError")
-          ? "Microphone permission denied"
-          : message,
-      );
+      optionsRef.current.onError(describeError(error));
     }
   }, [commit]);
 

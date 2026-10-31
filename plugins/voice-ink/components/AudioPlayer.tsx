@@ -7,7 +7,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Icon } from "@/components/ui/icon";
+import { defineMessages, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+
+const messages = defineMessages(
+  {
+    gone: "This recording could not be played — its audio file is gone.",
+    play: "Play",
+    pause: "Pause",
+    position: "Position in the recording",
+  },
+  {
+    gone: "Запись не воспроизводится — её аудиофайла больше нет.",
+    play: "Воспроизвести",
+    pause: "Пауза",
+    position: "Позиция в записи",
+  },
+);
 
 /** `m:ss`, the length people read on a voice message. */
 export function formatClock(totalSeconds: number): string {
@@ -25,6 +41,7 @@ export function AudioPlayer({
   /** Used until the browser has read the real length out of the file. */
   fallbackDurationSec: number | null;
 }) {
+  const t = useMessages(messages);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
@@ -59,7 +76,7 @@ export function AudioPlayer({
   if (failed) {
     return (
       <p className="text-xs text-muted-foreground">
-        This recording could not be played — its audio file is gone.
+        {t.gone}
       </p>
     );
   }
@@ -84,7 +101,7 @@ export function AudioPlayer({
         src={src}
       />
       <button
-        aria-label={playing ? "Pause" : "Play"}
+        aria-label={playing ? t.pause : t.play}
         className={cn(
           "inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full",
           // Solid, not a ghost button: it is the one control in the card that
@@ -100,7 +117,7 @@ export function AudioPlayer({
         {formatClock(position)}
       </span>
       <input
-        aria-label="Position in the recording"
+        aria-label={t.position}
         className="h-1 grow cursor-pointer appearance-none rounded-full bg-border accent-primary"
         max={Math.max(duration, 0.1)}
         min={0}

@@ -11,6 +11,7 @@
 // be spoken before the agent has finished the rest.
 import { startBargeInMonitor, type BargeInMonitor } from "@/lib/barge-in";
 import { encodeWav, startDictation, toBase64, type DictationSession } from "@/lib/dictation";
+import { couldNotSpeakText, describeError, describeFailure } from "@/lib/failures";
 import { SentenceStream } from "@/lib/sentences";
 import type {
   ConversationConfig,
@@ -51,6 +52,7 @@ export interface ConversationDeps {
   log(entry: ConversationTiming): void;
   onStatus(status: ConversationStatus): void;
   onLevel(level: number): void;
+  /** A failure, already worded in the interface language. */
   onError(message: string): void;
 }
 
@@ -116,7 +118,7 @@ export class Conversation {
     this.setStatus("listening");
     void this.run(generation).catch((error: unknown) => {
       if (generation !== this.generation) return;
-      this.deps.onError(error instanceof Error ? error.message : String(error));
+      this.deps.onError(describeError(error));
       this.stop();
     });
   }
@@ -189,11 +191,11 @@ export class Conversation {
             .transcribe({ audioBase64: toBase64(wav), mimeType: "audio/wav" })
             .then((result) => {
               if (result.ok) return result.text;
-              this.deps.onError(result.message);
+              this.deps.onError(describeFailure(result.code, result.message));
               return "";
             })
             .catch((error: unknown) => {
-              this.deps.onError(error instanceof Error ? error.message : String(error));
+              this.deps.onError(describeError(error));
               return "";
             }),
         );
@@ -372,7 +374,7 @@ export class Conversation {
           // service is worth one message per reply, not one per sentence.
           if (result.code !== "empty" && !reported) {
             reported = true;
-            this.deps.onError(`Could not speak the reply: ${result.message}`);
+            this.deps.onError(couldNotSpeakText(result.code, result.message));
           }
           continue;
         }

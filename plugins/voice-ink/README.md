@@ -23,6 +23,8 @@ running next to bb.
   useful with a slower model on a machine that can spare the CPU. It renders
   only where plugin frontends run, so not in the phone app.
 
+Interface: English and Russian — switch with **EN | RU** in the History panel header.
+
 ## Requirements
 
 - Python 3.10+ on the machine bb runs on, with `faster-whisper` importable:

@@ -11,6 +11,15 @@ import { toast } from "sonner";
 
 import { AudioPlayer, formatClock } from "@/components/AudioPlayer";
 import { Icon } from "@/components/ui/icon";
+import { describeError, describeStoredFailure } from "@/lib/failures";
+import {
+  defineMessages,
+  intlLocale,
+  LanguageSwitch,
+  messagesNow,
+  useLang,
+  type Lang,
+} from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { HISTORY_AUDIO_URL, type HistoryEntry } from "../contract";
 import type { rpcContract } from "../server";
@@ -24,12 +33,67 @@ function audioUrl(entry: HistoryEntry): string {
   return `${HISTORY_AUDIO_URL}?id=${encodeURIComponent(entry.id)}`;
 }
 
+const messages = defineMessages(
+  {
+    at: (day: string, time: string) => `${day} at ${time}`,
+    transcribing: "transcribing",
+    failed: "failed",
+    cutShortHint:
+      "bb stopped waiting before recognition finished — the composer only got the beginning of this text.",
+    cutShort: "only part reached the composer",
+    copyFailed: "Could not copy",
+    clipboardRefused: "The clipboard refused this text.",
+    deleteFailed: "Could not delete",
+    search: "Search transcriptions",
+    searchPlaceholder: "Search transcriptions...",
+    reload: "Reload",
+    empty: "Nothing dictated yet. Speech recorded with bb's microphone shows up here, audio and all.",
+    noMatch: (query: string) => `Nothing matches “${query}”.`,
+    copied: "Copied",
+    copy: "Copy text",
+    audio: "Audio",
+    delete: "Delete",
+    recognizedIn: (seconds: string) => `recognized in ${seconds} s`,
+    showOlder: (count: number) => `Show older (${count} more)`,
+  },
+  {
+    at: (day, time) => `${day} в ${time}`,
+    transcribing: "распознаётся",
+    failed: "ошибка",
+    cutShortHint:
+      "bb перестал ждать до конца распознавания — в поле ввода попало только начало этого текста.",
+    cutShort: "в поле ввода попала только часть",
+    copyFailed: "Не удалось скопировать",
+    clipboardRefused: "Буфер обмена не принял этот текст.",
+    deleteFailed: "Не удалось удалить",
+    search: "Поиск по расшифровкам",
+    searchPlaceholder: "Поиск по расшифровкам...",
+    reload: "Обновить",
+    empty: "Пока ничего не надиктовано. Речь, записанная микрофоном bb, появится здесь вместе с аудио.",
+    noMatch: (query) => `Ничего не нашлось по запросу «${query}».`,
+    copied: "Скопировано",
+    copy: "Копировать текст",
+    audio: "Аудио",
+    delete: "Удалить",
+    recognizedIn: (seconds) => `распознано за ${seconds} с`,
+    showOlder: (count) => `Показать старые (ещё ${count})`,
+  },
+);
+
 /** "18 Sep at 12:49" — the date reads as a label, not as a log line. */
-function formatWhen(createdAt: number): string {
+function formatWhen(createdAt: number, lang: Lang): string {
+  const locale = intlLocale(lang);
   const date = new Date(createdAt);
-  const day = date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-  const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  return `${day} at ${time}`;
+  const day = date.toLocaleDateString(locale, { day: "numeric", month: "short" });
+  const time = date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  return messages[lang].at(day, time);
+}
+
+function formatSeconds(seconds: number, lang: Lang): string {
+  return seconds.toLocaleString(intlLocale(lang), {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
 }
 
 function previewOf(text: string): string {
@@ -45,19 +109,20 @@ function wasCutShort(entry: HistoryEntry): boolean {
   );
 }
 
-function StatusBadge({ entry }: { entry: HistoryEntry }) {
+function StatusBadge({ entry, lang }: { entry: HistoryEntry; lang: Lang }) {
+  const t = messages[lang];
   if (entry.status === "running") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-state-hover px-2 py-0.5 text-[11px] text-muted-foreground">
         <Icon aria-hidden className="size-3 animate-spin" name="Loading" />
-        transcribing
+        {t.transcribing}
       </span>
     );
   }
   if (entry.status === "failed") {
     return (
       <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[11px] text-destructive">
-        failed
+        {t.failed}
       </span>
     );
   }
@@ -65,9 +130,9 @@ function StatusBadge({ entry }: { entry: HistoryEntry }) {
     return (
       <span
         className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] text-primary"
-        title="bb stopped waiting before recognition finished — the composer only got the beginning of this text."
+        title={t.cutShortHint}
       >
-        only part reached the composer
+        {t.cutShort}
       </span>
     );
   }
@@ -75,6 +140,8 @@ function StatusBadge({ entry }: { entry: HistoryEntry }) {
 }
 
 export function HistoryPanel({ subPath }: PluginNavPanelProps) {
+  const lang = useLang();
+  const t = messages[lang];
   const rpc = useRpc<typeof rpcContract>();
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
@@ -113,7 +180,7 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
         setError(null);
       } catch (cause: unknown) {
         if (seq !== requestSeq.current) return;
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(describeError(cause));
       } finally {
         if (seq === requestSeq.current) setLoading(false);
       }
@@ -143,7 +210,8 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
       setCopiedId(entry.id);
       setTimeout(() => setCopiedId((current) => (current === entry.id ? null : current)), 1_500);
     } catch {
-      toast.error("Could not copy", { description: "The clipboard refused this text." });
+      const now = messagesNow(messages);
+      toast.error(now.copyFailed, { description: now.clipboardRefused });
     }
   }, []);
 
@@ -154,9 +222,7 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
         setEntries((current) => current.filter((candidate) => candidate.id !== entry.id));
         setTotal((current) => Math.max(0, current - 1));
       } catch (cause: unknown) {
-        toast.error("Could not delete", {
-          description: cause instanceof Error ? cause.message : String(cause),
-        });
+        toast.error(messagesNow(messages).deleteFailed, { description: describeError(cause) });
       }
     },
     [rpc],
@@ -172,22 +238,22 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
             name="Search"
           />
           <input
-            aria-label="Search transcriptions"
+            aria-label={t.search}
             className={cn(
               "h-9 w-full rounded-md border border-border bg-background pl-8 pr-3 text-sm",
               "placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring",
             )}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search transcriptions..."
+            placeholder={t.searchPlaceholder}
             type="search"
             value={query}
           />
         </div>
         <button
-          aria-label="Reload"
+          aria-label={t.reload}
           className="inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground"
           onClick={() => void load({ quiet: false })}
-          title="Reload"
+          title={t.reload}
           type="button"
         >
           <Icon
@@ -196,6 +262,7 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
             name={loading ? "Loading" : "ArrowReloadHorizontal"}
           />
         </button>
+        <LanguageSwitch />
       </div>
 
       <div className="min-h-0 grow overflow-y-auto px-4 py-3">
@@ -207,9 +274,7 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
             <Icon aria-hidden className="size-6 text-muted-foreground" name="Mic" />
             <p className="text-sm text-muted-foreground">
-              {search.trim() === ""
-                ? "Nothing dictated yet. Speech recorded with bb's microphone shows up here, audio and all."
-                : `Nothing matches “${search}”.`}
+              {search.trim() === "" ? t.empty : t.noMatch(search)}
             </p>
           </div>
         ) : (
@@ -232,14 +297,14 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
                     <div className="min-w-0 grow">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs text-muted-foreground">
-                          {formatWhen(entry.createdAt)}
+                          {formatWhen(entry.createdAt, lang)}
                         </span>
                         {entry.durationSec !== null && entry.durationSec > 0 ? (
                           <span className="text-xs tabular-nums text-muted-foreground">
                             {formatClock(entry.durationSec)}
                           </span>
                         ) : null}
-                        <StatusBadge entry={entry} />
+                        <StatusBadge entry={entry} lang={lang} />
                       </div>
                       <p
                         className={cn(
@@ -251,7 +316,7 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
                           ? entry.text
                           : preview === ""
                             ? entry.status === "failed"
-                              ? (entry.error ?? "Recognition failed.")
+                              ? describeStoredFailure(entry.error)
                               : "…"
                             : preview}
                       </p>
@@ -283,7 +348,7 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
                             className="size-3.5"
                             name={copiedId === entry.id ? "Check" : "Copy"}
                           />
-                          {copiedId === entry.id ? "Copied" : "Copy text"}
+                          {copiedId === entry.id ? t.copied : t.copy}
                         </button>
                         <a
                           className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-state-hover"
@@ -291,7 +356,7 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
                           href={audioUrl(entry)}
                         >
                           <Icon aria-hidden className="size-3.5" name="Download" />
-                          Audio
+                          {t.audio}
                         </a>
                         <button
                           className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
@@ -299,13 +364,13 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
                           type="button"
                         >
                           <Icon aria-hidden className="size-3.5" name="Trash2" />
-                          Delete
+                          {t.delete}
                         </button>
                         <span className="ml-auto text-[11px] text-muted-foreground">
                           {entry.model}
                           {entry.elapsedSec === null
                             ? ""
-                            : ` · recognized in ${entry.elapsedSec.toFixed(1)}s`}
+                            : `, ${t.recognizedIn(formatSeconds(entry.elapsedSec, lang))}`}
                         </span>
                       </div>
                     </div>
@@ -322,7 +387,7 @@ export function HistoryPanel({ subPath }: PluginNavPanelProps) {
             onClick={() => setLimit((current) => current + PAGE_SIZE)}
             type="button"
           >
-            Show older ({total - entries.length} more)
+            {t.showOlder(total - entries.length)}
           </button>
         ) : null}
       </div>

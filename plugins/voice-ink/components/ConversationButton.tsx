@@ -12,6 +12,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Conversation, type ConversationStatus, type ReplyEvent } from "@/lib/conversation";
+import { defineMessages, intlLocale, messagesNow, useLang, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationTiming } from "@/contract";
 import type { rpcContract } from "@/server";
@@ -19,19 +20,38 @@ import type { rpcContract } from "@/server";
 /** An event page; bb serves at most a hundred rows per call. */
 const PAGE = "100";
 
-const LABELS: Record<ConversationStatus, string> = {
-  off: "Talk with the agent (replies are read aloud)",
-  listening: "Listening — pause to send, press to end the conversation",
-  thinking: "Waiting for the reply — press to end the conversation",
-  speaking: "Reading the reply — Esc skips it, press to end the conversation",
-};
+const messages = defineMessages(
+  {
+    off: "Talk with the agent (replies are read aloud)",
+    listening: "Listening — pause to send, press to end the conversation",
+    thinking: "Waiting for the reply — press to end the conversation",
+    speaking: "Reading the reply — Esc skips it, press to end the conversation",
+    failed: "Conversation",
+    seconds: "s",
+    timing: (quick: string, agent: string, sent: string) =>
+      `Last reply: quick voice after ${quick}, agent after ${agent} (sent ${sent})`,
+  },
+  {
+    off: "Поговорить с агентом (ответы читаются вслух)",
+    listening: "Слушаю — пауза отправляет, нажатие завершает разговор",
+    thinking: "Жду ответа — нажатие завершает разговор",
+    speaking: "Читаю ответ — Esc пропускает, нажатие завершает разговор",
+    failed: "Разговор",
+    seconds: "с",
+    timing: (quick, agent, sent) =>
+      `Последний ответ: быстрый голос через ${quick}, агент через ${agent} (отправлено через ${sent})`,
+  },
+);
 
-function describe(timing: ConversationTiming): string {
-  const seconds = (ms: number | null) => (ms === null ? "—" : `${(ms / 1000).toFixed(1)} s`);
-  return (
-    `Last reply: quick voice after ${seconds(timing.quickPlayingMs)}, ` +
-    `agent after ${seconds(timing.playingMs)} (sent ${seconds(timing.submittedMs)})`
-  );
+/** The last reply's delays, kept as numbers so the tooltip follows a language switch. */
+function describe(timing: ConversationTiming, lang: Lang): string {
+  const t = messages[lang];
+  const format = new Intl.NumberFormat(intlLocale(lang), {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+  const seconds = (ms: number | null) => (ms === null ? "—" : `${format.format(ms / 1000)} ${t.seconds}`);
+  return t.timing(seconds(timing.quickPlayingMs), seconds(timing.playingMs), seconds(timing.submittedMs));
 }
 
 export function ConversationButton() {
@@ -40,9 +60,11 @@ export function ConversationButton() {
   const sdk = useSdk();
   const { threadId } = useBbContext();
   const settings = useSettings();
+  const lang = useLang();
+  const t = messages[lang];
   const [status, setStatus] = useState<ConversationStatus>("off");
   const [level, setLevel] = useState(0);
-  const [last, setLast] = useState<string | null>(null);
+  const [last, setLast] = useState<ConversationTiming | null>(null);
   const conversationRef = useRef<Conversation | null>(null);
   // The composer handle changes as the user types; the conversation outlives that.
   const composerRef = useRef(composer);
@@ -102,12 +124,12 @@ export function ConversationButton() {
         return rows as unknown as ReplyEvent[];
       },
       log: (entry) => {
-        setLast(describe(entry));
+        setLast(entry);
         void rpc.call("conversation_log", { entry }).catch(() => {});
       },
       onStatus: setStatus,
       onLevel: setLevel,
-      onError: (message) => toast.error("Conversation", { description: message }),
+      onError: (message) => toast.error(messagesNow(messages).failed, { description: message }),
     });
     conversationRef.current = conversation;
     // Inside the click: browsers only let audio start from a user gesture.
@@ -115,7 +137,7 @@ export function ConversationButton() {
   };
 
   const on = status !== "off";
-  const label = last !== null && status !== "off" ? `${LABELS[status]}\n${last}` : LABELS[status];
+  const label = last !== null && status !== "off" ? `${t[status]}\n${describe(last, lang)}` : t[status];
   const icon =
     status === "speaking"
       ? VolumeHighIcon
@@ -127,7 +149,7 @@ export function ConversationButton() {
 
   return (
     <button
-      aria-label={LABELS[status]}
+      aria-label={t[status]}
       aria-pressed={on}
       className={cn(
         "relative inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md",
