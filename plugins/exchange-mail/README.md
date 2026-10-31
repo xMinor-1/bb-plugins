@@ -10,6 +10,9 @@ confirm in a system window on your computer.
   message with its whole conversation, Reply / Reply all / Forward, and
   *To send* — every draft prepared in bb that waits for you.
 - In a thread, an agent's reply shows the draft as a card with its Send button.
+- The address book: names from the organization's directory are suggested in
+  To and Cc as you type; an agent that finds several people with a similar
+  name asks you to choose in the thread instead of picking one.
 - Mail stays in Exchange. bb keeps no copy; drafts live in your Drafts folder,
   so you also see them in Outlook.
 
@@ -64,6 +67,22 @@ Open **Mail** in the sidebar → **Settings**.
 - **Forward** prepares a draft with the original and its attachments; it is
   sent like any draft — your click and the system window.
 
+## Address book
+
+- **To** and **Cc** suggest people as you type two letters or more: name, job
+  title, department and address, from the organization's address book and
+  your own contacts (EWS `ResolveNames`). Arrows and Enter or a click put
+  `Name <address>` in place of what you typed; addresses typed by hand work as
+  before. A name with a comma, like `Surname, Name`, stays one recipient.
+- `mail_find_person` gives agents the same search. One match comes back at
+  once. When several people match, the agent does not choose: bb shows a card
+  in the thread with everyone found, the agent waits, and only the person you
+  pick goes back to it. **None of them** tells the agent to ask you again.
+- The address book is the organization's data, so it is guarded like mail:
+  only allowed models get the tool, a thread that used it is marked the same
+  way, and the choice is checked against the allow-list again before it
+  reaches the agent.
+
 ## Sending is always a person's click
 
 - Agents have tools to list, search and read mail and to save drafts. There is
@@ -97,7 +116,7 @@ that in bb, not in the agent:
   whose provider and model match the allow-list. Other agents never see them.
 - Every tool call re-checks the model the thread is running *now*, so switching
   models mid-thread does not keep the tools working.
-- A thread that has received mail is marked. bb refuses to send that thread —
+- A thread that has received mail or address book entries is marked. bb refuses to send that thread —
   or a fork of it, or a fork of a fork — to a model outside the list, because
   the whole history, mail included, would go to that model. Marks stay when a
   thread is deleted: its forks still hold its mail.
@@ -163,6 +182,7 @@ carefully:
 | `mail_read` | one message: sender, recipients, date, subject, numbered attachments, text |
 | `mail_attachment` | the text of an attachment: text files (txt, csv, json, xml, html…) and PDF; other formats are refused |
 | `mail_conversation` | all messages of a message's conversation in Inbox and Sent, oldest first |
+| `mail_find_person` | look someone up in the address book; with several matches the user chooses in the thread |
 | `mail_draft` | save a reply, reply-all, forward or new message as a draft, or revise one |
 
 ## Settings
@@ -195,6 +215,7 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
   `src/host/service.ts` checks the change key before and after it.
 - EWS operations used: `GetFolder`, `FindItem` (also by `ConversationId`),
   `GetItem` (plain text, or HTML with `TextBody` for the panel), `GetAttachment`,
+  `ResolveNames` (address book, with full contact data),
   `CreateItem` with `SaveOnly` (drafts only: message, reply, reply all,
   forward), `SendItem` with the change key,
   `DeleteItem` (to Deleted Items), `UpdateItem` (marks a message read when you
@@ -225,7 +246,10 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
 ## Not yet
 
 - Agents read text files and PDF only; Word, Excel and pictures stay for people.
-- No shared mailboxes, address book, calendar or Exchange Online (OAuth).
+- No shared mailboxes, calendar or Exchange Online (OAuth).
+- The address book finds people by the start of a name or an address, as the
+  To box in Outlook does; it does not browse the directory or show
+  photos and phone numbers.
 
 ## Develop
 

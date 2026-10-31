@@ -1,7 +1,7 @@
 // EWS SOAP requests. Only the operations the plugin needs: list and search a
 // folder, read a message and its conversation, download an attachment, save a
 // draft (new, reply, reply all, forward), send a saved draft, delete a draft,
-// read folder counters.
+// read folder counters, look people up in the address book.
 //
 // Every request is plain ASCII: characters outside it become XML character
 // references, so no code page between Node, curl and Exchange can mangle them.
@@ -217,5 +217,17 @@ export function markRead(ref: ItemRef, isRead: boolean): string {
 export function getFolder(folder: FolderName): string {
   return envelope(
     `<m:GetFolder><m:FolderShape><t:BaseShape>Default</t:BaseShape></m:FolderShape><m:FolderIds>${folderId(folder)}</m:FolderIds></m:GetFolder>`,
+  );
+}
+
+/**
+ * People whose name or address starts like the query, as the To box of Outlook
+ * finds them: the organization's address book first, then the person's own
+ * contacts, with job title and department. Exchange returns at most 100.
+ */
+export function resolveNames(query: string): string {
+  return envelope(
+    `<m:ResolveNames ReturnFullContactData="true" SearchScope="ActiveDirectoryContacts" ContactDataShape="AllProperties">` +
+      `<m:UnresolvedEntry>${xml(query)}</m:UnresolvedEntry></m:ResolveNames>`,
   );
 }

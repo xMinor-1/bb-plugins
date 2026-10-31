@@ -13,6 +13,8 @@ import { intlLocale, useLang, useMessages } from "@/lib/i18n";
 import { messages } from "../messages";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { arrived } from "./draft-sync";
+import { RecipientsInput } from "./RecipientsInput";
+import { recipientText, splitRecipients } from "../shared/recipients";
 import { Notice, errorText } from "./ui";
 import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
@@ -21,13 +23,9 @@ type Texts = (typeof messages)["en"];
 
 export type DraftTarget = { hostId: string } | { threadId: string };
 
-export const formatAddress = (a: MailAddress) => (a.name && a.name !== a.email ? `${a.name} <${a.email}>` : a.email);
+export const formatAddress = (a: MailAddress) => recipientText(a);
 const formatList = (list: readonly MailAddress[]) => list.map(formatAddress).join(", ");
-const splitList = (text: string) =>
-  text
-    .split(/[;,\n]/)
-    .map((part) => part.trim())
-    .filter(Boolean);
+const splitList = splitRecipients;
 
 export const textareaClass =
   "block w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -333,14 +331,8 @@ function DraftEditor({ rpc, hostId, draft, onSaved, onCancel }: { rpc: Rpc; host
 
   return (
     <div className="space-y-2">
-      <label className="block space-y-1">
-        <span className="text-muted-foreground">{t.to}</span>
-        <Input value={to} onChange={(event) => setTo(event.target.value)} spellCheck={false} />
-      </label>
-      <label className="block space-y-1">
-        <span className="text-muted-foreground">{t.cc}</span>
-        <Input value={cc} onChange={(event) => setCc(event.target.value)} spellCheck={false} />
-      </label>
+      <RecipientsInput rpc={rpc} hostId={hostId} value={to} onChange={setTo} label={t.to} />
+      <RecipientsInput rpc={rpc} hostId={hostId} value={cc} onChange={setCc} label={t.cc} />
       <label className="block space-y-1">
         <span className="text-muted-foreground">{t.subject}</span>
         <Input value={subject} onChange={(event) => setSubject(event.target.value)} />

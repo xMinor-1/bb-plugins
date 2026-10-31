@@ -15,8 +15,10 @@ import type {
   MailMessage,
   MessageAttachment,
   MessageSummary,
+  People,
   SendResult,
   ToolInput,
+  ToolOutput,
 } from "../../contract.js";
 import { ATTACHMENT_MAX_BYTES } from "../shared/limits.js";
 import { normalizeText } from "../shared/mail-text.js";
@@ -28,7 +30,7 @@ import type { ParsedAttachment, ParsedMessage, ParsedSummary } from "./ews/parse
 import { attachmentText } from "./extract.js";
 import type { Address, FolderName, ItemRef } from "./ews/soap.js";
 import { readJson, removeFile, serial, writeJson } from "./files.js";
-import { formatAttachment, formatConversation, formatDraft, formatList, formatMessage } from "./format.js";
+import { formatAttachment, formatConversation, formatDraft, formatList, formatMessage, formatPeople } from "./format.js";
 import { openSecretStore, type SecretStore } from "./secret-store.js";
 import { describe, forPanel, UserError } from "./errors.js";
 import { accountName, SignInGate, type Refusal, type RefusalStore } from "./signin.js";
@@ -43,6 +45,8 @@ const INLINE_IMAGE_MAX_BYTES = 1_500_000;
 const INLINE_IMAGES_MAX_BYTES = 6_000_000;
 const INLINE_IMAGES_MAX = 30;
 const CONVERSATION_MAX = 50;
+/** People shown for one search: enough to choose from, few enough to read. */
+export const PEOPLE_MAX = 25;
 
 const plainAttachment = (a: ParsedAttachment) => ({ name: a.name, size: a.size });
 const numbered = (list: readonly ParsedAttachment[]): MessageAttachment[] =>
@@ -453,6 +457,23 @@ export class MailService {
 
   // -------------------------------------------------------------------- drafts
 
+  // -------------------------------------------------------------- address book
+
+  /** People whose name or address starts like `query`, each address once. */
+  async findPeople(query: string, signal?: AbortSignal): Promise<People> {
+    const text = query.trim();
+    if (text.length < 2) return { people: [], more: false };
+    const { people, total } = await (await this.client()).resolveNames(text, signal);
+    const seen = new Set<string>();
+    const unique = people.filter((person) => {
+      const key = person.email.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return { people: unique.slice(0, PEOPLE_MAX), more: unique.length > PEOPLE_MAX || total > people.length };
+  }
+
   private readDrafts = async () => (await readJson<DraftEntry[]>(this.draftsFile())) ?? [];
 
   private async view(client: EwsClient, entry: DraftEntry, signal?: AbortSignal): Promise<Draft | null> {
@@ -657,7 +678,7 @@ export class MailService {
 
   // --------------------------------------------------------------- agent tools
 
-  async tool(input: ToolInput, signal?: AbortSignal): Promise<{ text: string; isError: boolean; draftId: string | null }> {
+  async tool(input: ToolInput, signal?: AbortSignal): Promise<ToolOutput> {
     try {
       switch (input.tool) {
         case "list": {
@@ -690,6 +711,10 @@ export class MailService {
         case "conversation": {
           const { messages } = await this.conversation(input.ref, signal);
           return { text: formatConversation(input.ref, messages, this.offset), isError: false, draftId: null };
+        }
+        case "people": {
+          const found = await this.findPeople(input.query, signal);
+          return { text: formatPeople(input.query, found), isError: false, draftId: null, people: found.people };
         }
         case "draft": {
           let kind: Draft["kind"] = input.forward ? "forward" : input.replyTo ? (input.replyAll ? "replyAll" : "reply") : "new";

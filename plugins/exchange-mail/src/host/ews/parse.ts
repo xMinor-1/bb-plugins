@@ -13,7 +13,7 @@ export class EwsError extends Error {
   }
 }
 
-const ARRAYS = new Set(["Mailbox", "FileAttachment", "ItemAttachment", "ReferenceAttachment", "ExtendedProperty"]);
+const ARRAYS = new Set(["Mailbox", "FileAttachment", "ItemAttachment", "ReferenceAttachment", "ExtendedProperty", "Resolution", "Entry"]);
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -45,8 +45,12 @@ export function text(value: unknown): string {
 
 const bool = (value: unknown) => text(value).trim().toLowerCase() === "true";
 
-/** The single response message of an operation, after checking for SOAP faults and EWS errors. */
-export function responseMessage(xmlText: string, operation: string): Node {
+/**
+ * The single response message of an operation, after checking for SOAP faults
+ * and EWS errors. With `warnings`, a Warning answer is a result too: ResolveNames
+ * says "several people match" that way.
+ */
+export function responseMessage(xmlText: string, operation: string, options: { warnings?: boolean } = {}): Node {
   let doc: Node;
   try {
     doc = parser.parse(xmlText) as Node;
@@ -66,7 +70,8 @@ export function responseMessage(xmlText: string, operation: string): Node {
   const messages = asNode(response?.ResponseMessages);
   const message = asNode(messages?.[`${operation}ResponseMessage`]) ?? list(messages?.[`${operation}ResponseMessage`])[0] ?? null;
   if (!message) throw new EwsError("BadResponse", `Exchange answered without a ${operation} result`);
-  if (text(message["@ResponseClass"]) !== "Success") {
+  const status = text(message["@ResponseClass"]);
+  if (status !== "Success" && !(options.warnings && status === "Warning")) {
     const code = text(message.ResponseCode) || "Error";
     throw new EwsError(code, (text(message.MessageText) || code).trim());
   }
@@ -341,4 +346,55 @@ export function parseGetFolder(xmlText: string): { total: number; unread: number
   const message = responseMessage(xmlText, "GetFolder");
   const folder = items(message.Folders)[0]?.node;
   return { total: Number(text(folder?.TotalCount)) || 0, unread: Number(text(folder?.UnreadCount)) || 0 };
+}
+
+/** Someone from the address book: a person, a group, or one of the person's own contacts. */
+export interface ParsedPerson {
+  readonly name: string;
+  readonly email: string;
+  readonly title: string | null;
+  readonly department: string | null;
+  readonly company: string | null;
+  readonly office: string | null;
+  readonly kind: "person" | "group" | "contact";
+}
+
+const GROUP_TYPES = new Set(["publicdl", "privatedl", "groupmailbox"]);
+
+/** An SMTP address from "SMTP:a@b", "smtp:a@b" or "a@b"; anything else (X.500 and the like) is not one. */
+function smtp(value: string): string | null {
+  const address = value.trim().replace(/^smtp:/i, "");
+  return /^[^\s@<>]+@[^\s@<>]+$/.test(address) ? address : null;
+}
+
+/** ResolveNames: no match is an empty list, several are a Warning with all of them. */
+export function parseResolveNames(xmlText: string): { people: ParsedPerson[]; total: number } {
+  let message: Node;
+  try {
+    message = responseMessage(xmlText, "ResolveNames", { warnings: true });
+  } catch (error) {
+    if (error instanceof EwsError && error.code === "ErrorNameResolutionNoResults") return { people: [], total: 0 };
+    throw error;
+  }
+  const set = asNode(message.ResolutionSet);
+  const people: ParsedPerson[] = [];
+  for (const resolution of list(set?.Resolution)) {
+    const mailbox = list(resolution.Mailbox)[0];
+    const contact = asNode(resolution.Contact);
+    const entries = list(asNode(contact?.EmailAddresses)?.Entry).map((entry) => text(entry));
+    const email = smtp(text(mailbox?.EmailAddress)) ?? entries.map(smtp).find((a): a is string => a !== null) ?? null;
+    if (!email) continue;
+    const type = text(mailbox?.MailboxType).trim().toLowerCase();
+    const field = (name: string) => text(contact?.[name]).trim() || null;
+    people.push({
+      name: field("DisplayName") ?? (text(mailbox?.Name).trim() || email),
+      email,
+      title: field("JobTitle"),
+      department: field("Department"),
+      company: field("CompanyName"),
+      office: field("OfficeLocation"),
+      kind: GROUP_TYPES.has(type) ? "group" : type === "contact" ? "contact" : "person",
+    });
+  }
+  return { people, total: Number(text(set?.["@TotalItemsInView"])) || people.length };
 }
