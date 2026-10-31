@@ -9,6 +9,7 @@ import { LanguageSwitch, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { messages } from "../messages";
 import { AgentsSection } from "./AgentsSection";
+import { CalendarWeek } from "./CalendarWeek";
 import { ConnectionSection } from "./ConnectionSection";
 import { DraftCard } from "./DraftCard";
 import { Mailbox } from "./Mailbox";
@@ -17,16 +18,26 @@ import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
 
 type Machine = { id: string; name: string; connected: boolean };
-type Tab = Folder | "waiting" | "settings";
+type Tab = Folder | "waiting" | "calendar" | "settings";
 
-const TABS: { id: Tab; label: "tabInbox" | "tabWaiting" | "tabSent" | "tabSettings" }[] = [
+const TABS: { id: Tab; label: "tabInbox" | "tabWaiting" | "tabSent" | "tabCalendar" | "tabSettings" }[] = [
   { id: "inbox", label: "tabInbox" },
   { id: "waiting", label: "tabWaiting" },
   { id: "sent", label: "tabSent" },
+  { id: "calendar", label: "tabCalendar" },
   { id: "settings", label: "tabSettings" },
 ];
 
+/** The Calendar page in the sidebar: the same page, opened on the calendar. */
+export function CalendarPage() {
+  return <MailScreen initialTab="calendar" />;
+}
+
 export function MailPage() {
+  return <MailScreen initialTab="inbox" />;
+}
+
+function MailScreen({ initialTab }: { initialTab: Tab }) {
   const rpc = useRpc<typeof rpcContract>();
   const t = useMessages(messages);
   const explain = useExplain();
@@ -35,7 +46,7 @@ export function MailPage() {
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [suggestedUrl, setSuggestedUrl] = useState("");
-  const [tab, setTab] = useState<Tab>("inbox");
+  const [tab, setTab] = useState<Tab>(initialTab);
 
   useEffect(() => {
     rpc.call("machines").then(
@@ -102,6 +113,7 @@ export function MailPage() {
           <>
             {current === "inbox" || current === "sent" ? <Mailbox key={`${hostId}:${current}`} rpc={rpc} hostId={hostId} folder={current} /> : null}
             {current === "waiting" ? <Waiting rpc={rpc} hostId={hostId} /> : null}
+            {current === "calendar" ? <CalendarWeek key={hostId} rpc={rpc} hostId={hostId} /> : null}
             {current === "settings" ? (
               <div className={cn("max-w-3xl space-y-4")}>
                 {!ready ? (

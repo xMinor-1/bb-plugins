@@ -1,12 +1,12 @@
 // EWS SOAP requests. Only the operations the plugin needs: list and search a
 // folder, read a message and its conversation, download an attachment, save a
 // draft (new, reply, reply all, forward), send a saved draft, delete a draft,
-// read folder counters, look people up in the address book.
+// read folder counters, look people up in the address book, read the calendar.
 //
 // Every request is plain ASCII: characters outside it become XML character
 // references, so no code page between Node, curl and Exchange can mangle them.
 
-export type FolderName = "inbox" | "sentitems" | "drafts" | "deleteditems";
+export type FolderName = "inbox" | "sentitems" | "drafts" | "deleteditems" | "calendar";
 
 export interface ItemRef {
   readonly id: string;
@@ -234,5 +234,38 @@ export function resolveNames(query: string): string {
   return envelope(
     `<m:ResolveNames ReturnFullContactData="true" SearchScope="ActiveDirectoryContacts">` +
       `<m:UnresolvedEntry>${xml(query)}</m:UnresolvedEntry></m:ResolveNames>`,
+  );
+}
+
+const CALENDAR_FIELDS = [
+  "item:Subject",
+  "item:Sensitivity",
+  "item:DisplayTo",
+  "item:DisplayCc",
+  "calendar:Start",
+  "calendar:End",
+  "calendar:IsAllDayEvent",
+  "calendar:Location",
+  "calendar:Organizer",
+  "calendar:MyResponseType",
+  "calendar:LegacyFreeBusyStatus",
+  "calendar:CalendarItemType",
+  "calendar:IsCancelled",
+  "calendar:IsMeeting",
+  "calendar:IsRecurring",
+];
+
+/**
+ * The calendar between two moments (ISO, UTC), as Outlook's calendar shows it:
+ * a CalendarView expands recurring meetings into their occurrences, moved and
+ * cancelled ones included. Read only.
+ */
+export function calendarView(options: { start: string; end: string; max: number }): string {
+  return envelope(
+    `<m:FindItem Traversal="Shallow">` +
+      `<m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties>${CALENDAR_FIELDS.map(field).join("")}</t:AdditionalProperties></m:ItemShape>` +
+      `<m:CalendarView MaxEntriesReturned="${options.max}" StartDate="${xml(options.start)}" EndDate="${xml(options.end)}"/>` +
+      `<m:ParentFolderIds>${folderId("calendar")}</m:ParentFolderIds>` +
+      `</m:FindItem>`,
   );
 }
