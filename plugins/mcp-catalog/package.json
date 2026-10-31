@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-mcp-catalog",
   "version": "0.2.0",
-  "description": "Connect your MCP servers to bb's agents: a catalog of what can be created, paste-in setup with tokens in the OS store, health checks, and on/off from the chat.",
+  "description": "Connect your MCP servers to bb's agents: readable names, paste-in setup with tokens in the OS store, health checks, and on/off from the chat.",
   "license": "MIT",
   "author": "Foma",
   "repository": {
@@ -23,7 +23,7 @@
   },
   "bb": {
     "name": "MCP Catalog",
-    "description": "See which MCP servers your company offers, connect yours by pasting their client settings, and know at a glance whether each one works. Tokens stay in the OS credential store; OpenCode gets the servers you switch on, and approved agents can list and switch them from a chat.",
+    "description": "Connect the MCP servers you create on your company's platform by pasting their client settings, see each one by a readable name with what it does, and know at a glance whether it works. Tokens stay in the OS credential store; OpenCode gets the servers you switch on, and approved agents can list and switch them from a chat.",
     "branding": {
       "icon": "Plug02"
     },
