@@ -22,7 +22,6 @@ export default experimental_defineHostEntry({
     remove: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir).remove(input.name, input.config),
     check: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir).check(input.names, input.maxAgeMs ?? 0, input.config, ctx.signal),
     sync: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir).sync(input.config),
-    catalog: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir).catalog(input.url, input.refresh === true, input.allowHttp === true),
   },
   dispose: () => {
     service = null;

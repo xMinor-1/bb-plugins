@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-mcp-catalog",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Connect your MCP servers to bb's agents: a catalog of what can be created, paste-in setup with tokens in the OS store, health checks, and on/off from the chat.",
   "license": "MIT",
   "author": "Foma",

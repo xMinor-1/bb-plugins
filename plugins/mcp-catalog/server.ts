@@ -15,7 +15,6 @@ import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } fr
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import {
-  catalogSchema,
   hostContract,
   importResultSchema,
   langSchema,
@@ -48,7 +47,6 @@ export const rpcContract = defineRpcContract({
       .object({
         machines: z.array(machineSchema),
         lastUsed: z.string().nullable(),
-        catalogConfigured: z.boolean(),
         platformUrl: z.string(),
         intervalMinutes: z.number(),
         timeoutSec: z.number(),
@@ -63,7 +61,6 @@ export const rpcContract = defineRpcContract({
   setTimeout: { input: z.object({ hostId, name: serverNameSchema, timeoutSec: z.number().int().min(TIMEOUT_LIMITS.min).max(TIMEOUT_LIMITS.max).nullable() }).strict(), output: statusSchema },
   remove: { input: z.object({ hostId, name: serverNameSchema }).strict(), output: statusSchema },
   check: { input: z.object({ hostId, names: z.array(serverNameSchema).max(200).optional(), maxAgeMs: z.number().int().min(0).optional() }).strict(), output: statusSchema },
-  catalog: { input: z.object({ hostId, refresh: z.boolean().optional() }).strict(), output: catalogSchema },
   /** For a build's first-run checklist (Fleet Kit): quick, from the last status heard. */
   setupStatus: { input: z.object({ lang: langSchema.optional(), hostId: hostId.optional() }).strict(), output: setupStatusOutput },
 });
@@ -137,15 +134,16 @@ export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     catalogUrl: {
       type: "string",
-      label: "MCP catalog address",
-      description: "A JSON list of the MCP servers people can create ({id, name, description}), read without signing in. Leave empty to hide the catalog.",
+      label: "Server template list address",
+      description:
+        "A JSON list of the templates people create servers from ({id, name, description}), read without signing in. It gives each server a human name and one line of what it does; without it the server's own description is used.",
       default: "",
       experimental_schema: webAddressSchema,
     },
     platformUrl: {
       type: "string",
       label: "Page where people create their servers",
-      description: "Opened by “Create on the platform”. {id} in the address is replaced with the catalog item's id.",
+      description: "Opened by “Create a server on the platform” on the MCP page.",
       default: "",
       experimental_schema: webAddressSchema,
     },
@@ -222,11 +220,20 @@ export default async function plugin(bb: BbPluginApi) {
   const writeConfig = async (id: string): Promise<WriteConfig> => {
     const values = await settings.get();
     const serverEnvironment: WriteConfig["serverEnvironment"] = {};
-    const ownVariables = ["OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"].some((key) => process.env[key]);
-    if (ownVariables && id === (await primaryHostId())) {
-      for (const key of ["OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"] as const) if (process.env[key]) serverEnvironment[key] = process.env[key];
+    const location = (["OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"] as const).filter((key) => process.env[key]);
+    // The OpenCode folder must not be guessed; PATH only helps pick the right OpenCode, so it is left out if bb is silent.
+    const own = location.length > 0 ? id === (await primaryHostId()) : await primaryHostId().then((primary) => id === primary, () => false);
+    if (own) {
+      for (const key of location) serverEnvironment[key] = process.env[key];
+      if (process.env.PATH) serverEnvironment.PATH = process.env.PATH.slice(0, 32_000);
     }
-    return { opencodeConfigDir: values.opencodeConfigDir, timeoutSec: Math.max(0, Math.trunc(values.callTimeoutSeconds)), serverEnvironment, ...(allowHttp ? { allowHttp } : {}) };
+    return {
+      opencodeConfigDir: values.opencodeConfigDir,
+      timeoutSec: Math.max(0, Math.trunc(values.callTimeoutSeconds)),
+      serverEnvironment,
+      ...(values.catalogUrl.trim() ? { catalogUrl: values.catalogUrl.trim() } : {}),
+      ...(allowHttp ? { allowHttp } : {}),
+    };
   };
 
   /**
@@ -327,17 +334,17 @@ export default async function plugin(bb: BbPluginApi) {
 
   const reply = (text: string, isError = false) => ({ content: [{ type: "text" as const, text }], isError });
 
-  /** A name the agent gave, matched exactly, then ignoring case, then as a unique part of one name. */
+  /** A name or title the agent gave, matched exactly, then ignoring case, then as a unique part of one. */
   function findServer(servers: ServerView[], wanted: string): ServerView | string {
     const exact = servers.find((server) => server.name === wanted);
     if (exact) return exact;
     const lower = wanted.toLowerCase();
-    const caseless = servers.filter((server) => server.name.toLowerCase() === lower);
+    const caseless = servers.filter((server) => server.name.toLowerCase() === lower || server.title.toLowerCase() === lower);
     if (caseless.length === 1) return caseless[0]!;
-    const partial = servers.filter((server) => server.name.toLowerCase().includes(lower));
+    const partial = caseless.length > 1 ? caseless : servers.filter((server) => server.name.toLowerCase().includes(lower) || server.title.toLowerCase().includes(lower));
     if (partial.length === 1) return partial[0]!;
-    if (partial.length > 1) return `"${wanted}" matches several servers: ${partial.map((server) => server.name).join(", ")}. Use the full name.`;
-    return `No MCP server called "${wanted}" on this machine. Known: ${servers.map((server) => server.name).join(", ") || "none"}.`;
+    if (partial.length > 1) return `"${wanted}" matches several servers: ${partial.map((server) => `${server.title} (${server.name})`).join(", ")}. Use the id in brackets.`;
+    return `No MCP server called "${wanted}" on this machine. Known: ${servers.map((server) => `${server.title} (${server.name})`).join(", ") || "none"}.`;
   }
 
   bb.agents.registerTool({
@@ -370,10 +377,11 @@ export default async function plugin(bb: BbPluginApi) {
     if (enabled) status = await host.call("check", { names: [found.name], maxAgeMs: 0, config }, { hostId: allowed.hostId, timeoutMs: CHECK_CALL_MS, signal: ctx.signal });
     await heard(allowed.hostId, status);
     const server = status.servers.find((item) => item.name === found.name);
+    const label = `${found.title} (${found.name})`;
     if (status.configError) return reply(`Saved, but opencode.json could not be written: ${stripTag(status.configError)}`, true);
     if (enabled && server?.conflict) {
       return reply(
-        `opencode.json already has a server called ${found.name} that MCP Catalog did not write, so it was left as it is. ` +
+        `opencode.json already has a server called ${found.name} that MCP Catalog did not write, so ${found.title} was left out. ` +
           "Ask the user to press Replace next to it on the MCP page in bb.",
         true,
       );
@@ -381,8 +389,8 @@ export default async function plugin(bb: BbPluginApi) {
     const health = server ? ` Health: ${describeHealth(server)}.` : "";
     return reply(
       enabled
-        ? `Turned on ${found.name}.${health} Its tools appear in a NEW thread: OpenCode loads MCP servers when a session starts, so this thread keeps its current tools.`
-        : `Turned off ${found.name}. New threads start without it; this thread keeps its current tools.`,
+        ? `Turned on ${label}.${health} Its tools appear in a NEW thread: OpenCode loads MCP servers when a session starts, so this thread keeps its current tools.`
+        : `Turned off ${label}. New threads start without it; this thread keeps its current tools.`,
     );
   };
 
@@ -390,7 +398,7 @@ export default async function plugin(bb: BbPluginApi) {
     name: "mcp_enable",
     description: "Switch on one of the user's MCP servers for new threads.",
     presentation: { label: { pending: "Turning on an MCP server", completed: "Turned on an MCP server" } },
-    parameters: z.object({ name: z.string().min(1).max(100).describe("Server name from mcp_servers; a unique part of it is enough") }),
+    parameters: z.object({ name: z.string().min(1).max(100).describe("Server id or name from mcp_servers; a unique part of either is enough") }),
     execute: (params, ctx) => toggle(true)(params, ctx),
   });
 
@@ -398,7 +406,7 @@ export default async function plugin(bb: BbPluginApi) {
     name: "mcp_disable",
     description: "Switch off one of the user's MCP servers for new threads. Its settings and token stay; it can be switched on again.",
     presentation: { label: { pending: "Turning off an MCP server", completed: "Turned off an MCP server" } },
-    parameters: z.object({ name: z.string().min(1).max(100).describe("Server name from mcp_servers; a unique part of it is enough") }),
+    parameters: z.object({ name: z.string().min(1).max(100).describe("Server id or name from mcp_servers; a unique part of either is enough") }),
     execute: (params, ctx) => toggle(false)(params, ctx),
   });
 
@@ -436,7 +444,6 @@ export default async function plugin(bb: BbPluginApi) {
           .filter((item) => item.lifecycle.phase !== "destroyed")
           .map((item) => ({ id: item.id, name: item.name, connected: item.status === "connected" })),
         lastUsed: (await kv.get<string>("ui:lastHost")) ?? null,
-        catalogConfigured: values.catalogUrl.trim() !== "",
         platformUrl: values.platformUrl.trim(),
         intervalMinutes: values.checkIntervalMinutes,
         timeoutSec: values.callTimeoutSeconds,
@@ -457,10 +464,6 @@ export default async function plugin(bb: BbPluginApi) {
     setTimeout: async ({ hostId: id, name, timeoutSec }) => call("setTimeout", id, { name, timeoutSec, config: await writeConfig(id) }),
     remove: async ({ hostId: id, name }) => call("remove", id, { name, config: await writeConfig(id) }),
     check: async ({ hostId: id, names, maxAgeMs }) => call("check", id, { names, maxAgeMs, config: await writeConfig(id) }, CHECK_CALL_MS),
-    catalog: async ({ hostId: id, refresh }) => {
-      const { catalogUrl } = await settings.get();
-      return host.call("catalog", compact({ url: catalogUrl, refresh, ...(allowHttp ? { allowHttp } : {}) }), { hostId: id, timeoutMs: CALL_MS });
-    },
     setupStatus: async ({ lang, hostId: id }) => {
       const machine = id ?? (await bb.sdk.system.config()).primaryHostId ?? (await kv.get<string>("ui:lastHost")) ?? null;
       const summary = machine ? await kv.get<Summary>(summaryKey(machine)) : undefined;
@@ -495,7 +498,9 @@ export function describeStatus(status: Status): string {
   if (status.servers.length === 0) {
     return "No MCP servers are connected on this machine. The user adds them on the MCP page in bb by pasting the client settings from the platform.";
   }
-  const lines = status.servers.map((server) => `- ${server.name} — ${server.enabled ? "on" : "off"} — ${describeHealth(server)}`);
+  const lines = status.servers.map(
+    (server) => `- ${server.title} (id ${server.name}) — ${server.enabled ? "on" : "off"} — ${describeHealth(server)}${server.summary ? `\n  ${server.summary}` : ""}`,
+  );
   const notes = ["Changes to on/off take effect in new threads."];
   if (status.configError) notes.unshift(`opencode.json could not be written: ${stripTag(status.configError)}`);
   return [`MCP servers on this machine (${status.servers.length}):`, ...lines, "", ...notes].join("\n");

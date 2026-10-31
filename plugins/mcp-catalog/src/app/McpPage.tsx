@@ -1,9 +1,9 @@
-// The MCP page: your servers with their health, the form that connects new
-// ones from pasted client settings, and the catalog of servers the company
-// offers.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+// The MCP page: your servers by name, with what each does and whether it
+// works (ids, addresses and timeouts under "Details"), and the three steps
+// that connect a new one from the platform.
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
-import type { Catalog, CatalogItem, ImportResult, ServerView, Status } from "../../contract";
+import type { ImportResult, ServerView, Status } from "../../contract";
 import type { rpcContract } from "../../server";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,6 @@ type Machine = { id: string; name: string; connected: boolean };
 type Overview = {
   machines: Machine[];
   lastUsed: string | null;
-  catalogConfigured: boolean;
   platformUrl: string;
   timeoutSec: number;
 };
@@ -125,22 +124,27 @@ function HealthBadge({ server }: { server: ServerView }) {
 
 function ServerRow({
   server,
+  sameTitle,
   defaultTimeout,
   busy,
   run,
 }: {
   server: ServerView;
+  /** Another server shows the same name: show the id next to it. */
+  sameTitle: boolean;
   defaultTimeout: number;
   busy: boolean;
   run: (action: (rpc: Rpc, hostId: string) => Promise<Status>) => Promise<boolean>;
 }) {
   const t = useMessages(messages);
+  const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [timeout, setTimeoutText] = useState(server.timeoutSec === null ? "" : String(server.timeoutSec));
   useEffect(() => setTimeoutText(server.timeoutSec === null ? "" : String(server.timeoutSec)), [server.timeoutSec]);
   const parsedTimeout = timeout.trim() === "" ? null : Number(timeout);
   const timeoutValid = parsedTimeout === null || (Number.isInteger(parsedTimeout) && parsedTimeout >= 1 && parsedTimeout <= 600);
   const timeoutChanged = parsedTimeout !== server.timeoutSec;
+  const detailsId = `mcp-details-${server.name}`;
 
   return (
     <li className="space-y-2 py-3 first:pt-0 last:pb-0" data-server={server.name}>
@@ -149,43 +153,31 @@ function ServerRow({
           <Switch
             checked={server.enabled}
             disabled={busy}
-            label={t.toggleLabel(server.name)}
+            label={t.toggleLabel(server.title, server.name)}
             onChange={(enabled) => void run((rpc, hostId) => rpc.call("setEnabled", { hostId, name: server.name, enabled }))}
           />
         </div>
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-            <span className="break-all font-mono text-sm">{server.name}</span>
-            <span className="min-w-0 truncate text-xs text-muted-foreground" title={server.address}>
-              {server.address}
+            <span className="break-words text-sm font-medium" data-server-title>
+              {server.title}
             </span>
+            {sameTitle ? <span className="break-all font-mono text-xs text-muted-foreground">{server.name}</span> : null}
           </div>
+          {server.summary ? (
+            <p className="line-clamp-2 break-words text-xs text-muted-foreground" data-server-summary>
+              {server.summary}
+            </p>
+          ) : null}
           <HealthBadge server={server} />
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1">
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run((rpc, hostId) => rpc.call("check", { hostId, names: [server.name], maxAgeMs: 0 }))}>
             {t.check}
           </Button>
-          {confirming ? (
-            <>
-              <span className="text-xs text-muted-foreground">{t.removeConfirm}</span>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={busy}
-                onClick={() => void run((rpc, hostId) => rpc.call("remove", { hostId, name: server.name })).then(() => setConfirming(false))}
-              >
-                {t.removeYes}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
-                {t.keep}
-              </Button>
-            </>
-          ) : (
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(true)}>
-              {t.remove}
-            </Button>
-          )}
+          <Button variant="ghost" size="sm" aria-expanded={open} aria-controls={detailsId} onClick={() => setOpen((value) => !value)}>
+            {open ? t.hideDetails : t.showDetails}
+          </Button>
         </div>
       </div>
       {server.conflict ? (
@@ -197,29 +189,74 @@ function ServerRow({
         </div>
       ) : null}
       {server.health.status === "unauthorized" && server.enabled ? <p className="pl-12 text-xs text-muted-foreground">{t.unauthorizedHint}</p> : null}
-      <div className="flex flex-wrap items-center gap-2 pl-12 text-xs">
-        <label className="flex items-center gap-2 text-muted-foreground" title={`${t.timeoutHint} ${t.timeoutDefault(defaultTimeout)}`}>
-          {t.timeout}
-          <Input
-            className="h-7 w-16 text-xs md:h-7"
-            inputMode="numeric"
-            value={timeout}
-            placeholder={defaultTimeout > 0 ? String(defaultTimeout) : "—"}
-            aria-invalid={!timeoutValid}
-            onChange={(event) => setTimeoutText(event.target.value.replace(/[^\d]/g, ""))}
-          />
-        </label>
-        {timeoutChanged && timeoutValid ? (
-          <Button variant="outline" size="sm" className="h-7" disabled={busy} onClick={() => void run((rpc, hostId) => rpc.call("setTimeout", { hostId, name: server.name, timeoutSec: parsedTimeout }))}>
-            {t.saveTimeout}
-          </Button>
-        ) : null}
-      </div>
+      {open ? (
+        <div id={detailsId} className="space-y-2 pl-12 text-xs">
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+            <dt className="text-muted-foreground">{t.idLabel}</dt>
+            <dd className="break-all font-mono">{server.name}</dd>
+            <dt className="text-muted-foreground">{t.addressLabel}</dt>
+            <dd className="break-all">{server.address}</dd>
+            <dt className="text-muted-foreground">{t.tokensLabel}</dt>
+            <dd className="break-words">{server.secretHeaders.length > 0 ? server.secretHeaders.join(", ") : t.tokensNone}</dd>
+          </dl>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-muted-foreground" title={`${t.timeoutHint} ${t.timeoutDefault(defaultTimeout)}`}>
+              {t.timeout}
+              <Input
+                className="h-7 w-16 text-xs md:h-7"
+                inputMode="numeric"
+                value={timeout}
+                placeholder={defaultTimeout > 0 ? String(defaultTimeout) : "—"}
+                aria-invalid={!timeoutValid}
+                onChange={(event) => setTimeoutText(event.target.value.replace(/[^\d]/g, ""))}
+              />
+            </label>
+            {timeoutChanged && timeoutValid ? (
+              <Button variant="outline" size="sm" className="h-7" disabled={busy} onClick={() => void run((rpc, hostId) => rpc.call("setTimeout", { hostId, name: server.name, timeoutSec: parsedTimeout }))}>
+                {t.saveTimeout}
+              </Button>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-1">
+            {confirming ? (
+              <>
+                <span className="text-muted-foreground">{t.removeConfirm}</span>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void run((rpc, hostId) => rpc.call("remove", { hostId, name: server.name })).then(() => setConfirming(false))}
+                >
+                  {t.removeYes}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+                  {t.keep}
+                </Button>
+              </>
+            ) : (
+              <Button variant="ghost" size="sm" className="-ml-3" disabled={busy} onClick={() => setConfirming(true)}>
+                {t.remove}
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : null}
     </li>
   );
 }
 
-function ConnectSection({ rpc, hostId, onResult }: { rpc: Rpc; hostId: string; onResult: (result: ImportResult) => void }) {
+/** The platform page as a link, if it is a web address. */
+export function platformLink(platformUrl: string): string | null {
+  const address = platformUrl.trim();
+  return /^https?:\/\/[^\s]+$/i.test(address) ? address : null;
+}
+
+/** Names for the servers a paste added or updated, as the page shows them. */
+function titlesOf(names: readonly string[], status: Status): string {
+  return names.map((name) => status.servers.find((server) => server.name === name)?.title ?? name).join(", ");
+}
+
+function ConnectSection({ rpc, hostId, platformUrl, onResult }: { rpc: Rpc; hostId: string; platformUrl: string; onResult: (result: ImportResult) => void }) {
   const t = useMessages(messages);
   const why = useMessages(reasons);
   const [text, setText] = useState("");
@@ -227,6 +264,7 @@ function ConnectSection({ rpc, hostId, onResult }: { rpc: Rpc; hostId: string; o
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const link = platformLink(platformUrl);
 
   const add = async () => {
     setBusy(true);
@@ -248,7 +286,22 @@ function ConnectSection({ rpc, hostId, onResult }: { rpc: Rpc; hostId: string; o
 
   return (
     <Section title={t.connectTitle}>
-      <p className="text-sm text-muted-foreground">{t.connectHint}</p>
+      <ol className="list-decimal space-y-2 pl-5 text-sm">
+        <li>
+          <span>{link ? t.step1 : t.step1NoPlatform}</span>
+          {link ? (
+            <div className="mt-1.5">
+              <Button variant="outline" size="sm" asChild>
+                <a href={link} target="_blank" rel="noopener noreferrer" data-platform-link>
+                  {t.createOnPlatform}
+                </a>
+              </Button>
+            </div>
+          ) : null}
+        </li>
+        <li>{t.step2}</li>
+        <li>{t.step3}</li>
+      </ol>
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-2">
           <label htmlFor="mcp-paste" className="text-sm text-muted-foreground">
@@ -282,8 +335,8 @@ function ConnectSection({ rpc, hostId, onResult }: { rpc: Rpc; hostId: string; o
       {error ? <ErrorNotice raw={error} /> : null}
       {result ? (
         <Notice tone={result.added.length + result.updated.length > 0 ? "ok" : "warn"}>
-          {result.added.length > 0 ? <p>{t.added(result.added.join(", "))}</p> : null}
-          {result.updated.length > 0 ? <p>{t.updated(result.updated.join(", "))}</p> : null}
+          {result.added.length > 0 ? <p>{t.added(titlesOf(result.added, result.status))}</p> : null}
+          {result.updated.length > 0 ? <p>{t.updated(titlesOf(result.updated, result.status))}</p> : null}
           {result.skipped.length > 0 ? (
             <div className="mt-1">
               <p className="text-muted-foreground">{t.skippedTitle}</p>
@@ -297,99 +350,6 @@ function ConnectSection({ rpc, hostId, onResult }: { rpc: Rpc; hostId: string; o
             </div>
           ) : null}
         </Notice>
-      ) : null}
-    </Section>
-  );
-}
-
-const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
-
-/** Whether one of the person's servers was made from this catalog item: its name carries the item's id or name. */
-export function isConnected(item: CatalogItem, servers: readonly ServerView[]): boolean {
-  const keys = new Set([slug(item.id), slug(item.name)].filter((key) => key.length >= 2));
-  return servers.some((server) => {
-    const parts = server.name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-    return parts.some((part) => keys.has(part)) || keys.has(slug(server.name));
-  });
-}
-
-export function platformLink(platformUrl: string, item: CatalogItem): string | null {
-  const base = platformUrl.trim();
-  if (!/^https?:\/\//i.test(base)) return null;
-  return base.includes("{id}") ? base.split("{id}").join(encodeURIComponent(item.id)) : base;
-}
-
-function CatalogSection({ rpc, hostId, platformUrl, servers }: { rpc: Rpc; hostId: string; platformUrl: string; servers: readonly ServerView[] }) {
-  const t = useMessages(messages);
-  const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const load = useCallback(
-    (refresh: boolean) => {
-      setLoading(true);
-      setError(null);
-      rpc
-        .call("catalog", refresh ? { hostId, refresh: true } : { hostId })
-        .then(setCatalog, (cause) => setError(errorText(cause)))
-        .finally(() => setLoading(false));
-    },
-    [rpc, hostId],
-  );
-  useEffect(() => load(false), [load]);
-
-  const items = useMemo(() => {
-    const all = catalog?.items ?? [];
-    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    return words.length === 0 ? all : all.filter((item) => words.every((word) => `${item.name} ${item.description ?? ""} ${item.category ?? ""}`.toLowerCase().includes(word)));
-  }, [catalog, query]);
-
-  return (
-    <Section
-      title={t.catalogTitle}
-      aside={
-        <Button variant="ghost" size="sm" disabled={loading} onClick={() => load(true)}>
-          {loading ? t.loading : t.catalogRefresh}
-        </Button>
-      }
-    >
-      <p className="text-sm text-muted-foreground">{t.catalogHint}</p>
-      {error ? <ErrorNotice raw={error} /> : null}
-      {catalog?.error ? <ErrorNotice raw={catalog.error} tone={catalog.items.length > 0 ? "warn" : "error"} /> : null}
-      {!platformUrl ? <Notice tone="info">{t.noPlatform}</Notice> : null}
-      {catalog && catalog.items.length > 6 ? (
-        <Input className="max-w-sm" type="search" placeholder={t.catalogSearch} aria-label={t.catalogSearch} value={query} onChange={(event) => setQuery(event.target.value)} />
-      ) : null}
-      {catalog === null && !error ? <Notice tone="info">{t.loading}</Notice> : null}
-      {catalog && catalog.items.length === 0 && !catalog.error ? <Notice tone="info">{t.catalogEmpty}</Notice> : null}
-      {catalog && catalog.items.length > 0 && items.length === 0 ? <Notice tone="info">{t.catalogNothingFound}</Notice> : null}
-      {items.length > 0 ? (
-        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {items.map((item) => {
-            const link = platformLink(platformUrl, item);
-            const connected = isConnected(item, servers);
-            return (
-              <li key={item.id} className="flex min-w-0 flex-col gap-2 rounded-md border border-border p-3" data-catalog-item={item.id}>
-                <div className="flex min-w-0 items-start justify-between gap-2">
-                  <span className="min-w-0 break-words text-sm font-medium">{item.name}</span>
-                  {connected ? <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">{t.connected}</span> : null}
-                </div>
-                {item.category ? <span className="text-xs text-muted-foreground">{item.category}</span> : null}
-                {item.description ? <p className="line-clamp-4 text-xs text-muted-foreground">{item.description}</p> : null}
-                {link ? (
-                  <div className="mt-auto pt-1">
-                    <Button variant="outline" size="sm" asChild>
-                      <a href={link} target="_blank" rel="noopener noreferrer">
-                        {t.create}
-                      </a>
-                    </Button>
-                  </div>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
       ) : null}
     </Section>
   );
@@ -527,7 +487,14 @@ export function McpPage() {
               ) : (
                 <ul className="divide-y divide-border">
                   {servers.map((server) => (
-                    <ServerRow key={server.name} server={server} defaultTimeout={overview?.timeoutSec ?? 0} busy={busy} run={run} />
+                    <ServerRow
+                      key={server.name}
+                      server={server}
+                      sameTitle={servers.some((other) => other !== server && other.title === server.title)}
+                      defaultTimeout={overview?.timeoutSec ?? 0}
+                      busy={busy}
+                      run={run}
+                    />
                   ))}
                 </ul>
               )}
@@ -540,13 +507,13 @@ export function McpPage() {
             <ConnectSection
               rpc={rpc}
               hostId={hostId}
+              platformUrl={overview?.platformUrl ?? ""}
               onResult={(result) => {
                 setStatus(result.status);
                 const fresh = [...result.added, ...result.updated];
                 if (fresh.length > 0) check(fresh, 0);
               }}
             />
-            {overview?.catalogConfigured ? <CatalogSection rpc={rpc} hostId={hostId} platformUrl={overview.platformUrl} servers={servers} /> : null}
           </>
         ) : null}
       </div>

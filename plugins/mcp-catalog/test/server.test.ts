@@ -7,11 +7,13 @@ import {
   makeThreadResponse,
 } from "@get-bb/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import type { ServerView, Status } from "../contract";
+import type { ServerView, Status, WriteConfig } from "../contract";
 import plugin, { describeStatus, setupAnswer, summarize } from "../server";
 
 const server = (name: string, patch: Partial<ServerView> = {}): ServerView => ({
   name,
+  title: name,
+  summary: null,
   address: `mcp.example.com/u/1/${name}/mcp`,
   enabled: true,
   timeoutSec: null,
@@ -24,7 +26,10 @@ const server = (name: string, patch: Partial<ServerView> = {}): ServerView => ({
 });
 
 const STATUS: Status = {
-  servers: [server("wiki_ab12"), server("tracker_cd34", { enabled: false, health: { status: "unknown", since: null, checkedAt: null, detail: null, tools: null } })],
+  servers: [
+    server("wiki_ab12", { title: "Wiki", summary: "Search the company wiki." }),
+    server("tracker_cd34", { title: "Issue tracker", enabled: false, health: { status: "unknown", since: null, checkedAt: null, detail: null, tools: null } }),
+  ],
   configFile: "/home/u/.config/opencode/opencode.json",
   configError: null,
   store: "file (/home/u/.local/share/bb-mcp-catalog/secrets)",
@@ -85,19 +90,22 @@ describe("agent tools", () => {
 
     await dispatch("th_1", "acp-opencode", "corp/large");
     const listed = await tool("mcp_servers", {}, "th_1");
-    expect(text(listed)).toContain("wiki_ab12");
-    expect(text(listed)).toContain("works since 2026-10-31 10:00 UTC");
+    expect(text(listed)).toContain("- Wiki (id wiki_ab12) — on — works since 2026-10-31 10:00 UTC");
+    expect(text(listed)).toContain("Search the company wiki.");
     expect(hostCalls.map((call) => [call.method, call.hostId])).toEqual([["status", "host_1"]]);
   });
 
-  it("switch a server by a unique part of its name and say it shows in a new thread", async () => {
+  it("switch a server by a unique part of its name or id and say it shows in a new thread", async () => {
     const { dispatch, tool, hostCalls } = await setup();
     await dispatch("th_2", "acp-opencode", "corp/large");
-    const result = await tool("mcp_enable", { name: "tracker" }, "th_2");
-    expect(text(result)).toContain("Turned on tracker_cd34");
+    const result = await tool("mcp_enable", { name: "issue" }, "th_2");
+    expect(text(result)).toContain("Turned on Issue tracker (tracker_cd34)");
     expect(text(result)).toContain("NEW thread");
     const enable = hostCalls.find((call) => call.method === "setEnabled")!;
     expect(enable.input).toMatchObject({ name: "tracker_cd34", enabled: true, config: { opencodeConfigDir: "", timeoutSec: 30 } });
+    // bb's own PATH goes to bb's own machine, so the plugin judges the OpenCode agents run.
+    expect((enable.input as { config: WriteConfig }).config.serverEnvironment.PATH).toBe(process.env.PATH);
+    expect(text(await tool("mcp_disable", { name: "tracker_cd" }, "th_2"))).toContain("Turned off Issue tracker (tracker_cd34)");
     expect(hostCalls.some((call) => call.method === "check")).toBe(true);
 
     const unknown = await tool("mcp_disable", { name: "nothing" }, "th_2");

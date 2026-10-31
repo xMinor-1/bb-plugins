@@ -56,17 +56,24 @@ try {
     await open(lang);
     const rows = await page.locator("[data-server]").count();
     if (rows < 2) failures.push(`${lang}: ${rows} server rows`);
-    const catalog = await page.locator("[data-catalog-item]").count();
-    if (catalog !== 3) failures.push(`${lang}: ${catalog} catalog items`);
-    const connectedBadges = await page.locator("[data-catalog-item]").filter({ hasText: lang === "en" ? "Connected" : "Подключён" }).count();
-    if (connectedBadges !== 2) failures.push(`${lang}: ${connectedBadges} connected badges (want wiki and tracker)`);
-    const href = await page.locator('[data-catalog-item="gitlab"] a').getAttribute("href");
-    if (href !== "https://mcp.example.com/dashboard?template=gitlab") failures.push(`${lang}: platform link ${href}`);
+    // Names from the stub catalog's templates, not ids; the id only under Details.
+    const wiki = page.locator('[data-server="corp_wiki_ab12cd34"]');
+    await wiki.locator("[data-server-title]").filter({ hasText: /^Wiki$/ }).waitFor({ timeout: 20_000 }).catch(() => failures.push(`${lang}: wiki row is not titled Wiki`));
+    const summary = await wiki.locator("[data-server-summary]").textContent().catch(() => null);
+    if (summary !== "Search and read the company wiki.") failures.push(`${lang}: wiki summary ${summary}`);
+    if ((await wiki.innerText()).includes("corp_wiki_ab12cd34")) failures.push(`${lang}: the id shows outside Details`);
+    await wiki.getByRole("button", { name: lang === "en" ? "Details" : "Подробнее" }).click();
+    if (!(await wiki.innerText()).includes("corp_wiki_ab12cd34")) failures.push(`${lang}: Details do not show the id`);
+    if ((await wiki.getByRole("textbox").count()) !== 1) failures.push(`${lang}: the call timeout is not under Details`);
+    await wiki.getByRole("button", { name: lang === "en" ? "Hide details" : "Свернуть" }).click();
+    if ((await page.locator("[data-catalog-item]").count()) !== 0) failures.push(`${lang}: the catalog is still on the page`);
+    const href = await page.locator("[data-platform-link]").getAttribute("href");
+    if (href !== "https://mcp.example.com/dashboard") failures.push(`${lang}: platform link ${href}`);
     const masked = await page.locator("#mcp-paste").evaluate((element) => getComputedStyle(element).getPropertyValue("-webkit-text-security"));
     if (masked !== "disc") failures.push(`${lang}: paste field not masked (${masked})`);
     if (lang === "ru") {
       const main = await page.locator("[data-mcp-page]").innerText();
-      for (const word of ["Your MCP servers", "Connect servers", "Catalog", "Works", "Check all", "Create on the platform"]) {
+      for (const word of ["Your MCP servers", "Connect a server", "Works", "Check all", "Create a server on the platform", "Details", "Paste them here"]) {
         if (main.includes(word)) failures.push(`ru: English text left: ${word}`);
       }
     }
@@ -85,18 +92,19 @@ try {
   await page.locator("#mcp-paste").fill(JSON.stringify({ mcp: { corp_gitlab_00aa11bb: { type: "remote", url: "http://127.0.0.1:7900/u/1/gitlab/mcp", headers: { Authorization: "Bearer tok-synthetic-unknown-333" } } } }));
   await page.getByRole("button", { name: "Add", exact: true }).click();
   // "Updated" on a second run, when the server is already there.
-  await page.getByText(/^(Added|Updated): corp_gitlab_00aa11bb\.$/).waitFor({ timeout: 20_000 });
+  await page.getByText(/^(Added|Updated): GitLab\.$/).waitFor({ timeout: 20_000 });
   if ((await page.locator("#mcp-paste").inputValue()) !== "") failures.push("the paste field kept the text after Add");
   await page.locator('[data-server="corp_gitlab_00aa11bb"]').getByText("Token not accepted").waitFor({ timeout: 30_000 });
   if ((await page.content()).includes("tok-synthetic-unknown-333")) failures.push("the token is on the page after Add");
   await page.screenshot({ path: join(shots, "en-after-add.png"), fullPage: true });
 
   // Switching off from the panel.
-  await page.getByRole("switch", { name: "Use corp_gitlab_00aa11bb in new threads" }).click();
+  await page.getByRole("switch", { name: "Use GitLab (corp_gitlab_00aa11bb) in new threads" }).click();
   await page.waitForFunction(() => document.querySelector('[data-server="corp_gitlab_00aa11bb"] [role=switch]')?.getAttribute("aria-checked") === "false", null, { timeout: 20_000 });
 
   // Removal from the panel, which also leaves the stand as the next run expects it.
   const row = page.locator('[data-server="corp_gitlab_00aa11bb"]');
+  await row.getByRole("button", { name: "Details", exact: true }).click();
   await row.getByRole("button", { name: "Remove", exact: true }).click();
   await row.getByRole("button", { name: "Yes, remove", exact: true }).click();
   await row.waitFor({ state: "detached", timeout: 20_000 });

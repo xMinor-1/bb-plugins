@@ -1,6 +1,8 @@
 // The machine's side end to end, on a file credential store, a temporary
 // OpenCode directory and stub MCP servers.
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -26,7 +28,7 @@ const make = (store: SecretStore = openFileSecretStore(join(root, "store"))) =>
     // A host worker's trimmed environment: the OpenCode directory comes from the server.
     env: { HOME: join(root, "home"), PATH: "" },
     userHome: join(root, "home"),
-    openCodeMajor: async () => major,
+    openCode: async () => (major === null ? null : { major, version: `${major}.0.0`, path: "/opt/opencode/bin/opencode" }),
   });
 
 const pasted = (tokenA = TOKEN_A) =>
@@ -39,6 +41,26 @@ const pasted = (tokenA = TOKEN_A) =>
   });
 
 const opencodeFile = () => join(root, "opencode", "opencode.json");
+/** A fake `opencode` that reports the version written in its folder's version.txt. */
+const fakeOpenCode = async (folder: string, version: string): Promise<string> => {
+  const bin = await mkdtempDir(join(root, folder));
+  await writeFile(join(bin, "version.txt"), `${version}\n`);
+  await writeFile(join(bin, "opencode"), `#!/bin/sh\nread v < "${join(bin, "version.txt")}"\necho "$v"\n`);
+  await chmod(join(bin, "opencode"), 0o755);
+  return bin;
+};
+/** A template catalog on a local port. */
+const startCatalog = async (items: unknown[]) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ items }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/templates`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+};
 const stateText = () => readFile(join(root, "data", "state.json"), "utf8");
 /** The store key a header's token is kept under, from state.json. */
 const keyOf = async (server: string, header: string): Promise<string> => {
@@ -172,6 +194,48 @@ describe("connecting servers", () => {
   });
 });
 
+describe("names people understand", () => {
+  it("names servers after their platform template, else after what they say about themselves", async () => {
+    const catalog = await startCatalog([
+      { id: "wiki", name: "Wiki", description: "Search and read the company wiki. Pages and spaces." },
+      { id: "gitlab", name: "GitLab" },
+      { id: "ai_gitlab", name: "GitLab AI", description: "## Merge requests\nand pipelines" },
+    ]);
+    stubB.options.title = "Helpdesk";
+    stubB.options.instructions = "Use this server to open tickets. It can also close them.";
+    const text = JSON.stringify({
+      mcp: {
+        corp_wiki_ab12cd34: { type: "remote", url: stubA.url, headers: { Authorization: `Bearer ${TOKEN_A}` } },
+        corp_ai_gitlab_8ce17341: { type: "remote", url: stubA.url, headers: { Authorization: `Bearer ${TOKEN_A}` } },
+        corp_desk_0badf00d: { type: "remote", url: stubB.url },
+      },
+    });
+    const shown = (status: { servers: { name: string; title: string; summary: string | null }[] }) =>
+      Object.fromEntries(status.servers.map((server) => [server.name, [server.title, server.summary]]));
+    const withCatalog = { ...config, catalogUrl: catalog.url };
+    try {
+      const added = await make().importConfig(text, withCatalog);
+      // Nothing is known before the first check: the id, made readable.
+      expect(shown(added.status)).toEqual({
+        corp_ai_gitlab_8ce17341: ["Corp ai gitlab", null],
+        corp_desk_0badf00d: ["Corp desk", null],
+        corp_wiki_ab12cd34: ["Corp wiki", null],
+      });
+      const named = {
+        corp_ai_gitlab_8ce17341: ["GitLab AI", "Merge requests"],
+        corp_desk_0badf00d: ["Helpdesk", "Use this server to open tickets."],
+        corp_wiki_ab12cd34: ["Wiki", "Search and read the company wiki."],
+      };
+      expect(shown(await make().check(undefined, 0, withCatalog))).toEqual(named);
+      // An unreachable catalog keeps the names matched before.
+      await catalog.close();
+      expect(shown(await make().check(undefined, 0, withCatalog))).toEqual(named);
+    } finally {
+      await catalog.close().catch(() => undefined);
+    }
+  });
+});
+
 describe("on, off, timeouts, removal", () => {
   it("switching off takes the entry and the token file away; the token stays in the store", async () => {
     const service = make();
@@ -289,12 +353,27 @@ describe("opencode.json it did not write", () => {
     await expect(stat(opencodeFile())).rejects.toThrow();
   });
 
+  it("judges the OpenCode on bb's own PATH, not the first one on the login shell's", async () => {
+    const personal = await fakeOpenCode("personal", "1.14.0");
+    const bundled = await fakeOpenCode("bundled", "2.2.5");
+    const service = new McpService({
+      dataDir: join(root, "data"),
+      store: openFileSecretStore(join(root, "store")),
+      env: { HOME: join(root, "home"), PATH: personal },
+      userHome: join(root, "home"),
+    });
+    const own = { ...config, serverEnvironment: { ...config.serverEnvironment, PATH: bundled } };
+    expect((await service.importConfig(pasted(), own)).status.configError).toBeNull();
+    expect(Object.keys((await readOpencode()).mcp.servers).sort()).toEqual(["tracker_cd34", "wiki_ab12"]);
+    // Another machine gets no bb PATH: its worker's own PATH is all there is, and the answer names what it found.
+    const elsewhere = await service.sync(config);
+    expect(elsewhere.configError).toContain("[mcp:opencode-1] The OpenCode on bb's PATH on this machine is 1.14.0");
+    expect(elsewhere.configError).toContain(join(personal, "opencode"));
+  });
+
   it("asks the OpenCode version again after an update to 2", async () => {
-    const bin = await mkdtempDir(join(root, "bin"));
-    const reported = join(root, "version.txt");
-    await writeFile(reported, "1.14.0\n");
-    await writeFile(join(bin, "opencode"), `#!/bin/sh\nread v < "${reported}"\necho "$v"\n`);
-    await chmod(join(bin, "opencode"), 0o755);
+    const bin = await fakeOpenCode("bin", "1.14.0");
+    const reported = join(bin, "version.txt");
     let now = 1_000_000;
     const service = new McpService({
       dataDir: join(root, "data"),

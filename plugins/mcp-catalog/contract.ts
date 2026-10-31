@@ -24,14 +24,21 @@ export const writeConfigSchema = z
     /** Seconds OpenCode waits for one tool call, unless a server has its own; 0 = OpenCode's default. */
     timeoutSec: z.number().int().min(0).max(600),
     /**
-     * The bb server's own OpenCode location variables, sent only to the bb
-     * server's own machine. bb starts host workers with a trimmed environment
-     * (HOME and PATH), while OpenCode and Fleet Kit see the full one; without
-     * these the plugin would write a different opencode.json.
+     * The bb server's own environment, sent only to the bb server's own
+     * machine. bb starts host workers with a trimmed environment and a PATH
+     * rebuilt with the login shell's entries first, while the server and Fleet
+     * Kit see bb's own. Without these the plugin would write a different
+     * opencode.json than Fleet Kit, or judge a different OpenCode.
      */
     serverEnvironment: z
-      .object({ OPENCODE_CONFIG_DIR: z.string().max(4000).optional(), XDG_CONFIG_HOME: z.string().max(4000).optional() })
+      .object({
+        OPENCODE_CONFIG_DIR: z.string().max(4000).optional(),
+        XDG_CONFIG_HOME: z.string().max(4000).optional(),
+        PATH: z.string().max(32_000).optional(),
+      })
       .strict(),
+    /** The template catalog that names servers ("" or absent: none). */
+    catalogUrl: z.string().max(2000).optional(),
     /** Development only (BB_MCP_CATALOG_ALLOW_HTTP=1 in bb's environment): plain http for local stubs. */
     allowHttp: z.boolean().optional(),
   })
@@ -59,7 +66,12 @@ export type Health = z.infer<typeof healthSchema>;
 
 export const serverViewSchema = z
   .object({
+    /** The id: the key under `mcp.servers` in opencode.json, and what OpenCode shows. */
     name: z.string(),
+    /** A name for people: the platform template's, else the server's own, else the id made readable. */
+    title: z.string(),
+    /** One line of what the server does, or null when nothing says. */
+    summary: z.string().nullable(),
     /** Host and path with id-like parts shortened (maskAddress); the full address never leaves the machine. */
     address: z.string(),
     enabled: z.boolean(),
@@ -124,16 +136,6 @@ export const catalogItemSchema = z
   .strict();
 export type CatalogItem = z.infer<typeof catalogItemSchema>;
 
-export const catalogSchema = z
-  .object({
-    items: z.array(catalogItemSchema),
-    fetchedAt: z.number().nullable(),
-    /** "[mcp:<code>] English text" when the catalog could not be read. */
-    error: z.string().nullable(),
-  })
-  .strict();
-export type Catalog = z.infer<typeof catalogSchema>;
-
 const config = writeConfigSchema;
 
 export const hostContract = defineRpcContract({
@@ -158,8 +160,4 @@ export const hostContract = defineRpcContract({
   },
   /** Write opencode.json again from the saved list, after a setting changed or a write failed. */
   sync: { input: z.object({ config }).strict(), output: statusSchema },
-  catalog: {
-    input: z.object({ url: z.string().max(2000), refresh: z.boolean().optional(), allowHttp: z.boolean().optional() }).strict(),
-    output: catalogSchema,
-  },
 });
