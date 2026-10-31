@@ -1,0 +1,112 @@
+// components/action-messages.ts — labels of the file actions, shared by every
+// surface that offers them (row menu, selection bar, background menu, toolbar,
+// title-bar overflow), so one action reads the same everywhere.
+import { defineMessages, pluralRu } from "../lib/i18n";
+
+export const actionMessages = defineMessages(
+  {
+    open: "Open",
+    download: "Download",
+    downloadZip: "Download as zip",
+    addToChat: "Add to chat",
+    extract: "Extract…",
+    cut: "Cut",
+    copy: "Copy",
+    paste: "Paste",
+    moveTo: "Move to…",
+    copyTo: "Copy to…",
+    rename: "Rename",
+    copyPath: "Copy path",
+    copyFolderPath: "Copy folder path",
+    setStartFolder: "Set as start folder",
+    bookmark: "Bookmark",
+    bookmarkFolder: "Bookmark this folder",
+    removeBookmark: "Remove bookmark",
+    properties: "Properties",
+    delete: "Delete",
+    newFolder: "New folder",
+    uploadFiles: "Upload files…",
+    selectAll: "Select all",
+    refresh: "Refresh",
+    showHidden: "Show hidden files",
+    collapseAll: "Collapse all folders",
+    hideHidden: "Hide hidden files",
+    showHiddenAction: "Show hidden files",
+    moreActions: "More actions",
+    upload: "Upload",
+    uploadFilesButton: "Upload files",
+    openThreadFolder: "Open this thread's workspace folder",
+    view: "View",
+    viewList: "List",
+    viewGallery: "Gallery",
+    sort: "Sort",
+    sortBy: "Sort by",
+    sortName: "Name",
+    sortSize: "Size",
+    sortModified: "Modified",
+    sortKind: "Kind",
+    ascending: "Ascending",
+    descending: "Descending",
+    language: "Language",
+    items: (count: number) => `${String(count)} ${count === 1 ? "item" : "items"}`,
+  },
+  {
+    open: "Открыть",
+    download: "Скачать",
+    downloadZip: "Скачать zip-архивом",
+    addToChat: "Добавить в чат",
+    extract: "Распаковать…",
+    cut: "Вырезать",
+    copy: "Копировать",
+    paste: "Вставить",
+    moveTo: "Переместить в…",
+    copyTo: "Копировать в…",
+    rename: "Переименовать",
+    copyPath: "Копировать путь",
+    copyFolderPath: "Копировать путь к папке",
+    setStartFolder: "Сделать стартовой папкой",
+    bookmark: "В закладки",
+    bookmarkFolder: "Добавить папку в закладки",
+    removeBookmark: "Убрать из закладок",
+    properties: "Свойства",
+    delete: "Удалить",
+    newFolder: "Новая папка",
+    uploadFiles: "Загрузить файлы…",
+    selectAll: "Выбрать всё",
+    refresh: "Обновить",
+    showHidden: "Показывать скрытые файлы",
+    collapseAll: "Свернуть все папки",
+    hideHidden: "Не показывать скрытые файлы",
+    showHiddenAction: "Показать скрытые файлы",
+    moreActions: "Ещё действия",
+    upload: "Загрузить",
+    uploadFilesButton: "Загрузить файлы",
+    openThreadFolder: "Открыть папку окружения этого треда",
+    view: "Вид",
+    viewList: "Список",
+    viewGallery: "Галерея",
+    sort: "Сортировка",
+    sortBy: "Сортировка",
+    sortName: "Имя",
+    sortSize: "Размер",
+    sortModified: "Дата изменения",
+    sortKind: "Тип",
+    ascending: "По возрастанию",
+    descending: "По убыванию",
+    language: "Язык",
+    items: (count) =>
+      `${String(count)} ${pluralRu(count, ["элемент", "элемента", "элементов"])}`,
+  },
+);
+
+type ActionMessages = (typeof actionMessages)["en"];
+
+/** Sort column labels, in the order the sort menus list them. */
+export function sortLabels(t: ActionMessages): Record<"name" | "size" | "modified" | "kind", string> {
+  return { name: t.sortName, size: t.sortSize, modified: t.sortModified, kind: t.sortKind };
+}
+
+/** View mode labels, in the order the view menu lists them. */
+export function viewLabels(t: ActionMessages): Record<"list" | "gallery", string> {
+  return { list: t.viewList, gallery: t.viewGallery };
+}

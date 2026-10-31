@@ -17,6 +17,27 @@ import {
 } from "./ui/dropdown-menu";
 import { CompactViewportOverrideProvider } from "./ui/hooks/use-compact-viewport";
 import { Icon } from "./ui/icon";
+import { defineMessages, pluralRu, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    selected: (count: number) => `${String(count)} selected`,
+    selectedItems: (count: number) => `${String(count)} selected ${count === 1 ? "item" : "items"}`,
+    actionsFor: (count: number) =>
+      `Actions for ${String(count)} selected ${count === 1 ? "item" : "items"}`,
+    actions: "Actions",
+    clearSelection: "Clear selection",
+  },
+  {
+    selected: (count) => `Выбрано: ${String(count)}`,
+    selectedItems: (count) =>
+      `${pluralRu(count, ["Выбран", "Выбрано", "Выбрано"])} ${String(count)} ${pluralRu(count, ["элемент", "элемента", "элементов"])}`,
+    actionsFor: (count) =>
+      `Действия с ${String(count)} ${pluralRu(count, ["выбранным элементом", "выбранными элементами", "выбранными элементами"])}`,
+    actions: "Действия",
+    clearSelection: "Снять выделение",
+  },
+);
 
 export interface SelectionActionBarProps extends SelectedEntryActionsProps {
   onClear: () => void;
@@ -24,8 +45,8 @@ export interface SelectionActionBarProps extends SelectedEntryActionsProps {
 
 export function SelectionActionBar({ onClear, ...actionProps }: SelectionActionBarProps) {
   const model = selectedEntryActionModel(actionProps);
+  const t = useMessages(messages);
   const count = actionProps.entries.length;
-  const itemWord = count === 1 ? "item" : "items";
 
   return (
     <div
@@ -33,7 +54,7 @@ export function SelectionActionBar({ onClear, ...actionProps }: SelectionActionB
       className="flex min-h-12 items-center gap-2 border-b border-border bg-surface-selected px-3 py-1.5"
     >
       <span className="min-w-0 flex-1 truncate text-sm font-medium" aria-live="polite">
-        {String(count)} selected
+        {t.selected(count)}
       </span>
 
       {/* This surface exists for touch use. Force the responsive menu into its
@@ -45,16 +66,16 @@ export function SelectionActionBar({ onClear, ...actionProps }: SelectionActionB
               type="button"
               variant="outline"
               size="sm"
-              aria-label={`Actions for ${String(count)} selected ${itemWord}`}
+              aria-label={t.actionsFor(count)}
             >
               <Icon name="MoreHorizontal" aria-hidden="true" />
-              Actions
+              {t.actions}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
             className="w-64"
-            mobileTitle={`${String(count)} selected ${itemWord}`}
+            mobileTitle={t.selectedItems(count)}
             data-testid="fm-selection-menu"
           >
             <DropdownMenuLabel className="truncate">{model.label}</DropdownMenuLabel>
@@ -86,7 +107,7 @@ export function SelectionActionBar({ onClear, ...actionProps }: SelectionActionB
         variant="ghost"
         size="icon"
         className="size-9 shrink-0"
-        aria-label="Clear selection"
+        aria-label={t.clearSelection}
         onClick={onClear}
       >
         <Icon name="X" aria-hidden="true" />

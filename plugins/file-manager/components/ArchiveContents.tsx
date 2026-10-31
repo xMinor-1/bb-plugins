@@ -38,6 +38,72 @@ import { useFmRpc } from "../lib/fm-rpc";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Icon, type IconName } from "./ui/icon";
+import { defineMessages, getLang, intlLocale, messagesNow, pluralRu, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    reading: "Reading the archive…",
+    unsupported: "Can't look inside this archive here",
+    readFailed: "Could not read this archive",
+    files: (count: number, digits: string) => `${digits} ${count === 1 ? "file" : "files"}`,
+    folders: (count: number, digits: string) => `${digits} ${count === 1 ? "folder" : "folders"}`,
+    damaged: (shown: string, problem: string) =>
+      `This archive looks damaged or cut short — showing the ${shown} entries that could be read.${problem === "" ? "" : ` (${problem})`}`,
+    tooSlow: (total: string) =>
+      `Reading this archive took too long, so the listing stopped after ${total} entries — the counts above cover only that part.`,
+    tooLarge: (shown: string, total: string) =>
+      `This archive is too large to count in full — showing the first ${shown} entries; the counts above cover the first ${total}.`,
+    truncated: (shown: string, total: string) => `Showing the first ${shown} of ${total} entries.`,
+    uncompressed: (size: string) => `${size} uncompressed`,
+    archiveSize: (size: string) => `${size} archive`,
+    encrypted: (digits: string) => `${digits} encrypted`,
+    extract: "Extract…",
+    empty: "This archive is empty.",
+    name: "Name",
+    size: "Size",
+    modified: "Modified",
+    contents: "Archive contents",
+    capped: (count: number) => `Showing the first ${String(count)} rows. Collapse a folder to see more.`,
+    hardLinkTitle: (path: string, target: string) => `${path} is a hard link to ${target}`,
+    hardLinkTo: "hard link to ",
+    targetUnknown: "(target not recorded)",
+    encryptedLabel: "Encrypted",
+  },
+  {
+    reading: "Читаю архив…",
+    unsupported: "Здесь не заглянуть внутрь этого архива",
+    readFailed: "Не удалось прочитать архив",
+    files: (count, digits) => `${digits} ${pluralRu(count, ["файл", "файла", "файлов"])}`,
+    folders: (count, digits) => `${digits} ${pluralRu(count, ["папка", "папки", "папок"])}`,
+    damaged: (shown, problem) =>
+      `Архив, похоже, повреждён или оборван — показаны элементы, которые удалось прочитать: ${shown}.${problem === "" ? "" : ` (${problem})`}`,
+    tooSlow: (total) =>
+      `Архив читался слишком долго, список остановлен на ${total} — счётчики выше только про эту часть.`,
+    tooLarge: (shown, total) =>
+      `Архив слишком большой, чтобы посчитать его целиком — показаны первые ${shown}; счётчики выше про первые ${total}.`,
+    truncated: (shown, total) => `Показаны первые ${shown} из ${total}.`,
+    uncompressed: (size) => `${size} без сжатия`,
+    archiveSize: (size) => `архив ${size}`,
+    encrypted: (digits) => `зашифровано: ${digits}`,
+    extract: "Распаковать…",
+    empty: "Архив пуст.",
+    name: "Имя",
+    size: "Размер",
+    modified: "Изменён",
+    contents: "Содержимое архива",
+    capped: (count) =>
+      `Показаны первые ${String(count)} ${pluralRu(count, ["строка", "строки", "строк"])}. Сверните папку, чтобы увидеть остальное.`,
+    hardLinkTitle: (path, target) => `${path} — жёсткая ссылка на ${target}`,
+    hardLinkTo: "жёсткая ссылка на ",
+    targetUnknown: "(цель не записана)",
+    encryptedLabel: "Зашифрован",
+  },
+);
+
+/** Digits grouped for the interface language. */
+function digits(count: number): string {
+  return count.toLocaleString(intlLocale(getLang()));
+}
 
 type ListingState =
   | { status: "loading" }
@@ -69,6 +135,7 @@ function Placeholder({ children, testId }: { children: React.ReactNode; testId: 
 }
 
 export function ArchiveContents({ path, onExtract, className }: ArchiveContentsProps) {
+  const t = useMessages(messages);
   const rpc = useFmRpc();
   const [state, setState] = useState<ListingState>({ status: "loading" });
 
@@ -98,12 +165,12 @@ export function ArchiveContents({ path, onExtract, className }: ArchiveContentsP
 
   let body: React.ReactNode;
   if (state.status === "loading") {
-    body = <Placeholder testId="fm-archive-loading">Reading the archive…</Placeholder>;
+    body = <Placeholder testId="fm-archive-loading">{t.reading}</Placeholder>;
   } else if (state.status === "failed") {
     body = (
       <Placeholder testId="fm-archive-error">
         <p className="font-medium text-foreground">
-          {state.unsupported ? "Can't look inside this archive here" : "Could not read this archive"}
+          {state.unsupported ? t.unsupported : t.readFailed}
         </p>
         <p className="break-words">{state.message}</p>
       </Placeholder>
@@ -128,8 +195,8 @@ export function ArchiveContents({ path, onExtract, className }: ArchiveContentsP
 /* The listing itself                                                  */
 /* ------------------------------------------------------------------ */
 
-function countText(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
+function countText(count: number, kind: "files" | "folders"): string {
+  return messagesNow(messages)[kind](count, digits(count));
 }
 
 /**
@@ -138,24 +205,23 @@ function countText(count: number, singular: string, plural = `${singular}s`): st
  * counts themselves are lower bounds, that is the thing to say.
  */
 function noteFor(listing: ArchiveListing): { text: string; warning: boolean } | null {
-  const shown = listing.entries.length.toLocaleString();
+  const t = messagesNow(messages);
+  const shown = digits(listing.entries.length);
   switch (listing.stoppedBy) {
     case "damaged":
       return {
-        text: `This archive looks damaged or cut short — showing the ${shown} entries that could be read.${
-          listing.problem === null ? "" : ` (${listing.problem})`
-        }`,
+        text: t.damaged(shown, listing.problem ?? ""),
         warning: true,
       };
     case "time":
       return {
-        text: `Reading this archive took too long, so the listing stopped after ${listing.totalEntries.toLocaleString()} entries — the counts above cover only that part.`,
+        text: t.tooSlow(digits(listing.totalEntries)),
         warning: true,
       };
     case "output":
     case "entries":
       return {
-        text: `This archive is too large to count in full — showing the first ${shown} entries; the counts above cover the first ${listing.totalEntries.toLocaleString()}.`,
+        text: t.tooLarge(shown, digits(listing.totalEntries)),
         warning: true,
       };
     case null:
@@ -163,7 +229,7 @@ function noteFor(listing: ArchiveListing): { text: string; warning: boolean } | 
   }
   if (listing.truncated) {
     return {
-      text: `Showing the first ${shown} of ${listing.totalEntries.toLocaleString()} entries.`,
+      text: t.truncated(shown, digits(listing.totalEntries)),
       warning: false,
     };
   }
@@ -193,6 +259,7 @@ function ListingView({
   listing: ArchiveListing;
   onExtract: (() => void) | undefined;
 }) {
+  const t = useMessages(messages);
   const tree = useMemo(() => buildArchiveTree(listing.entries), [listing]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => initialExpanded(tree));
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -295,22 +362,22 @@ function ListingView({
         data-testid="fm-archive-summary"
         className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-3 py-2 text-xs text-muted-foreground"
       >
-        <span className="tabular-nums">{countText(listing.fileCount, "file")}</span>
+        <span className="tabular-nums">{countText(listing.fileCount, "files")}</span>
         <span aria-hidden="true">·</span>
-        <span className="tabular-nums">{countText(listing.directoryCount, "folder")}</span>
+        <span className="tabular-nums">{countText(listing.directoryCount, "folders")}</span>
         <span aria-hidden="true">·</span>
         <span className="tabular-nums" title={formatExactBytes(listing.uncompressedBytes)}>
-          {formatBytes(listing.uncompressedBytes)} uncompressed
+          {t.uncompressed(formatBytes(listing.uncompressedBytes))}
         </span>
         <span aria-hidden="true">·</span>
         <span className="tabular-nums" title={formatExactBytes(listing.archiveSizeBytes)}>
-          {formatBytes(listing.archiveSizeBytes)} archive
+          {t.archiveSize(formatBytes(listing.archiveSizeBytes))}
         </span>
         {listing.encryptedCount > 0 ? (
           <span className="flex items-center gap-1 tabular-nums" data-testid="fm-archive-encrypted">
             <span aria-hidden="true">·</span>
             <Icon name="Lock" className="size-3.5" aria-hidden="true" />
-            {listing.encryptedCount.toLocaleString()} encrypted
+            {t.encrypted(digits(listing.encryptedCount))}
           </span>
         ) : null}
         <span className="flex-1" />
@@ -324,7 +391,7 @@ function ListingView({
             onClick={onExtract}
           >
             <Icon name="ArchiveRestore" className="size-4" aria-hidden="true" />
-            Extract…
+            {t.extract}
           </Button>
         ) : null}
       </div>
@@ -343,7 +410,7 @@ function ListingView({
 
       {rows.length === 0 ? (
         listing.partial ? null : (
-          <Placeholder testId="fm-archive-empty">This archive is empty.</Placeholder>
+          <Placeholder testId="fm-archive-empty">{t.empty}</Placeholder>
         )
       ) : (
         <div className="min-h-0 flex-1 overflow-auto" data-testid="fm-archive-scroll">
@@ -351,13 +418,13 @@ function ListingView({
             aria-hidden="true"
             className="sticky top-0 z-10 flex h-8 items-center gap-2 border-b border-border bg-background px-3 text-xs font-medium text-muted-foreground"
           >
-            <span className="min-w-0 flex-1 pl-6">Name</span>
-            <span className="w-20 shrink-0 text-right">Size</span>
-            <span className="hidden w-28 shrink-0 @md:block">Modified</span>
+            <span className="min-w-0 flex-1 pl-6">{t.name}</span>
+            <span className="w-20 shrink-0 text-right">{t.size}</span>
+            <span className="hidden w-28 shrink-0 @md:block">{t.modified}</span>
           </div>
           <div
             role="tree"
-            aria-label="Archive contents"
+            aria-label={t.contents}
             tabIndex={0}
             aria-activedescendant={
               focusOnScreen && focusedId !== null ? `${baseId}-${focusedId}` : undefined
@@ -384,7 +451,7 @@ function ListingView({
           </div>
           {capped ? (
             <p className="px-3 py-2 text-xs text-muted-foreground" data-testid="fm-archive-capped">
-              Showing the first {String(MAX_TREE_ROWS)} rows. Collapse a folder to see more.
+              {t.capped(MAX_TREE_ROWS)}
             </p>
           ) : null}
         </div>
@@ -414,6 +481,7 @@ const ArchiveTreeRow = memo(function ArchiveTreeRow({
   onToggle,
   onFocusRow,
 }: ArchiveTreeRowProps) {
+  const t = useMessages(messages);
   const { node, depth, expanded } = row;
   const folder = node.kind === "directory";
   const entry = node.entry;
@@ -434,7 +502,9 @@ const ArchiveTreeRow = memo(function ArchiveTreeRow({
       data-kind={node.kind}
       title={
         link && entry?.linkTarget
-          ? `${node.path} ${entry.kind === "hardlink" ? "is a hard link to" : "→"} ${entry.linkTarget}`
+          ? entry.kind === "hardlink"
+            ? t.hardLinkTitle(node.path, entry.linkTarget)
+            : `${node.path} → ${entry.linkTarget}`
           : node.path
       }
       className={cn(
@@ -474,14 +544,14 @@ const ArchiveTreeRow = memo(function ArchiveTreeRow({
             className="min-w-0 truncate text-xs text-muted-foreground"
             data-testid="fm-archive-link"
           >
-            {entry?.kind === "hardlink" ? "hard link to " : "→ "}
+            {entry?.kind === "hardlink" ? t.hardLinkTo : "→ "}
             {entry?.linkTarget === null || entry?.linkTarget === undefined
-              ? "(target not recorded)"
+              ? t.targetUnknown
               : displayName(entry.linkTarget)}
           </span>
         ) : null}
         {entry?.encrypted ? (
-          <Icon name="Lock" className="size-3.5 shrink-0 text-muted-foreground" aria-label="Encrypted" />
+          <Icon name="Lock" className="size-3.5 shrink-0 text-muted-foreground" aria-label={t.encryptedLabel} />
         ) : null}
       </div>
       <span

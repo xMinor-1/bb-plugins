@@ -7,6 +7,7 @@
 // *domain* code therefore means splitting the message on the first ": " and
 // checking the prefix against the frozen enum — that is `parseRpcError`.
 import { errorCodeSchema, type FileManagerErrorCode } from "../contract";
+import { defineMessages, messagesNow, pluralRu } from "./i18n";
 
 const ERROR_CODES: ReadonlySet<string> = new Set<string>(errorCodeSchema.options);
 
@@ -124,43 +125,85 @@ export function toFileManagerError(error: unknown): FileManagerRpcError {
   return new FileManagerRpcError(parseRpcError(error), { cause: error });
 }
 
-const CODE_TEXT: Record<FileManagerErrorCode, string> = {
-  invalid_path: "That path is not valid.",
-  invalid_name: "That name is not allowed.",
-  path_escape: "That path is outside the file manager root.",
-  not_found: "That item no longer exists.",
-  not_a_directory: "That path is not a folder.",
-  not_a_file: "That path is not a file.",
-  exists: "An item with that name already exists.",
-  not_empty: "That folder is not empty.",
-  permission_denied: "Permission denied.",
-  cross_device: "That move crossed a filesystem boundary and failed.",
-  destination_inside_source: "A folder cannot be moved into itself.",
-  unsupported_archive: "That archive format is not supported.",
-  archive_failed: "Extraction failed.",
-  upload_not_found: "The upload session expired.",
-  upload_busy: "Another chunk of this upload is still in flight.",
-  offset_mismatch: "The upload lost sync and has to resume.",
-  size_mismatch: "The file changed while it was uploading.",
-  no_space: "There is not enough free disk space.",
-  io_error: "The filesystem reported an error.",
-  unsupported: "That operation is not supported.",
-};
+const CODE_TEXT = defineMessages(
+  {
+    invalid_path: "That path is not valid.",
+    invalid_name: "That name is not allowed.",
+    path_escape: "That path is outside the file manager root.",
+    not_found: "That item no longer exists.",
+    not_a_directory: "That path is not a folder.",
+    not_a_file: "That path is not a file.",
+    exists: "An item with that name already exists.",
+    not_empty: "That folder is not empty.",
+    permission_denied: "Permission denied.",
+    cross_device: "That move crossed a filesystem boundary and failed.",
+    destination_inside_source: "A folder cannot be moved into itself.",
+    unsupported_archive: "That archive format is not supported.",
+    archive_failed: "Extraction failed.",
+    upload_not_found: "The upload session expired.",
+    upload_busy: "Another chunk of this upload is still in flight.",
+    offset_mismatch: "The upload lost sync and has to resume.",
+    size_mismatch: "The file changed while it was uploading.",
+    no_space: "There is not enough free disk space.",
+    io_error: "The filesystem reported an error.",
+    unsupported: "That operation is not supported.",
+  } satisfies Record<FileManagerErrorCode, string>,
+  {
+    invalid_path: "Недопустимый путь.",
+    invalid_name: "Такое имя нельзя использовать.",
+    path_escape: "Этот путь вне корневой папки файлового менеджера.",
+    not_found: "Этого больше нет.",
+    not_a_directory: "Это не папка.",
+    not_a_file: "Это не файл.",
+    exists: "Элемент с таким именем уже есть.",
+    not_empty: "Папка не пуста.",
+    permission_denied: "Нет доступа.",
+    cross_device: "Перемещение между файловыми системами не удалось.",
+    destination_inside_source: "Папку нельзя переместить в саму себя.",
+    unsupported_archive: "Этот формат архива не поддерживается.",
+    archive_failed: "Не удалось распаковать.",
+    upload_not_found: "Сеанс загрузки истёк.",
+    upload_busy: "Предыдущая часть этой загрузки ещё передаётся.",
+    offset_mismatch: "Загрузка сбилась и возобновится.",
+    size_mismatch: "Файл изменился во время загрузки.",
+    no_space: "Не хватает места на диске.",
+    io_error: "Файловая система сообщила об ошибке.",
+    unsupported: "Эта операция не поддерживается.",
+  },
+);
+
+const messages = defineMessages(
+  {
+    fallback: "Something went wrong.",
+    batchFailed: (count: number, action: string) => `${String(count)} items failed to ${action}.`,
+  },
+  {
+    fallback: "Что-то пошло не так.",
+    batchFailed: (count, action) =>
+      `Не удалось ${action} ${String(count)} ${pluralRu(count, ["элемент", "элемента", "элементов"])}.`,
+  },
+);
+
+/** Verbs for `batchFailureText`, keyed by the operation the panel ran. */
+const ACTION_VERBS = defineMessages(
+  { move: "move", copy: "copy", delete: "delete", operation: "process" } as Record<string, string>,
+  { move: "переместить", copy: "скопировать", delete: "удалить", operation: "обработать" },
+);
 
 /** One short, user-facing sentence for a domain code. */
 export function describeErrorCode(code: FileManagerErrorCode): string {
-  return CODE_TEXT[code];
+  return messagesNow(CODE_TEXT)[code];
 }
 
 /**
  * Toast text for a rejection: the friendly sentence when the code is known,
  * the server's own message otherwise.
  */
-export function errorToastText(error: unknown, fallback = "Something went wrong."): string {
+export function errorToastText(error: unknown, fallback?: string): string {
   const parsed = parseRpcError(error);
   if (parsed.code !== null) return describeErrorCode(parsed.code);
   const message = parsed.message.trim();
-  return message === "" ? fallback : message;
+  return message === "" ? (fallback ?? messagesNow(messages).fallback) : message;
 }
 
 /** Alias kept because "toast text" is how §8 names this helper. */
@@ -186,7 +229,9 @@ export function batchFailureText(
   const name = baseNameOf(first.path);
   const reason = describeErrorCode(first.code);
   if (failed.length === 1) return `${name}: ${reason}`;
-  return `${failed.length} items failed to ${action}. ${name}: ${reason}`;
+  const verbs = messagesNow(ACTION_VERBS);
+  const verb = verbs[action] ?? verbs.operation ?? action;
+  return `${messagesNow(messages).batchFailed(failed.length, verb)} ${name}: ${reason}`;
 }
 
 /** Local basename so this module stays free of path-module imports. */

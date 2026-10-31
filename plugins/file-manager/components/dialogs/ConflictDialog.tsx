@@ -5,6 +5,27 @@
 // `overwrite`, Keep both with `rename`, Skip drops them.
 import type { FileManagerErrorCode } from "../../contract";
 import { Button } from "../ui/button";
+import { defineMessages, pluralRu, useMessages } from "../../lib/i18n";
+
+const messages = defineMessages(
+  {
+    oneExists: "An item with that name already exists",
+    manyExist: (count: number) => `${String(count)} items already exist`,
+    operationTo: (operation: string, dir: string) => `${operation} to ${dir}`,
+    skip: "Skip",
+    keepBoth: "Keep both",
+    replace: "Replace",
+  },
+  {
+    oneExists: "Элемент с таким именем уже есть",
+    manyExist: (count) =>
+      `${String(count)} ${pluralRu(count, ["элемент уже есть", "элемента уже есть", "элементов уже есть"])}`,
+    operationTo: (operation, dir) => `${operation} в ${dir}`,
+    skip: "Пропустить",
+    keepBoth: "Оставить оба",
+    replace: "Заменить",
+  },
+);
 import {
   Dialog,
   DialogContent,
@@ -47,6 +68,7 @@ export function ConflictDialog({
   operation,
   onResolve,
 }: ConflictDialogProps) {
+  const t = useMessages(messages);
   if (conflicts.length === 0) return null;
 
   return (
@@ -59,11 +81,11 @@ export function ConflictDialog({
           <DialogTitle className="flex items-center gap-2">
             <Icon name="AlertTriangle" className="size-4" aria-hidden="true" />
             {conflicts.length === 1
-              ? "An item with that name already exists"
-              : `${String(conflicts.length)} items already exist`}
+              ? t.oneExists
+              : t.manyExist(conflicts.length)}
           </DialogTitle>
           <DialogDescription className="truncate">
-            {operation} to {destinationDir}
+            {t.operationTo(operation, destinationDir)}
           </DialogDescription>
         </DialogHeader>
 
@@ -84,7 +106,7 @@ export function ConflictDialog({
               onOpenChange(false);
             }}
           >
-            Skip
+            {t.skip}
           </Button>
           <Button
             type="button"
@@ -94,7 +116,7 @@ export function ConflictDialog({
               onOpenChange(false);
             }}
           >
-            Keep both
+            {t.keepBoth}
           </Button>
           <Button
             type="button"
@@ -104,7 +126,7 @@ export function ConflictDialog({
               onOpenChange(false);
             }}
           >
-            Replace
+            {t.replace}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -8,6 +8,8 @@ Everything the panel touches lives under one hard root — the home directory of
 the user running bb — and
 every path is re-resolved and clamped on the server before a single byte moves.
 
+Interface: English and Russian — the EN | RU switch sits in the panel's title bar, or in the ⋯ menu of a File Manager tab.
+
 ![Folders open in place; Space shows a Markdown file rendered and a source file highlighted, in a panel beside the list](../../media/file-manager/browse.gif)
 
 ## What it does

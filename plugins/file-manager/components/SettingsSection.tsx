@@ -28,17 +28,71 @@ import {
   isExternalSettingChange,
   saveStartFolder,
   startFolderLabel,
+  startFolderMessages,
   startFolderNotInUse,
-  START_FOLDER_SAVED_TEXT,
-  START_FOLDER_SAVE_FAILED_TEXT,
 } from "../lib/start-folder";
+import { defineMessages, messagesNow, useMessages } from "../lib/i18n";
 import { FolderPickerDialog } from "./dialogs/FolderPickerDialog";
 import { Button } from "./ui/button";
 import { Icon } from "./ui/icon";
 
 type PanelState = RpcOutput<"getState">;
 
+const messages = defineMessages(
+  {
+    loadFailed: "Could not read the File Manager settings.",
+    loading: "Loading…",
+    unavailable: "Unavailable",
+    browse: "Browse…",
+    reset: "Reset",
+    resetTo: (root: string) => `Reset to ${root}`,
+    forgotten: (label: string) => `Forgotten. The panel will open in ${label} next time.`,
+    forget: "Forget the remembered folder",
+    opensHere: "The panel opens here.",
+    restoreOn:
+      "Reopening the last folder is on, so this is where the panel opens the first time and whenever the last folder is gone.",
+    restoreOff: "Reopening the last folder is off, so the panel always opens here.",
+    threadFolderOn:
+      " Opening the thread's project folder is on, so a File Manager tab inside a thread starts in that thread's folder instead.",
+    staysInside: (root: string) => ` Everything stays inside ${root}.`,
+    tryAgain: "Try again",
+    saving: "Saving…",
+    saved: "Saved",
+    notInUseBefore: "The saved start folder ",
+    notInUseAfter: (root: string) => ` is not in use: the panel opens ${root}.`,
+    pickerTitle: "Start folder",
+    pickerDescription: "The panel will open in the folder you choose here.",
+    useFolder: "Use this folder",
+  },
+  {
+    loadFailed: "Не удалось прочитать настройки файлового менеджера.",
+    loading: "Загрузка…",
+    unavailable: "Недоступно",
+    browse: "Выбрать…",
+    reset: "Сбросить",
+    resetTo: (root) => `Сбросить на ${root}`,
+    forgotten: (label) => `Последняя папка забыта. В следующий раз откроется ${label}.`,
+    forget: "Забыть последнюю папку",
+    opensHere: "Панель открывается здесь.",
+    restoreOn:
+      "Открытие последней папки включено: здесь панель откроется в первый раз и когда последней папки уже нет.",
+    restoreOff: "Открытие последней папки выключено: панель всегда открывается здесь.",
+    threadFolderOn:
+      " Открытие папки проекта треда включено: вкладка файлового менеджера внутри треда начинает с папки этого треда.",
+    staysInside: (root) => ` Всё остаётся внутри ${root}.`,
+    tryAgain: "Повторить",
+    saving: "Сохраняется…",
+    saved: "Сохранено",
+    notInUseBefore: "Сохранённая стартовая папка ",
+    notInUseAfter: (root) => ` не используется: панель открывает ${root}.`,
+    pickerTitle: "Стартовая папка",
+    pickerDescription: "Панель будет открываться в папке, которую вы здесь выберете.",
+    useFolder: "Выбрать эту папку",
+  },
+);
+
 export function SettingsSection(_props: PluginSettingsSectionProps) {
+  const t = useMessages(messages);
   const rpc = useFmRpc();
   /**
    * A change signal, never something to render.
@@ -137,7 +191,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
       setLoadError(null);
     } catch (failure) {
       if (superseded()) return;
-      setLoadError(errorToastText(failure, "Could not read the File Manager settings."));
+      setLoadError(errorToastText(failure, messagesNow(messages).loadFailed));
     }
   }, [rpc]);
 
@@ -239,10 +293,10 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
           // the answer carries. Leaving it up would hide the save behind a
           // stale failure and keep a retry on screen for nothing.
           setLoadError(null);
-          toast.success(START_FOLDER_SAVED_TEXT);
+          toast.success(messagesNow(startFolderMessages).saved);
         } catch (failure) {
           if (!activeRef.current || saveGenRef.current !== generation) return;
-          setSaveError(errorToastText(failure, START_FOLDER_SAVE_FAILED_TEXT));
+          setSaveError(errorToastText(failure, messagesNow(startFolderMessages).saveFailed));
         } finally {
           if (saveGenRef.current === generation) {
             savingRef.current = false;
@@ -265,7 +319,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
           />
           {state === null || startFolder === null ? (
             <span className="text-sm text-muted-foreground">
-              {loadError === null ? "Loading…" : "Unavailable"}
+              {loadError === null ? t.loading : t.unavailable}
             </span>
           ) : (
             <>
@@ -300,7 +354,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
             }}
           >
             <Icon name="FolderOpen" className="size-4" aria-hidden="true" />
-            Browse…
+            {t.browse}
           </Button>
           <Button
             type="button"
@@ -312,7 +366,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
               if (state !== null) choose(state.root);
             }}
           >
-            {root === null ? "Reset" : `Reset to ${root}`}
+            {root === null ? t.reset : t.resetTo(root)}
           </Button>
           {/* Pure client-side: no RPC, no settings write. The memory is a
               trace in this browser profile, not a stored decision (§1.9). */}
@@ -327,14 +381,17 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
               forgetLastFolder();
               setHasMemory(false);
               toast.success(
-                `Forgotten. The panel will open in ${startFolderLabel(
-                  state.startFolder,
-                  state.root,
-                )} next time.`,
+                messagesNow(messages).forgotten(
+                  startFolderLabel(
+                    state.startFolder,
+                    state.root,
+                    messagesNow(startFolderMessages).homeInSentence,
+                  ),
+                ),
               );
             }}
           >
-            Forget the remembered folder
+            {t.forget}
           </Button>
         </div>
       </div>
@@ -348,17 +405,17 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
           data-testid="fm-settings-open-rule"
         >
           {state === null
-            ? "The panel opens here."
+            ? t.opensHere
             : state.preferences.restoreLastFolder
-              ? "Reopening the last folder is on, so this is where the panel opens the first time and whenever the last folder is gone."
-              : "Reopening the last folder is off, so the panel always opens here."}
+              ? t.restoreOn
+              : t.restoreOff}
           {/* The thread-folder toggle outranks both of the rules above, but
               only on a thread's panel tab — saying so here is the only place
               the two settings are seen together. */}
           {state !== null && state.preferences.openThreadWorkspace
-            ? " Opening the thread's project folder is on, so a File Manager tab inside a thread starts in that thread's folder instead."
+            ? t.threadFolderOn
             : null}
-          {root === null ? null : ` Everything stays inside ${root}.`}
+          {root === null ? null : t.staysInside(root)}
         </p>
         <div className="flex shrink-0 items-center gap-3">
           {loadError !== null ? (
@@ -377,7 +434,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
                 data-testid="fm-settings-retry"
                 onClick={() => refresh()}
               >
-                Try again
+                {t.tryAgain}
               </Button>
             </>
           ) : saveError !== null ? (
@@ -386,7 +443,7 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
             </span>
           ) : (
             <span className="text-xs text-muted-foreground" role="status">
-              {saving ? "Saving…" : state === null ? "Loading…" : "Saved"}
+              {saving ? t.saving : state === null ? t.loading : t.saved}
             </span>
           )}
         </div>
@@ -398,8 +455,9 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
           same announcement is noise. */}
       {notInUse === null || root === null ? null : (
         <p className="text-xs leading-relaxed text-warning-text" data-testid="fm-settings-fallback">
-          The saved start folder <span className="font-mono">{notInUse}</span> is not in use: the
-          panel opens {root}.
+          {t.notInUseBefore}
+          <span className="font-mono">{notInUse}</span>
+          {t.notInUseAfter(root)}
         </p>
       )}
 
@@ -415,12 +473,12 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
       {pickerStart === null || state === null ? null : (
         <FolderPickerDialog
           open={pickerOpen}
-          title="Start folder"
-          description="The panel will open in the folder you choose here."
+          title={t.pickerTitle}
+          description={t.pickerDescription}
           initialPath={pickerStart}
           root={state.root}
           showHidden={state.preferences.showHiddenFiles}
-          confirmLabel="Use this folder"
+          confirmLabel={t.useFolder}
           onOpenChange={setPickerOpen}
           onChoose={choose}
         />

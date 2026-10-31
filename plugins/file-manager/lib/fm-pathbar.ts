@@ -24,6 +24,7 @@ import {
   rootPhrase,
   toAbsolute,
 } from "./fm-paths";
+import { defineMessages, messagesNow } from "./i18n";
 
 export type PathInputResult =
   /** Nothing typed: close the bar and change nothing. */
@@ -40,17 +41,42 @@ export interface PathInputContext {
   currentPath: string;
 }
 
-export const PATH_REMOTE_MESSAGE = "That looks like a path on another computer.";
-export const PATH_SCHEME_MESSAGE = "Only paths on this computer can be opened here.";
-export const PATH_INVALID_MESSAGE = "That path is not valid.";
+const messages = defineMessages(
+  {
+    remote: "That looks like a path on another computer.",
+    scheme: "Only paths on this computer can be opened here.",
+    invalid: "That path is not valid.",
+    windows: (root: string) => `That looks like a Windows path. This panel opens paths under ${root}.`,
+    outside: (root: string) => `That path is outside ${root}.`,
+  },
+  {
+    remote: "Похоже, это путь на другом компьютере.",
+    scheme: "Здесь открываются только пути на этом компьютере.",
+    invalid: "Недопустимый путь.",
+    windows: (root) => `Похоже, это путь Windows. Панель открывает пути внутри ${root}.`,
+    outside: (root) => `Этот путь вне ${root}.`,
+  },
+);
+
+export function pathRemoteMessage(): string {
+  return messagesNow(messages).remote;
+}
+
+export function pathSchemeMessage(): string {
+  return messagesNow(messages).scheme;
+}
+
+export function pathInvalidMessage(): string {
+  return messagesNow(messages).invalid;
+}
 
 /** No literal root path in user-facing text — `rootPhrase` is the only source. */
 export function windowsPathMessage(root: string = getClientRoot()): string {
-  return `That looks like a Windows path. This panel opens paths under ${rootPhrase(root)}.`;
+  return messagesNow(messages).windows(rootPhrase(root));
 }
 
 export function outsideRootMessage(root: string = getClientRoot()): string {
-  return `That path is outside ${rootPhrase(root)}.`;
+  return messagesNow(messages).outside(rootPhrase(root));
 }
 
 /* ------------------------------------------------------------------ */
@@ -82,7 +108,7 @@ function decodeFileUrl(value: string): Cleaned {
     const afterAuthority = rest.indexOf("/", 2);
     const authority = afterAuthority === -1 ? rest.slice(2) : rest.slice(2, afterAuthority);
     if (authority !== "" && authority.toLowerCase() !== "localhost") {
-      return { kind: "refused", message: PATH_REMOTE_MESSAGE };
+      return { kind: "refused", message: pathRemoteMessage() };
     }
     path = afterAuthority === -1 ? "" : rest.slice(afterAuthority);
   }
@@ -91,7 +117,7 @@ function decodeFileUrl(value: string): Cleaned {
   try {
     path = decodeURIComponent(path);
   } catch {
-    return { kind: "refused", message: PATH_INVALID_MESSAGE };
+    return { kind: "refused", message: pathInvalidMessage() };
   }
   if (path === "") return { kind: "empty" };
   return { kind: "value", value: path };
@@ -135,7 +161,7 @@ function cleanup(raw: string, root: string): Cleaned {
   const scheme = SCHEME.exec(value);
   if (scheme !== null) {
     if (scheme[1]?.toLowerCase() !== "file") {
-      return { kind: "refused", message: PATH_SCHEME_MESSAGE };
+      return { kind: "refused", message: pathSchemeMessage() };
     }
     const decoded = decodeFileUrl(value);
     if (decoded.kind !== "value") return decoded;
@@ -154,7 +180,7 @@ function cleanup(raw: string, root: string): Cleaned {
   // 6. Control characters and NUL. `src/root.ts#validateName` would refuse
   //    them anyway; there is no reason to spend a round trip learning that.
   if (CONTROL_CHARS.test(value)) {
-    return { kind: "refused", message: PATH_INVALID_MESSAGE };
+    return { kind: "refused", message: pathInvalidMessage() };
   }
 
   if (value === "") return { kind: "empty" };

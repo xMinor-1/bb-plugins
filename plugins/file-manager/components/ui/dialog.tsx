@@ -19,6 +19,14 @@ import {
   preventOverlayTriggerSelection,
 } from "./overlay-trigger.js";
 import { Icon } from "../../components/ui/icon.js";
+import { defineMessages, useMessages } from "../../lib/i18n";
+
+const messages = defineMessages({ close: "Close" }, { close: "Закрыть" });
+
+/** Screen-reader label of the corner close button, in the interface language. */
+function CloseLabel() {
+  return <span className="sr-only">{useMessages(messages).close}</span>;
+}
 
 // ---------------------------------------------------------------------------
 // Context — separate instance from DropdownMenu / Popover.
@@ -282,7 +290,7 @@ const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
           {children}
           <DialogPrimitive.Close className="absolute right-4 top-4 cursor-pointer rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-state-active data-[state=open]:text-foreground">
             <Icon name="X" className="h-4 w-4" />
-            <span className="sr-only">Close</span>
+            <CloseLabel />
           </DialogPrimitive.Close>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

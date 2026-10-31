@@ -18,6 +18,12 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { validateEntryName } from "./NewFolderDialog";
+import { defineMessages, useMessages } from "../../lib/i18n";
+
+const messages = defineMessages(
+  { title: "Rename", newName: "New name", cancel: "Cancel", rename: "Rename" },
+  { title: "Переименовать", newName: "Новое имя", cancel: "Отмена", rename: "Переименовать" },
+);
 
 export interface RenameDialogProps {
   open: boolean;
@@ -35,6 +41,7 @@ export function RenameDialog({
   existingNames,
   onSubmit,
 }: RenameDialogProps) {
+  const t = useMessages(messages);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -94,7 +101,7 @@ export function RenameDialog({
         data-testid="fm-rename-dialog"
       >
         <DialogHeader>
-          <DialogTitle>Rename</DialogTitle>
+          <DialogTitle>{t.title}</DialogTitle>
           <DialogDescription className="truncate">{entry.name}</DialogDescription>
         </DialogHeader>
         <form
@@ -106,7 +113,7 @@ export function RenameDialog({
           <Input
             ref={inputRef}
             value={name}
-            aria-label="New name"
+            aria-label={t.newName}
             aria-invalid={error !== null}
             className={cn("h-9", error !== null && "border-surface-destructive-border")}
             onChange={(event) => {
@@ -121,14 +128,14 @@ export function RenameDialog({
           )}
           <DialogFooter className="mt-4 gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t.cancel}
             </Button>
             <Button
               type="submit"
               className="bg-primary text-primary-foreground hover:bg-primary/90"
               disabled={busy}
             >
-              Rename
+              {t.rename}
             </Button>
           </DialogFooter>
         </form>

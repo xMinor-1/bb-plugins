@@ -12,8 +12,7 @@ import {
   saveStartFolder,
   startFolderLabel,
   startFolderNotInUse,
-  START_FOLDER_SAVED_TEXT,
-  START_FOLDER_SAVE_FAILED_TEXT,
+  startFolderMessages,
 } from "../../lib/start-folder";
 
 const ROOT = "/home/coder";
@@ -71,8 +70,8 @@ describe("saveStartFolder", () => {
   });
 
   it("keeps one wording for both surfaces", () => {
-    expect(START_FOLDER_SAVED_TEXT).toBe("Start folder saved");
-    expect(START_FOLDER_SAVE_FAILED_TEXT).toBe("Could not save the start folder.");
+    expect(startFolderMessages.en.saved).toBe("Start folder saved");
+    expect(startFolderMessages.en.saveFailed).toBe("Could not save the start folder.");
   });
 });
 

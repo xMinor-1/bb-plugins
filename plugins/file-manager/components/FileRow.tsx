@@ -15,6 +15,26 @@ import { Checkbox } from "./ui/checkbox";
 import { Icon, type IconName } from "./ui/icon";
 import { CONTROL_HOVER_TRANSITION } from "./ui/motion";
 import { TableCell, TableRow } from "./ui/table";
+import { defineMessages, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    outside: (name: string, root: string) => `${name} → outside ${root}`,
+    truncated: (name: string, count: number) => `${name} — showing the first ${String(count)} items`,
+    select: (name: string) => `Select ${name}`,
+    collapse: (name: string) => `Collapse ${name}`,
+    expand: (name: string) => `Expand ${name}`,
+    symlink: "Symbolic link",
+  },
+  {
+    outside: (name, root) => `${name} → вне ${root}`,
+    truncated: (name, count) => `${name} — показаны первые ${String(count)}`,
+    select: (name) => `Выбрать ${name}`,
+    collapse: (name) => `Свернуть ${name}`,
+    expand: (name) => `Развернуть ${name}`,
+    symlink: "Символическая ссылка",
+  },
+);
 
 /** Effective kind: a symlink is presented as what it points at. */
 export function effectiveKind(entry: FileEntry): FileEntry["kind"] {
@@ -114,6 +134,8 @@ function FileRowImpl({
   onRowDrop,
   onRowDragEnd,
 }: FileRowProps) {
+  // Each row subscribes itself: the memo would otherwise keep the old language.
+  const t = useMessages(messages);
   const directory = isDirectoryEntry(entry);
   const size = directory ? "—" : formatBytes(entry.sizeBytes);
   const indentPx = Math.min(depth, MAX_INDENT_DEPTH) * INDENT_STEP_PX;
@@ -121,9 +143,9 @@ function FileRowImpl({
   // `rootPhrase()` reads the root the panel published from `getState`; rows
   // only ever render after that bootstrap, so the memo never holds a stale one.
   const title = entry.escapesRoot
-    ? `${entry.name} → outside ${rootPhrase()}`
+    ? t.outside(entry.name, rootPhrase())
     : childrenTruncated
-      ? `${entry.name} — showing the first ${String(MAX_TREE_ROWS)} items`
+      ? t.truncated(entry.name, MAX_TREE_ROWS)
       : entry.name;
 
   return (
@@ -169,7 +191,7 @@ function FileRowImpl({
         <Checkbox
           checked={selected}
           tabIndex={-1}
-          aria-label={`Select ${entry.name}`}
+          aria-label={t.select(entry.name)}
           onCheckedChange={() => undefined}
         />
       </TableCell>
@@ -186,7 +208,7 @@ function FileRowImpl({
               data-testid="fm-chevron"
               data-fm-chevron={entry.path}
               aria-expanded={expanded}
-              aria-label={`${expanded ? "Collapse" : "Expand"} ${entry.name}`}
+              aria-label={expanded ? t.collapse(entry.name) : t.expand(entry.name)}
               className={cn(
                 "flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
                 "hover:bg-state-hover hover:text-foreground",
@@ -228,7 +250,7 @@ function FileRowImpl({
             <Icon
               name="ExternalLink"
               className="size-3 shrink-0 text-muted-foreground"
-              aria-label="Symbolic link"
+              aria-label={t.symlink}
             />
           ) : null}
         </div>

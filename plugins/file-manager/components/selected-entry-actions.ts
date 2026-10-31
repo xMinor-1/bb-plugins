@@ -6,6 +6,8 @@ import type { FileEntry } from "../contract";
 import { isViewableEntry } from "../lib/viewer";
 import { effectiveKind } from "./FileRow";
 import type { IconName } from "./ui/icon";
+import { actionMessages } from "./action-messages";
+import { messagesNow } from "../lib/i18n";
 
 export interface SelectedEntryActionsProps {
   /** Everything the action applies to; never empty when a surface renders. */
@@ -81,6 +83,8 @@ export function selectedEntryActionModel(
   props: SelectedEntryActionsProps,
 ): SelectedEntryActionModel {
   const { entries, writable, canPaste, canExtract, bookmarked, canToggleBookmark } = props;
+  // Built during render: the menus that call this subscribe to the language.
+  const t = messagesNow(actionMessages);
   const single = entries.length === 1 ? entries[0] : undefined;
   const directory = single !== undefined && effectiveKind(single) === "directory";
   const escapes = entries.some((entry) => entry.escapesRoot);
@@ -111,7 +115,7 @@ export function selectedEntryActionModel(
   if (openable !== undefined) {
     transfer.push({
       id: "open",
-      label: "Open",
+      label: t.open,
       icon: directory ? "FolderOpen" : openable.archiveFormat !== null ? "ArchiveRestore" : "Eye",
       disabled: false,
       shortcut: "Enter",
@@ -123,7 +127,7 @@ export function selectedEntryActionModel(
   transfer.push(
     {
       id: "download",
-      label: downloadable.length === 1 && files.length === 1 ? "Download" : "Download as zip",
+      label: downloadable.length === 1 && files.length === 1 ? t.download : t.downloadZip,
       icon: "Download",
       disabled: downloadable.length === 0,
       trailing: downloadable.length > 1 ? String(downloadable.length) : undefined,
@@ -131,7 +135,7 @@ export function selectedEntryActionModel(
     },
     {
       id: "add-to-chat",
-      label: "Add to chat",
+      label: t.addToChat,
       icon: "MessageSquarePlus",
       disabled: files.length === 0,
       trailing: files.length > 1 ? String(files.length) : undefined,
@@ -141,7 +145,7 @@ export function selectedEntryActionModel(
   if (archive !== undefined) {
     transfer.push({
       id: "extract",
-      label: "Extract…",
+      label: t.extract,
       icon: "ArchiveRestore",
       disabled: !canExtract || !writable,
       run: () => props.onExtract(archive),
@@ -149,11 +153,11 @@ export function selectedEntryActionModel(
   }
 
   const organize: SelectedEntryAction[] = [
-    { id: "cut", label: "Cut", icon: "Layers", disabled: escapes, shortcut: "Ctrl+X", run: props.onCut },
-    { id: "copy", label: "Copy", icon: "Copy", disabled: escapes, shortcut: "Ctrl+C", run: props.onCopy },
+    { id: "cut", label: t.cut, icon: "Layers", disabled: escapes, shortcut: "Ctrl+X", run: props.onCut },
+    { id: "copy", label: t.copy, icon: "Copy", disabled: escapes, shortcut: "Ctrl+C", run: props.onCopy },
     {
       id: "paste",
-      label: "Paste",
+      label: t.paste,
       icon: "PackageReceive",
       disabled: !canPaste || !writable,
       shortcut: "Ctrl+V",
@@ -161,13 +165,13 @@ export function selectedEntryActionModel(
     },
   ];
   const destinations: SelectedEntryAction[] = [
-    { id: "move-to", label: "Move to…", icon: "FolderExport", disabled: escapes, run: props.onMoveTo },
-    { id: "copy-to", label: "Copy to…", icon: "Folder", disabled: escapes, run: props.onCopyTo },
+    { id: "move-to", label: t.moveTo, icon: "FolderExport", disabled: escapes, run: props.onMoveTo },
+    { id: "copy-to", label: t.copyTo, icon: "Folder", disabled: escapes, run: props.onCopyTo },
   ];
   const details: SelectedEntryAction[] = [
     {
       id: "rename",
-      label: "Rename",
+      label: t.rename,
       icon: "Edit",
       disabled: single === undefined || !writable,
       shortcut: "F2",
@@ -175,20 +179,20 @@ export function selectedEntryActionModel(
         if (single !== undefined) props.onRename(single);
       },
     },
-    { id: "copy-path", label: "Copy path", icon: "Paperclip", disabled: false, run: props.onCopyPath },
+    { id: "copy-path", label: t.copyPath, icon: "Paperclip", disabled: false, run: props.onCopyPath },
   ];
   if (folderAction) {
     details.push(
       {
         id: "set-start-folder",
-        label: "Set as start folder",
+        label: t.setStartFolder,
         icon: "Pin",
         disabled: false,
         run: () => props.onSetStartFolder(single),
       },
       {
         id: "bookmark",
-        label: bookmarked ? "Remove bookmark" : "Bookmark",
+        label: bookmarked ? t.removeBookmark : t.bookmark,
         icon: bookmarked ? "PinOff" : "Star",
         disabled: !canToggleBookmark,
         run: () => props.onToggleBookmark(single),
@@ -197,7 +201,7 @@ export function selectedEntryActionModel(
   }
   details.push({
     id: "properties",
-    label: "Properties",
+    label: t.properties,
     icon: "Info",
     disabled: false,
     shortcut: "Alt+Enter",
@@ -205,7 +209,7 @@ export function selectedEntryActionModel(
   });
 
   return {
-    label: single === undefined ? `${String(entries.length)} items` : single.name,
+    label: single === undefined ? t.items(entries.length) : single.name,
     groups: [
       transfer,
       organize,
@@ -214,7 +218,7 @@ export function selectedEntryActionModel(
       [
         {
           id: "delete",
-          label: "Delete",
+          label: t.delete,
           icon: "Trash2",
           disabled: !writable,
           destructive: true,

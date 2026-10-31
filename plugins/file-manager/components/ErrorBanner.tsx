@@ -7,6 +7,12 @@ import { Button } from "./ui/button";
 import { Icon } from "./ui/icon";
 import { cn } from "../lib/utils";
 import { parseRpcError } from "../lib/errors";
+import { defineMessages, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  { unknown: "Unknown error.", retry: "Retry", dismiss: "Dismiss" },
+  { unknown: "Неизвестная ошибка.", retry: "Повторить", dismiss: "Закрыть" },
+);
 
 export interface ErrorBannerProps {
   /** Anything a rejected RPC promise carried. */
@@ -28,8 +34,9 @@ export function ErrorBanner({
   tone = "error",
   className,
 }: ErrorBannerProps) {
+  const t = useMessages(messages);
   const parsed = parseRpcError(error);
-  const detail = parsed.message === "" ? "Unknown error." : parsed.message;
+  const detail = parsed.message === "" ? t.unknown : parsed.message;
 
   return (
     <div
@@ -57,7 +64,7 @@ export function ErrorBanner({
       </div>
       {onRetry === undefined ? null : (
         <Button type="button" variant="outline" size="sm" onClick={onRetry}>
-          Retry
+          {t.retry}
         </Button>
       )}
       {onDismiss === undefined ? null : (
@@ -66,7 +73,7 @@ export function ErrorBanner({
           variant="ghost"
           size="sm"
           className="size-8 p-0"
-          aria-label="Dismiss"
+          aria-label={t.dismiss}
           onClick={onDismiss}
         >
           <Icon name="X" className="size-4" aria-hidden="true" />

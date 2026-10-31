@@ -8,6 +8,7 @@ import { Button } from "./ui/button";
 import { Icon, type IconName } from "./ui/icon";
 import { rootPhrase } from "../lib/fm-paths";
 import { cn } from "../lib/utils";
+import { defineMessages, useMessages } from "../lib/i18n";
 
 export type EmptyStateKind = "empty" | "no-results" | "escapes-root" | "not-writable";
 
@@ -27,35 +28,58 @@ export interface EmptyStateProps {
   className?: string;
 }
 
+const messages = defineMessages(
+  {
+    emptyTitle: "This folder is empty",
+    emptyBody: "Drop files here to upload them, or create a folder.",
+    noResultsTitle: "No matching items",
+    noResultsBody: "Nothing in this folder matches your filter.",
+    noResultsQuery: (query: string) => `Nothing in this folder matches “${query}”.`,
+    escapesTitle: "Outside the home folder",
+    escapesBody: (root: string) => `This link points outside ${root}, so it cannot be opened here.`,
+    readOnlyTitle: "Read-only folder",
+    readOnlyBody: "You can browse and download here, but not change anything.",
+    clearFilter: "Clear filter",
+    uploadFiles: "Upload files",
+    newFolder: "New folder",
+  },
+  {
+    emptyTitle: "Папка пуста",
+    emptyBody: "Перетащите сюда файлы, чтобы загрузить их, или создайте папку.",
+    noResultsTitle: "Ничего не найдено",
+    noResultsBody: "В этой папке ничего не подходит под фильтр.",
+    noResultsQuery: (query) => `В этой папке ничего не подходит под «${query}».`,
+    escapesTitle: "Вне домашней папки",
+    escapesBody: (root) => `Ссылка ведёт за пределы ${root}, поэтому здесь её не открыть.`,
+    readOnlyTitle: "Папка только для чтения",
+    readOnlyBody: "Здесь можно смотреть и скачивать, но ничего не изменить.",
+    clearFilter: "Сбросить фильтр",
+    uploadFiles: "Загрузить файлы",
+    newFolder: "Новая папка",
+  },
+);
+
+type Messages = (typeof messages)["en"];
+
 interface Copy {
   icon: IconName;
   title: string;
-  /** A function when the sentence has to name the root the backend reported. */
+  /** Plain text, or a function of the root phrase. */
   body: string | ((root: string) => string);
 }
 
-const COPY: Record<EmptyStateKind, Copy> = {
-  empty: {
-    icon: "FolderOpen",
-    title: "This folder is empty",
-    body: "Drop files here to upload them, or create a folder.",
-  },
-  "no-results": {
-    icon: "Search",
-    title: "No matching items",
-    body: "Nothing in this folder matches your filter.",
-  },
-  "escapes-root": {
-    icon: "AlertTriangle",
-    title: "Outside the home folder",
-    body: (root: string) => `This link points outside ${root}, so it cannot be opened here.`,
-  },
-  "not-writable": {
-    icon: "Lock",
-    title: "Read-only folder",
-    body: "You can browse and download here, but not change anything.",
-  },
-};
+function copyFor(kind: EmptyStateKind, t: Messages): Copy {
+  switch (kind) {
+    case "empty":
+      return { icon: "FolderOpen", title: t.emptyTitle, body: t.emptyBody };
+    case "no-results":
+      return { icon: "Search", title: t.noResultsTitle, body: t.noResultsBody };
+    case "escapes-root":
+      return { icon: "AlertTriangle", title: t.escapesTitle, body: t.escapesBody };
+    case "not-writable":
+      return { icon: "Lock", title: t.readOnlyTitle, body: t.readOnlyBody };
+  }
+}
 
 export function EmptyState({
   kind,
@@ -66,10 +90,11 @@ export function EmptyState({
   onUpload,
   className,
 }: EmptyStateProps) {
-  const copy = COPY[kind];
+  const t = useMessages(messages);
+  const copy = copyFor(kind, t);
   const body =
     kind === "no-results" && query !== undefined && query !== ""
-      ? `Nothing in this folder matches “${query}”.`
+      ? t.noResultsQuery(query)
       : typeof copy.body === "function"
         ? copy.body(rootPhrase(root))
         : copy.body;
@@ -89,19 +114,19 @@ export function EmptyState({
       <div className="mt-2 flex items-center gap-2">
         {kind === "no-results" && onClearSearch !== undefined ? (
           <Button type="button" variant="outline" size="sm" onClick={onClearSearch}>
-            Clear filter
+            {t.clearFilter}
           </Button>
         ) : null}
         {kind === "empty" && onUpload !== undefined ? (
           <Button type="button" variant="outline" size="sm" onClick={onUpload}>
             <Icon name="PackageReceive" className="size-4" aria-hidden="true" />
-            Upload files
+            {t.uploadFiles}
           </Button>
         ) : null}
         {kind === "empty" && onNewFolder !== undefined ? (
           <Button type="button" variant="outline" size="sm" onClick={onNewFolder}>
             <Icon name="FolderPlus" className="size-4" aria-hidden="true" />
-            New folder
+            {t.newFolder}
           </Button>
         ) : null}
       </div>

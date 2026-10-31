@@ -17,13 +17,8 @@ import type { DirectorySize, EntryKind, FileEntry, PathProperties } from "../../
 import { parseRpcError } from "../../lib/errors";
 import { rootPhrase } from "../../lib/fm-paths";
 import { useFmRpc } from "../../lib/fm-rpc";
-import {
-  UNKNOWN,
-  formatBytes,
-  formatCount,
-  formatDateTime,
-  formatExactBytes,
-} from "../../lib/format";
+import { UNKNOWN, formatBytes, formatDateTime, formatExactBytes } from "../../lib/format";
+import { defineMessages, messagesNow, pluralRu, useMessages } from "../../lib/i18n";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -51,25 +46,128 @@ export interface PropertiesDialogProps {
   target: PropertiesTarget;
 }
 
-const KIND_LABELS: Readonly<Record<EntryKind, string>> = {
-  file: "File",
-  directory: "Folder",
-  symlink: "Symbolic link",
-  other: "Special file",
-};
+const messages = defineMessages(
+  {
+    kindFile: "File",
+    kindDirectory: "Folder",
+    kindSymlink: "Symbolic link",
+    kindOther: "Special file",
+    linkUnresolved: "Symbolic link (unresolved)",
+    linkTo: (kind: string) => `Symbolic link to ${kind.toLowerCase()}`,
+    stopDepth: "the tree is deeper than the walk goes",
+    stopEntries: "there are more entries than one walk counts",
+    stopTime: "the walk ran out of time",
+    items: (count: number) => `${String(count)} ${count === 1 ? "item" : "items"}`,
+    title: "Properties",
+    selection: "Selection",
+    files: "Files",
+    special: (count: number) => ` (+${String(count)} special)`,
+    folders: "Folders",
+    size: "Size",
+    unmeasured:
+      "Folders and links are not measured here — the total covers the selected files. Open a folder on its own to calculate its size.",
+    reading: "Reading…",
+    name: "Name",
+    kind: "Kind",
+    type: "Type",
+    location: "Location",
+    home: "the home folder",
+    calculating: "Calculating…",
+    calculate: "Calculate size",
+    over: "over ",
+    filesInFolders: (files: number, folders: number) =>
+      `${String(files)} ${files === 1 ? "file" : "files"} in ${String(folders)} ${folders === 1 ? "folder" : "folders"}`,
+    target: "Target",
+    resolvesTo: "Resolves to",
+    modified: "Modified",
+    created: "Created",
+    accessed: "Accessed",
+    permissions: "Permissions",
+    owner: "Owner",
+    links: "Links",
+    partial: (reason: string) =>
+      `Partial result — ${reason}. The real total is larger than the number above.`,
+    leavesRoot: (root: string) => `This link leaves ${root}, so the panel cannot follow it.`,
+    close: "Close",
+  },
+  {
+    kindFile: "Файл",
+    kindDirectory: "Папка",
+    kindSymlink: "Символическая ссылка",
+    kindOther: "Особый файл",
+    linkUnresolved: "Символическая ссылка (цель не найдена)",
+    linkTo: (kind) => `Символическая ссылка: ${kind.toLowerCase()}`,
+    stopDepth: "дерево глубже, чем проходит обход",
+    stopEntries: "элементов больше, чем считает один обход",
+    stopTime: "обходу не хватило времени",
+    items: (count) => `${String(count)} ${pluralRu(count, ["элемент", "элемента", "элементов"])}`,
+    title: "Свойства",
+    selection: "Выбрано",
+    files: "Файлы",
+    special: (count) => ` (+${String(count)} особых)`,
+    folders: "Папки",
+    size: "Размер",
+    unmeasured:
+      "Папки и ссылки здесь не измеряются — в сумме только выбранные файлы. Чтобы узнать размер папки, откройте свойства только её.",
+    reading: "Читаю…",
+    name: "Имя",
+    kind: "Вид",
+    type: "Тип",
+    location: "Где",
+    home: "Домашняя папка",
+    calculating: "Считаю…",
+    calculate: "Посчитать размер",
+    over: "больше ",
+    filesInFolders: (files, folders) =>
+      `${String(files)} ${pluralRu(files, ["файл", "файла", "файлов"])} в ${String(folders)} ${pluralRu(folders, ["папке", "папках", "папках"])}`,
+    target: "Цель",
+    resolvesTo: "Ведёт к",
+    modified: "Изменён",
+    created: "Создан",
+    accessed: "Открыт",
+    permissions: "Права",
+    owner: "Владелец",
+    links: "Ссылок",
+    partial: (reason) =>
+      `Неполный результат — ${reason}. На самом деле больше, чем показано выше.`,
+    leavesRoot: (root) => `Ссылка ведёт за пределы ${root}, панель по ней не пойдёт.`,
+    close: "Закрыть",
+  },
+);
+
+type Messages = (typeof messages)["en"];
+
+function kindLabel(kind: EntryKind, t: Messages): string {
+  switch (kind) {
+    case "file":
+      return t.kindFile;
+    case "directory":
+      return t.kindDirectory;
+    case "symlink":
+      return t.kindSymlink;
+    case "other":
+      return t.kindOther;
+  }
+}
 
 /** Why a walk stopped early, in words the dialog can put under a number. */
-const STOP_REASONS: Readonly<Record<NonNullable<DirectorySize["stoppedBy"]>, string>> = {
-  depth: "the tree is deeper than the walk goes",
-  entries: "there are more entries than one walk counts",
-  time: "the walk ran out of time",
-};
+function stopReason(reason: NonNullable<DirectorySize["stoppedBy"]>, t: Messages): string {
+  switch (reason) {
+    case "depth":
+      return t.stopDepth;
+    case "entries":
+      return t.stopEntries;
+    case "time":
+      return t.stopTime;
+  }
+}
 
 /** "Folder", "File", "Symbolic link to folder". */
 export function describeKind(properties: PathProperties): string {
-  if (!properties.isSymlink) return KIND_LABELS[properties.kind];
-  if (properties.targetKind === null) return "Symbolic link (unresolved)";
-  return `Symbolic link to ${KIND_LABELS[properties.targetKind].toLowerCase()}`;
+  const t = messagesNow(messages);
+  if (!properties.isSymlink) return kindLabel(properties.kind, t);
+  if (properties.targetKind === null) return t.linkUnresolved;
+  return t.linkTo(kindLabel(properties.targetKind, t));
 }
 
 /** True for anything whose size means "its contents", i.e. needs the walk. */
@@ -148,6 +246,7 @@ function Row({
 }
 
 export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialogProps) {
+  const t = useMessages(messages);
   const rpc = useFmRpc();
 
   /** The one path to describe, or null when this is a multi-row summary. */
@@ -230,7 +329,7 @@ export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialo
 
   const heading =
     singlePath === null
-      ? `${String(summary?.total ?? 0)} items`
+      ? t.items(summary?.total ?? 0)
       : (properties?.name ?? singlePath.split("/").pop() ?? singlePath);
 
   return (
@@ -242,23 +341,23 @@ export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialo
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Icon name="Info" className="size-4" aria-hidden="true" />
-            Properties
+            {t.title}
           </DialogTitle>
           <DialogDescription className="truncate">{heading}</DialogDescription>
         </DialogHeader>
 
         {singlePath === null && summary !== null ? (
           <dl className="divide-y divide-border">
-            <Row id="selection" label="Selection" value={formatCount(summary.total, "item")} />
+            <Row id="selection" label={t.selection} value={t.items(summary.total)} />
             <Row
               id="files"
-              label="Files"
-              value={`${String(summary.files)}${summary.others > 0 ? ` (+${String(summary.others)} special)` : ""}`}
+              label={t.files}
+              value={`${String(summary.files)}${summary.others > 0 ? t.special(summary.others) : ""}`}
             />
-            <Row id="folders" label="Folders" value={String(summary.folders)} />
+            <Row id="folders" label={t.folders} value={String(summary.folders)} />
             <Row
               id="size"
-              label="Size"
+              label={t.size}
               value={formatBytes(summary.knownBytes)}
               title={formatExactBytes(summary.knownBytes)}
             />
@@ -267,15 +366,14 @@ export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialo
 
         {singlePath === null && summary?.hasUnmeasured === true ? (
           <p className="text-xs text-muted-foreground">
-            Folders and links are not measured here — the total covers the selected files. Open a
-            folder on its own to calculate its size.
+            {t.unmeasured}
           </p>
         ) : null}
 
         {loading ? (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <Icon name="Loading" className="size-4 animate-spin" aria-hidden="true" />
-            Reading…
+            {t.reading}
           </p>
         ) : null}
 
@@ -288,21 +386,21 @@ export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialo
         {properties === null ? null : (
           <>
             <dl className="max-h-[50vh] divide-y divide-border overflow-y-auto">
-              <Row id="name" label="Name" value={properties.name} />
-              <Row id="kind" label="Kind" value={describeKind(properties)} />
+              <Row id="name" label={t.name} value={properties.name} />
+              <Row id="kind" label={t.kind} value={describeKind(properties)} />
               {properties.contentType === null ? null : (
-                <Row id="type" label="Type" value={properties.contentType} />
+                <Row id="type" label={t.type} value={properties.contentType} />
               )}
               <Row
                 id="location"
-                label="Location"
-                value={properties.parentPath ?? rootPhrase()}
+                label={t.location}
+                value={properties.parentPath ?? t.home}
                 title={properties.path}
               />
               {needsSizeWalk(properties) ? (
                 <Row
                   id="size"
-                  label="Size"
+                  label={t.size}
                   value={
                     size === null ? (
                       <Button
@@ -320,20 +418,19 @@ export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialo
                               className="size-4 animate-spin"
                               aria-hidden="true"
                             />
-                            Calculating…
+                            {t.calculating}
                           </>
                         ) : (
-                          "Calculate size"
+                          t.calculate
                         )}
                       </Button>
                     ) : (
                       <span title={formatExactBytes(size.sizeBytes)}>
-                        {size.partial ? "over " : ""}
+                        {size.partial ? t.over : ""}
                         {formatBytes(size.sizeBytes)}
                         <span className="text-muted-foreground">
                           {" · "}
-                          {formatCount(size.fileCount, "file")} in{" "}
-                          {formatCount(size.directoryCount, "folder")}
+                          {t.filesInFolders(size.fileCount, size.directoryCount)}
                         </span>
                       </span>
                     )
@@ -342,29 +439,29 @@ export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialo
               ) : (
                 <Row
                   id="size"
-                  label="Size"
+                  label={t.size}
                   value={formatBytes(properties.sizeBytes)}
                   title={formatExactBytes(properties.sizeBytes)}
                 />
               )}
               {properties.isSymlink ? (
-                <Row id="target" label="Target" value={properties.linkTarget ?? UNKNOWN} />
+                <Row id="target" label={t.target} value={properties.linkTarget ?? UNKNOWN} />
               ) : null}
               {properties.isSymlink && properties.linkTargetPath !== null ? (
-                <Row id="resolved" label="Resolves to" value={properties.linkTargetPath} />
+                <Row id="resolved" label={t.resolvesTo} value={properties.linkTargetPath} />
               ) : null}
-              <Row id="modified" label="Modified" value={formatDateTime(properties.modifiedAtMs)} />
+              <Row id="modified" label={t.modified} value={formatDateTime(properties.modifiedAtMs)} />
               <Row
                 id="created"
-                label="Created"
+                label={t.created}
                 value={
                   properties.createdAtMs === null ? UNKNOWN : formatDateTime(properties.createdAtMs)
                 }
               />
-              <Row id="accessed" label="Accessed" value={formatDateTime(properties.accessedAtMs)} />
+              <Row id="accessed" label={t.accessed} value={formatDateTime(properties.accessedAtMs)} />
               <Row
                 id="permissions"
-                label="Permissions"
+                label={t.permissions}
                 value={
                   <span className="font-mono">
                     {properties.modeText} ({properties.modeOctal})
@@ -373,14 +470,14 @@ export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialo
               />
               <Row
                 id="owner"
-                label="Owner"
+                label={t.owner}
                 value={
                   properties.ownerName === null
                     ? `uid ${String(properties.ownerUid)}, gid ${String(properties.ownerGid)}`
                     : `${properties.ownerName} (uid ${String(properties.ownerUid)}, gid ${String(properties.ownerGid)})`
                 }
               />
-              <Row id="links" label="Links" value={String(properties.linkCount)} />
+              <Row id="links" label={t.links} value={String(properties.linkCount)} />
             </dl>
 
             {sizeError === null ? null : (
@@ -394,14 +491,13 @@ export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialo
                 className="rounded-md bg-surface-attention px-2 py-1.5 text-xs text-warning-text"
                 data-testid="fm-properties-partial"
               >
-                Partial result — {STOP_REASONS[size.stoppedBy ?? "time"]}. The real total is larger
-                than the number above.
+                {t.partial(stopReason(size.stoppedBy ?? "time", t))}
               </p>
             ) : null}
 
             {properties.escapesRoot ? (
               <p className="rounded-md bg-surface-attention px-2 py-1.5 text-xs text-warning-text">
-                This link leaves {rootPhrase()}, so the panel cannot follow it.
+                {t.leavesRoot(rootPhrase())}
               </p>
             ) : null}
           </>
@@ -409,7 +505,7 @@ export function PropertiesDialog({ open, onOpenChange, target }: PropertiesDialo
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Close
+            {t.close}
           </Button>
         </DialogFooter>
       </DialogContent>

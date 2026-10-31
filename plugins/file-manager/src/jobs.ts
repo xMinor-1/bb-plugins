@@ -18,6 +18,8 @@ function isTerminal(job: Job): boolean {
 export interface CreateJobInput {
   kind?: Job["kind"];
   label: string;
+  /** What the job works on (the archive's file name); "" when omitted. */
+  subject?: string;
   /** Archive size in bytes when known (0 otherwise). */
   totalBytes?: number;
 }
@@ -99,6 +101,7 @@ export function createJobs(bb: BbPluginApi, options: JobsOptions = {}): JobsModu
         kind: input.kind ?? "extract",
         state: "running",
         label: input.label,
+        subject: input.subject ?? "",
         startedAtMs: now(),
         finishedAtMs: null,
         processedBytes: 0,

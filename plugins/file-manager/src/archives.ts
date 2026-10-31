@@ -504,6 +504,7 @@ export async function createArchives(
     const job = jobs.create({
       kind: "extract",
       label: `Extracting "${fileName}"`,
+      subject: fileName,
       totalBytes: archiveStat.size,
     });
 

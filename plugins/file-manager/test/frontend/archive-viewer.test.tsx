@@ -109,6 +109,7 @@ const JOB: Job = {
   kind: "extract",
   state: "running",
   label: 'Extracting "bundle.zip"',
+  subject: "bundle.zip",
   startedAtMs: 1,
   finishedAtMs: null,
   processedBytes: 0,

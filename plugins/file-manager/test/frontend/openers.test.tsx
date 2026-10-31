@@ -306,6 +306,7 @@ describe("Preview + location opener — an archive link (§8.13)", () => {
           kind: "extract",
           state: "running",
           label: 'Extracting "bundle.zip"',
+          subject: "bundle.zip",
           startedAtMs: 1,
           finishedAtMs: null,
           processedBytes: 0,

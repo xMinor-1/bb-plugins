@@ -14,6 +14,30 @@ import { Button } from "./ui/button";
 import { Icon, type IconName } from "./ui/icon";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { FileRow, rowDomId } from "./FileRow";
+import { defineMessages, useMessages } from "../lib/i18n";
+
+const messages = defineMessages(
+  {
+    retryLoading: (name: string) => `Retry loading ${name}`,
+    retry: "Retry",
+    emptyFolder: "Empty folder",
+    files: "Files",
+    selectAll: "Select all",
+    name: "Name",
+    size: "Size",
+    modified: "Modified",
+  },
+  {
+    retryLoading: (name) => `Загрузить ${name} ещё раз`,
+    retry: "Повторить",
+    emptyFolder: "Пустая папка",
+    files: "Файлы",
+    selectAll: "Выбрать всё",
+    name: "Имя",
+    size: "Размер",
+    modified: "Изменён",
+  },
+);
 
 export type SortField = "name" | "size" | "modified" | "kind";
 export type SortDirection = "asc" | "desc";
@@ -122,6 +146,7 @@ function SortHead({
  * `focusRow`.
  */
 function StatusRow({ row, onRetry }: { row: TreeStatusRow; onRetry: (path: string) => void }) {
+  const t = useMessages(messages);
   const indentPx = Math.min(row.depth, MAX_INDENT_DEPTH) * INDENT_STEP_PX;
   const failed = row.status === "error";
   return (
@@ -146,18 +171,18 @@ function StatusRow({ row, onRetry }: { row: TreeStatusRow; onRetry: (path: strin
                 variant="ghost"
                 size="sm"
                 data-testid="fm-tree-retry"
-                aria-label={`Retry loading ${basename(row.parentPath)}`}
+                aria-label={t.retryLoading(basename(row.parentPath))}
                 className="h-6 shrink-0 px-2 text-xs"
                 onClick={(event) => {
                   event.stopPropagation();
                   onRetry(row.parentPath);
                 }}
               >
-                Retry
+                {t.retry}
               </Button>
             </>
           ) : (
-            <span className="truncate italic">{row.message ?? "Empty folder"}</span>
+            <span className="truncate italic">{row.message ?? t.emptyFolder}</span>
           )}
         </div>
       </TableCell>
@@ -183,6 +208,7 @@ export function FileTable(props: FileTableProps) {
     emptyState,
   } = props;
 
+  const t = useMessages(messages);
   let entryCount = 0;
   let selectedCount = 0;
   let focusOnScreen = false;
@@ -200,7 +226,7 @@ export function FileTable(props: FileTableProps) {
       ref={props.gridRef}
       role="treegrid"
       aria-multiselectable="true"
-      aria-label="Files"
+      aria-label={t.files}
       // The keyboard cursor is a row that never takes DOM focus (rows stay
       // `tabIndex={-1}` so the grid is one tab stop, and the drag source keeps
       // its own focus behaviour), so the grid announces it the ARIA way.
@@ -218,7 +244,7 @@ export function FileTable(props: FileTableProps) {
             <input
               type="checkbox"
               data-testid="fm-select-all"
-              aria-label="Select all"
+              aria-label={t.selectAll}
               className="size-3.5 cursor-pointer accent-primary align-middle"
               checked={allSelected}
               ref={(node) => {
@@ -229,14 +255,14 @@ export function FileTable(props: FileTableProps) {
           </TableHead>
           <SortHead
             field="name"
-            label="Name"
+            label={t.name}
             activeField={sortField}
             direction={sortDirection}
             onSort={onSort}
           />
           <SortHead
             field="size"
-            label="Size"
+            label={t.size}
             activeField={sortField}
             direction={sortDirection}
             onSort={onSort}
@@ -245,7 +271,7 @@ export function FileTable(props: FileTableProps) {
           />
           <SortHead
             field="modified"
-            label="Modified"
+            label={t.modified}
             activeField={sortField}
             direction={sortDirection}
             onSort={onSort}

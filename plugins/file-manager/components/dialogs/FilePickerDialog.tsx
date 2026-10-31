@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 
 import { type FileEntry } from "../../contract";
 import { parseRpcError } from "../../lib/errors";
+import { defineMessages, pluralRu, useMessages } from "../../lib/i18n";
 import { breadcrumbs, joinPath, parentPath } from "../../lib/fm-paths";
 import { formatBytes, formatModified } from "../../lib/format";
 import { useFmRpc } from "../../lib/fm-rpc";
@@ -37,6 +38,36 @@ import {
 } from "../ui/dialog";
 import { Icon } from "../ui/icon";
 import { effectiveKind } from "../FileRow";
+
+const messages = defineMessages(
+  {
+    home: "Home",
+    breadcrumb: "Breadcrumb",
+    loading: "Loading…",
+    cancel: "Cancel",
+    addToChat: "Add to chat",
+    selectAllHere: "Select every file in this folder",
+    clearHere: "Clear this folder",
+    selectEveryHere: "Select every file here",
+    empty: "This folder is empty.",
+    select: (name: string) => `Select ${name}`,
+    selectedFiles: (count: number, size: string) => `${String(count)} files selected — ${size}`,
+  },
+  {
+    home: "Домашняя папка",
+    breadcrumb: "Путь к папке",
+    loading: "Загрузка…",
+    cancel: "Отмена",
+    addToChat: "Добавить в чат",
+    selectAllHere: "Выбрать все файлы в этой папке",
+    clearHere: "Снять выбор в этой папке",
+    selectEveryHere: "Выбрать все файлы здесь",
+    empty: "Папка пуста.",
+    select: (name) => `Выбрать ${name}`,
+    selectedFiles: (count, size) =>
+      `${pluralRu(count, ["Выбран", "Выбрано", "Выбрано"])} ${String(count)} ${pluralRu(count, ["файл", "файла", "файлов"])} — ${size}`,
+  },
+);
 
 export interface FilePickerDialogProps {
   open: boolean;
@@ -59,9 +90,11 @@ export function FilePickerDialog({
   description,
   root,
   initialPath,
-  confirmLabel = "Add to chat",
+  confirmLabel: confirmLabelProp,
   onChoose,
 }: FilePickerDialogProps) {
+  const t = useMessages(messages);
+  const confirmLabel = confirmLabelProp ?? t.addToChat;
   const rpc = useFmRpc();
   const [path, setPath] = useState(initialPath ?? root);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -127,7 +160,7 @@ export function FilePickerDialog({
   );
 
   const up = parentPath(path, root);
-  const crumbs = breadcrumbs(path, root, "Home");
+  const crumbs = breadcrumbs(path, root, t.home);
   const folders = entries.filter((entry) => effectiveKind(entry) === "directory");
   const files = entries.filter((entry) => effectiveKind(entry) === "file");
 
@@ -189,7 +222,7 @@ export function FilePickerDialog({
           {description === undefined ? null : <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
 
-        <nav aria-label="Breadcrumb" className="flex items-center gap-0.5 overflow-x-auto">
+        <nav aria-label={t.breadcrumb} className="flex items-center gap-0.5 overflow-x-auto">
           {crumbs.map((crumb, index) => (
             <div key={crumb.path} className="flex shrink-0 items-center gap-0.5">
               {index === 0 ? null : (
@@ -210,11 +243,11 @@ export function FilePickerDialog({
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <Checkbox
               checked={allHereSelected}
-              aria-label="Select every file in this folder"
+              aria-label={t.selectAllHere}
               data-testid="fm-picker-select-all"
               onCheckedChange={toggleAllHere}
             />
-            {allHereSelected ? "Clear this folder" : "Select every file here"}
+            {allHereSelected ? t.clearHere : t.selectEveryHere}
           </label>
         )}
 
@@ -230,7 +263,7 @@ export function FilePickerDialog({
             </button>
           )}
           {loading && entries.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground">Loading…</p>
+            <p className="px-3 py-2 text-xs text-muted-foreground">{t.loading}</p>
           ) : null}
           {error !== null ? (
             <p role="alert" className="px-3 py-2 text-xs text-destructive">
@@ -238,7 +271,7 @@ export function FilePickerDialog({
             </p>
           ) : null}
           {!loading && error === null && entries.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground">This folder is empty.</p>
+            <p className="px-3 py-2 text-xs text-muted-foreground">{t.empty}</p>
           ) : null}
 
           {folders.map((folder) => (
@@ -272,7 +305,7 @@ export function FilePickerDialog({
                     anywhere on the row, `Shift` included. */}
                 <Checkbox
                   checked={isSelected}
-                  aria-label={`Select ${file.name}`}
+                  aria-label={t.select(file.name)}
                   data-testid="fm-picker-check"
                   onClick={(event) => toggleRow(file, event)}
                   // Radix fires onCheckedChange for keyboard activation too,
@@ -319,12 +352,12 @@ export function FilePickerDialog({
             ? path
             : selectedList.length === 1 && selectedList[0] !== undefined
               ? `${selectedList[0].name} — ${formatBytes(selectedList[0].sizeBytes)}, ${formatModified(selectedList[0].modifiedAtMs)}`
-              : `${String(selectedList.length)} files selected — ${formatBytes(selectedBytes)}`}
+              : t.selectedFiles(selectedList.length, formatBytes(selectedBytes))}
         </p>
 
         <DialogFooter className="gap-2">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t.cancel}
           </Button>
           <Button
             type="button"

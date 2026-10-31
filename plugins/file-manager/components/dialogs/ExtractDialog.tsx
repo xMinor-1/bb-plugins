@@ -20,6 +20,34 @@ import {
 } from "../ui/dialog";
 import { Icon } from "../ui/icon";
 import { FolderPickerDialog } from "./FolderPickerDialog";
+import { defineMessages, useMessages } from "../../lib/i18n";
+
+const messages = defineMessages(
+  {
+    title: "Extract archive",
+    notArchive: "This file is not a recognized archive.",
+    noExtractor: (format: string) => `No extractor for ${format} is installed on this host.`,
+    extractTo: "Extract to",
+    change: "Change…",
+    intoSubfolder: "Extract into a sub-folder",
+    extractInto: "Extract into",
+    cancel: "Cancel",
+    extract: "Extract",
+    pickerTitle: "Extract to…",
+  },
+  {
+    title: "Распаковать архив",
+    notArchive: "Этот файл не похож на архив.",
+    noExtractor: (format) => `На этой машине нет программы для распаковки ${format}.`,
+    extractTo: "Куда распаковать",
+    change: "Изменить…",
+    intoSubfolder: "Распаковать во вложенную папку",
+    extractInto: "Распаковать в",
+    cancel: "Отмена",
+    extract: "Распаковать",
+    pickerTitle: "Распаковать в…",
+  },
+);
 
 export interface ArchiveSupport {
   zip: boolean;
@@ -62,6 +90,7 @@ export function ExtractDialog({
   archiveSupport,
   onSubmit,
 }: ExtractDialogProps) {
+  const t = useMessages(messages);
   const [destination, setDestination] = useState(root);
   const [createSubfolder, setCreateSubfolder] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -92,7 +121,7 @@ export function ExtractDialog({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Icon name="ArchiveRestore" className="size-4" aria-hidden="true" />
-              Extract archive
+              {t.title}
             </DialogTitle>
             <DialogDescription className="truncate">{entry.name}</DialogDescription>
           </DialogHeader>
@@ -100,13 +129,13 @@ export function ExtractDialog({
           {supported ? null : (
             <p className="rounded-md bg-surface-attention px-2 py-1.5 text-xs text-warning-text">
               {format === null
-                ? "This file is not a recognized archive."
-                : `No extractor for ${format} is installed on this host.`}
+                ? t.notArchive
+                : t.noExtractor(format)}
             </p>
           )}
 
           <div className="space-y-1">
-            <p className="text-xs font-medium text-muted-foreground">Extract to</p>
+            <p className="text-xs font-medium text-muted-foreground">{t.extractTo}</p>
             <div className="flex items-center gap-2">
               <span
                 className="min-w-0 flex-1 truncate rounded-md border border-border bg-surface-recessed px-2 py-1.5 text-xs"
@@ -115,7 +144,7 @@ export function ExtractDialog({
                 {destination}
               </span>
               <Button type="button" variant="outline" size="sm" onClick={() => setPickerOpen(true)}>
-                Change…
+                {t.change}
               </Button>
             </div>
           </div>
@@ -124,10 +153,10 @@ export function ExtractDialog({
             <Checkbox
               checked={createSubfolder}
               onCheckedChange={(checked) => setCreateSubfolder(checked === true)}
-              aria-label="Extract into a sub-folder"
+              aria-label={t.intoSubfolder}
             />
             <span>
-              Extract into <span className="font-medium">{subfolderName}/</span>
+              {t.extractInto} <span className="font-medium">{subfolderName}/</span>
             </span>
           </label>
 
@@ -139,7 +168,7 @@ export function ExtractDialog({
 
           <DialogFooter className="gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t.cancel}
             </Button>
             <Button
               type="button"
@@ -159,7 +188,7 @@ export function ExtractDialog({
                 })();
               }}
             >
-              Extract
+              {t.extract}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -168,7 +197,7 @@ export function ExtractDialog({
       <FolderPickerDialog
         open={pickerOpen}
         onOpenChange={setPickerOpen}
-        title="Extract to…"
+        title={t.pickerTitle}
         initialPath={destination}
         root={root}
         showHidden={showHidden}

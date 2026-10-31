@@ -19,9 +19,9 @@ import {
   parsePathInput,
   splitForCompletion,
   windowsPathMessage,
-  PATH_INVALID_MESSAGE,
-  PATH_REMOTE_MESSAGE,
-  PATH_SCHEME_MESSAGE,
+  pathInvalidMessage,
+  pathRemoteMessage,
+  pathSchemeMessage,
   type PathInputContext,
 } from "../../lib/fm-pathbar";
 import { rootPhrase } from "../../lib/fm-paths";
@@ -147,19 +147,19 @@ describe("parsePathInput — refusals (§4.1, §4.3)", () => {
   });
 
   it("refuses a `file://` URL that names another computer", () => {
-    expect(refusalOf("file://server/share")).toBe(PATH_REMOTE_MESSAGE);
+    expect(refusalOf("file://server/share")).toBe(pathRemoteMessage());
   });
 
   it("refuses any other scheme", () => {
-    expect(refusalOf("https://example.com/x")).toBe(PATH_SCHEME_MESSAGE);
-    expect(refusalOf("smb://nas/share")).toBe(PATH_SCHEME_MESSAGE);
-    expect(refusalOf("data:text/plain,hi")).toBe(PATH_SCHEME_MESSAGE);
+    expect(refusalOf("https://example.com/x")).toBe(pathSchemeMessage());
+    expect(refusalOf("smb://nas/share")).toBe(pathSchemeMessage());
+    expect(refusalOf("data:text/plain,hi")).toBe(pathSchemeMessage());
   });
 
   it("refuses control characters and NUL without a round trip", () => {
-    expect(refusalOf(`${ROOT}/a\u0000b`)).toBe(PATH_INVALID_MESSAGE);
-    expect(refusalOf(`${ROOT}/a\u0007b`)).toBe(PATH_INVALID_MESSAGE);
-    expect(refusalOf(`${ROOT}/a\u007Fb`)).toBe(PATH_INVALID_MESSAGE);
+    expect(refusalOf(`${ROOT}/a\u0000b`)).toBe(pathInvalidMessage());
+    expect(refusalOf(`${ROOT}/a\u0007b`)).toBe(pathInvalidMessage());
+    expect(refusalOf(`${ROOT}/a\u007Fb`)).toBe(pathInvalidMessage());
   });
 
   it("refuses an absolute path outside the root", () => {

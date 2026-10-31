@@ -35,11 +35,36 @@ import { FileManagerNewThreadTab, FileManagerTab } from "./components/FileManage
 import { HeaderActions } from "./components/HeaderActions";
 import { SettingsSection } from "./components/SettingsSection";
 import { SidebarAccessory } from "./components/SidebarAccessory";
+import { defineMessages, messagesNow } from "./lib/i18n";
+
+// Registered once at load, so these follow the language of that moment; a
+// switch shows in them after the page reloads.
+const messages = defineMessages(
+  {
+    fileManager: "File Manager",
+    startFolder: "Start folder",
+    startFolderDescription: "Pick the folder the File Manager panel opens in.",
+    previewLocation: "Preview + location",
+    fileLocation: "File location",
+    fromFileManager: "From File Manager…",
+    attachDescription: "Attach a file from the machine bb runs on.",
+  },
+  {
+    fileManager: "Файловый менеджер",
+    startFolder: "Стартовая папка",
+    startFolderDescription: "Папка, в которой открывается панель файлового менеджера.",
+    previewLocation: "Просмотр и расположение",
+    fileLocation: "Расположение файла",
+    fromFileManager: "Из файлового менеджера…",
+    attachDescription: "Прикрепить файл с машины, на которой работает bb.",
+  },
+);
 
 export default definePluginApp((app) => {
+  const t = messagesNow(messages);
   app.slots.navPanel({
     id: "file-manager",
-    title: "File Manager",
+    title: t.fileManager,
     icon: "FolderOpen",
     path: PANEL_PATH, // "files" → /plugins/file-manager/files/*
     component: FileManagerPanel,
@@ -52,8 +77,8 @@ export default definePluginApp((app) => {
   // plain text field working).
   app.slots.settingsSection({
     id: "start-folder",
-    title: "Start folder",
-    description: "Pick the folder the File Manager panel opens in.",
+    title: t.startFolder,
+    description: t.startFolderDescription,
     component: SettingsSection,
   });
 
@@ -61,7 +86,7 @@ export default definePluginApp((app) => {
   // to resolve before opening, so the host opens the tab with the defaults.
   app.slots.threadPanelAction({
     id: "file-manager",
-    title: "File Manager",
+    title: t.fileManager,
     icon: "FolderOpen",
     layout: "flush",
     component: FileManagerTab,
@@ -71,7 +96,7 @@ export default definePluginApp((app) => {
   // separate slot from the thread one.
   app.slots.experimental_newThreadPanelAction({
     id: "file-manager",
-    title: "File Manager",
+    title: t.fileManager,
     icon: "FolderOpen",
     layout: "flush",
     component: FileManagerNewThreadTab,
@@ -84,14 +109,14 @@ export default definePluginApp((app) => {
   // strip on top that reveals it. Order here is load-bearing (§10.2).
   app.slots.fileOpener({
     id: "preview",
-    title: "Preview + location",
+    title: t.previewLocation,
     extensions: [...LOCATION_OPENER_EXTENSIONS],
     component: FilePreviewOpener,
   });
 
   app.slots.fileOpener({
     id: "location",
-    title: "File location",
+    title: t.fileLocation,
     extensions: [...LOCATION_OPENER_EXTENSIONS],
     component: FileLocationOpener,
   });
@@ -109,9 +134,9 @@ export default definePluginApp((app) => {
     plusMenu: [
       {
         id: "file-manager-pick",
-        label: "From File Manager…",
+        label: t.fromFileManager,
         icon: "FolderOpen",
-        description: "Attach a file from the machine bb runs on.",
+        description: t.attachDescription,
         run: ({ composer }) => {
           requestFilePick(composerScopeKey(composer.scope));
         },

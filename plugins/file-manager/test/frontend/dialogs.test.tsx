@@ -79,6 +79,7 @@ const JOB: Job = {
   kind: "extract",
   state: "running",
   label: "Extracting",
+  subject: "",
   startedAtMs: 1,
   finishedAtMs: null,
   processedBytes: 0,

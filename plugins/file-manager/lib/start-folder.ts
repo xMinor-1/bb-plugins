@@ -7,9 +7,24 @@
 // a component.
 import { getClientRoot, isSamePath, toAbsolute, toRelative } from "./fm-paths";
 import type { FileManagerRpc } from "./fm-rpc";
+import { defineMessages, messagesNow } from "./i18n";
 
-export const START_FOLDER_SAVED_TEXT = "Start folder saved";
-export const START_FOLDER_SAVE_FAILED_TEXT = "Could not save the start folder.";
+export const startFolderMessages = defineMessages(
+  {
+    saved: "Start folder saved",
+    saveFailed: "Could not save the start folder.",
+    /** The root on its own, e.g. a settings value. */
+    home: "Home",
+    /** The root inside a sentence ("Opened … instead"). */
+    homeInSentence: "Home",
+  },
+  {
+    saved: "Стартовая папка сохранена",
+    saveFailed: "Не удалось сохранить стартовую папку.",
+    home: "Домашняя папка",
+    homeInSentence: "домашняя папка",
+  },
+);
 
 /**
  * Persist the start folder. Returns the value the *backend* settled on: it
@@ -29,7 +44,7 @@ export async function saveStartFolder(rpc: FileManagerRpc, path: string): Promis
 export function startFolderLabel(
   absolute: string,
   root: string = getClientRoot(),
-  rootLabel = "Home",
+  rootLabel: string = messagesNow(startFolderMessages).home,
 ): string {
   const relative = toRelative(absolute, root);
   return relative === "" ? rootLabel : relative;

@@ -24,13 +24,31 @@ import {
 } from "./ui/dropdown-menu";
 import { Icon } from "./ui/icon";
 import { Input } from "./ui/input";
+import { actionMessages, sortLabels } from "./action-messages";
+import { defineMessages, useMessages } from "../lib/i18n";
 
-const SORT_LABELS: Record<SortField, string> = {
-  name: "Name",
-  size: "Size",
-  modified: "Modified",
-  kind: "Kind",
-};
+const messages = defineMessages(
+  {
+    filterFolder: "Filter this folder",
+    filterPlaceholder: "Filter…",
+    hideFilter: "Hide the filter",
+    showList: "Show the list view",
+    showGallery: "Show the gallery view",
+    showHiddenCount: (count: number) => `Show hidden files (${String(count)} hidden)`,
+    freeOf: (free: string, total: string) => `${free} free of ${total}`,
+    free: (free: string) => `${free} free`,
+  },
+  {
+    filterFolder: "Фильтр по этой папке",
+    filterPlaceholder: "Фильтр…",
+    hideFilter: "Скрыть фильтр",
+    showList: "Показать списком",
+    showGallery: "Показать галереей",
+    showHiddenCount: (count) => `Показать скрытые файлы (скрыто: ${String(count)})`,
+    freeOf: (free, total) => `Свободно ${free} из ${total}`,
+    free: (free) => `Свободно ${free}`,
+  },
+);
 
 export interface ToolbarProps {
   /**
@@ -145,6 +163,9 @@ export function Toolbar({
   pathFocusTick,
   className,
 }: ToolbarProps) {
+  const t = useMessages(messages);
+  const a = useMessages(actionMessages);
+  const SORT_LABELS: Record<SortField, string> = sortLabels(a);
   const compact = variant === "compact";
   // Compact keeps one of the two: the path bar, or the filter it folded out
   // into. Both at once leaves neither wide enough to read.
@@ -162,8 +183,8 @@ export function Toolbar({
         type="search"
         value={query}
         data-testid="fm-search"
-        aria-label="Filter this folder"
-        placeholder="Filter…"
+        aria-label={t.filterFolder}
+        placeholder={t.filterPlaceholder}
         className="h-8 pl-7 text-sm"
         onChange={(event) => onQueryChange(event.target.value)}
         onKeyDown={(event) => {
@@ -225,7 +246,7 @@ export function Toolbar({
           variant="ghost"
           size="sm"
           className="h-8 w-8 shrink-0 p-0"
-          aria-label={searchOpen ? "Hide the filter" : "Filter this folder"}
+          aria-label={searchOpen ? t.hideFilter : t.filterFolder}
           aria-pressed={searchOpen}
           data-testid="fm-search-toggle"
           onClick={() => {
@@ -250,7 +271,7 @@ export function Toolbar({
         size="sm"
         className="h-8 w-8 shrink-0 p-0"
         aria-pressed={bookmarked}
-        aria-label={bookmarked ? "Remove bookmark" : "Bookmark this folder"}
+        aria-label={bookmarked ? a.removeBookmark : a.bookmarkFolder}
         data-testid="fm-bookmark-toggle"
         disabled={!canToggleBookmark}
         onClick={onToggleBookmark}
@@ -274,7 +295,7 @@ export function Toolbar({
         // click does — the same split the hidden-files toggle two buttons over
         // already uses, so one strip does not teach two conventions.
         aria-pressed={viewMode === "gallery"}
-        aria-label={viewMode === "gallery" ? "Show the list view" : "Show the gallery view"}
+        aria-label={viewMode === "gallery" ? t.showList : t.showGallery}
         data-testid="fm-view-toggle"
         onClick={() => onViewModeChange(viewMode === "gallery" ? "list" : "gallery")}
       >
@@ -294,7 +315,7 @@ export function Toolbar({
             variant="ghost"
             size="sm"
             className="h-8 shrink-0 gap-1 px-2"
-            aria-label="Sort"
+            aria-label={a.sort}
             data-testid="fm-sort-menu"
           >
             <Icon name="Sort" className="size-4" aria-hidden="true" />
@@ -302,7 +323,7 @@ export function Toolbar({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
-          <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+          <DropdownMenuLabel>{a.sortBy}</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={sortField}
             onValueChange={(value) => onSortFieldChange(value as SortField)}
@@ -318,8 +339,8 @@ export function Toolbar({
             value={sortDirection}
             onValueChange={(value) => onSortDirectionChange(value as SortDirection)}
           >
-            <DropdownMenuRadioItem value="asc">Ascending</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="desc">Descending</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="asc">{a.ascending}</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="desc">{a.descending}</DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -334,10 +355,10 @@ export function Toolbar({
         aria-pressed={showHidden}
         aria-label={
           showHidden
-            ? "Hide hidden files"
+            ? a.hideHidden
             : hiddenCount > 0
-              ? `Show hidden files (${String(hiddenCount)} hidden)`
-              : "Show hidden files"
+              ? t.showHiddenCount(hiddenCount)
+              : a.showHiddenAction
         }
         data-testid="fm-toggle-hidden"
         onClick={onToggleHidden}
@@ -352,7 +373,7 @@ export function Toolbar({
         variant="ghost"
         size="sm"
         className="h-8 w-8 shrink-0 p-0"
-        aria-label="Collapse all folders"
+        aria-label={a.collapseAll}
         data-testid="fm-collapse-all"
         disabled={expandedCount === 0}
         onClick={onCollapseAll}
@@ -367,7 +388,7 @@ export function Toolbar({
         variant="ghost"
         size="sm"
         className="h-8 w-8 shrink-0 p-0"
-        aria-label="Refresh"
+        aria-label={a.refresh}
         data-testid="fm-refresh"
         onClick={onRefresh}
       >
@@ -382,9 +403,9 @@ export function Toolbar({
       {compact || volume === null ? null : (
         <span
           className="hidden shrink-0 text-xs tabular-nums text-muted-foreground @2xl:inline"
-          title={`${formatBytes(volume.freeBytes)} free of ${formatBytes(volume.totalBytes)}`}
+          title={t.freeOf(formatBytes(volume.freeBytes), formatBytes(volume.totalBytes))}
         >
-          {formatBytes(volume.freeBytes)} free
+          {t.free(formatBytes(volume.freeBytes))}
         </span>
       )}
 

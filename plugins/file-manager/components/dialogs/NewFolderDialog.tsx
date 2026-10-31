@@ -16,17 +16,50 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { cn } from "../../lib/utils";
+import { defineMessages, messagesNow, useMessages } from "../../lib/i18n";
+
+const messages = defineMessages(
+  {
+    enterName: "Enter a name.",
+    reserved: "That name is reserved.",
+    slash: "A name cannot contain a slash.",
+    control: "A name cannot contain control characters.",
+    tooLong: "That name is too long (max 255 bytes).",
+    exists: "An item with that name already exists.",
+    title: "New folder",
+    inFolder: (label: string) => `in ${label}`,
+    folderName: "Folder name",
+    placeholder: "untitled folder",
+    cancel: "Cancel",
+    create: "Create",
+  },
+  {
+    enterName: "Введите имя.",
+    reserved: "Это имя зарезервировано.",
+    slash: "Имя не может содержать косую черту.",
+    control: "Имя не может содержать управляющие символы.",
+    tooLong: "Имя слишком длинное (не больше 255 байт).",
+    exists: "Элемент с таким именем уже есть.",
+    title: "Новая папка",
+    inFolder: (label) => `в ${label}`,
+    folderName: "Имя папки",
+    placeholder: "новая папка",
+    cancel: "Отмена",
+    create: "Создать",
+  },
+);
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f]/u;
 
 /** Client mirror of `src/root.ts#validateName`; returns null when the name is fine. */
 export function validateEntryName(name: string, taken?: ReadonlySet<string>): string | null {
-  if (name === "") return "Enter a name.";
-  if (name === "." || name === "..") return "That name is reserved.";
-  if (name.includes("/")) return "A name cannot contain a slash.";
-  if (CONTROL_CHARACTERS.test(name)) return "A name cannot contain control characters.";
-  if (new TextEncoder().encode(name).length > 255) return "That name is too long (max 255 bytes).";
-  if (taken?.has(name) === true) return "An item with that name already exists.";
+  const t = messagesNow(messages);
+  if (name === "") return t.enterName;
+  if (name === "." || name === "..") return t.reserved;
+  if (name.includes("/")) return t.slash;
+  if (CONTROL_CHARACTERS.test(name)) return t.control;
+  if (new TextEncoder().encode(name).length > 255) return t.tooLong;
+  if (taken?.has(name) === true) return t.exists;
   return null;
 }
 
@@ -47,6 +80,7 @@ export function NewFolderDialog({
   destinationLabel,
   onSubmit,
 }: NewFolderDialogProps) {
+  const t = useMessages(messages);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -86,8 +120,8 @@ export function NewFolderDialog({
         data-testid="fm-new-folder-dialog"
       >
         <DialogHeader>
-          <DialogTitle>New folder</DialogTitle>
-          <DialogDescription className="truncate">in {destinationLabel}</DialogDescription>
+          <DialogTitle>{t.title}</DialogTitle>
+          <DialogDescription className="truncate">{t.inFolder(destinationLabel)}</DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(event) => {
@@ -99,9 +133,9 @@ export function NewFolderDialog({
             ref={inputRef}
             autoFocus
             value={name}
-            aria-label="Folder name"
+            aria-label={t.folderName}
             aria-invalid={error !== null}
-            placeholder="untitled folder"
+            placeholder={t.placeholder}
             className={cn("h-9", error !== null && "border-surface-destructive-border")}
             onChange={(event) => {
               setName(event.target.value);
@@ -115,14 +149,14 @@ export function NewFolderDialog({
           )}
           <DialogFooter className="mt-4 gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t.cancel}
             </Button>
             <Button
               type="submit"
               className="bg-primary text-primary-foreground hover:bg-primary/90"
               disabled={busy}
             >
-              Create
+              {t.create}
             </Button>
           </DialogFooter>
         </form>

@@ -22,8 +22,20 @@ import {
   type SortDirection,
   type SortField,
 } from "../hooks/useDirectory";
-import type { ParsedRpcError } from "./errors";
+import { describeErrorCode, type ParsedRpcError } from "./errors";
 import { isDescendant, isSameOrDescendant, normalizePath } from "./fm-paths";
+import { defineMessages, messagesNow } from "./i18n";
+
+const messages = defineMessages(
+  {
+    cannotOpen: "Could not open this folder.",
+    filterEmpty: "Nothing in here matches the filter",
+  },
+  {
+    cannotOpen: "Не удалось открыть эту папку.",
+    filterEmpty: "Здесь ничего не подходит под фильтр",
+  },
+);
 
 /* ------------------------------------------------------------------ */
 /* Constants (§1.5)                                                    */
@@ -227,7 +239,7 @@ function planChildren(node: TreeNode | undefined): ChildPlan {
       entries: [],
       loading: false,
       status: "error",
-      message: node.error === null ? "Could not open this folder." : errorText(node.error),
+      message: node.error === null ? messagesNow(messages).cannotOpen : errorText(node.error),
     };
   }
   const cold = node.loadedAtMs === 0;
@@ -243,11 +255,19 @@ function planChildren(node: TreeNode | undefined): ChildPlan {
   return { entries: node.entries, loading, status: null, message: null };
 }
 
+/**
+ * A known code reads as its sentence in the interface language, followed by
+ * the server's detail (an errno, a path) when that adds anything.
+ */
 function errorText(error: ParsedRpcError): string {
   const message = error.message.trim();
+  if (error.code !== null) {
+    const sentence = describeErrorCode(error.code);
+    return message === "" || message === sentence ? sentence : `${sentence} (${message})`;
+  }
   if (message !== "") return message;
   const raw = error.rawMessage.trim();
-  return raw === "" ? "Could not open this folder." : raw;
+  return raw === "" ? messagesNow(messages).cannotOpen : raw;
 }
 
 /**
@@ -347,7 +367,7 @@ export function flattenTree(args: FlattenTreeArgs): FlattenTreeResult {
           depth: depth + 1,
           parentPath: entry.path,
           status: "empty",
-          message: "Nothing in here matches the filter",
+          message: messagesNow(messages).filterEmpty,
         });
       }
     }
