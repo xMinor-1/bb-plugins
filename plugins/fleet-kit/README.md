@@ -154,9 +154,12 @@ a newer Fleet Kit can still deliver it.
   writes it to `enabled_providers`, and passes it to installed plugins that
   declare a setting of that name.
 - `opencode` — a native OpenCode 2 configuration fragment, merged as is. Only
-  `providers`, `model`, `small_model` and `update` are allowed; `providers` and
-  `model` are required, and every provider and the providers of the models must
-  be in `allowedProviders`. `{secret:name}` is allowed only as a provider's whole
+  `providers`, `model`, `small_model`, `update`, and the agent harness keys
+  `default_agent`, `agents`, `compaction`, `tool_output`, `experimental` and
+  `mcp.timeout` are allowed; `providers` and `model` are required, and every
+  provider and the providers of the models (agents' models too) must be in
+  `allowedProviders`. `mcp` may hold only the default `timeout`: MCP servers
+  belong to the person and to other plugins. `{secret:name}` is allowed only as a provider's whole
   `settings.apiKey` or inside `settings.headers`, and such a provider needs an
   `https://` `settings.baseURL`. OpenCode's own `{env:...}` and `{file:...}` are
   refused anywhere in the manifest, in names as well as in values (a header
@@ -164,6 +167,12 @@ a newer Fleet Kit can still deliver it.
   client's value to the manifest's address. A provider's `package` must be one
   of OpenCode's own, `@opencode/ai/providers/<name>`; any other package is
   accepted only on a machine with `allowDevSources`.
+- `agentRules` — rules for OpenCode's agents, one Markdown line per item (up to
+  200 lines, 16 KiB). Fleet Kit writes them to `fleet-kit-rules.md` in the
+  OpenCode configuration directory and lists that file in `instructions`, after
+  the person's own entries; the person's `AGENTS.md` is not touched. Without
+  `agentRules` the file and the entry are removed. Fleet Kit 0.3.x and earlier
+  ignore the field with a warning.
 - `mcp`, `skills` — validated; this version does not apply them yet.
 - `onboarding` — the First run steps, in order: `id`, `title`, `hint`,
   `optional`, and exactly one of `secret` (a name from `secrets`) or `plugin`
@@ -257,8 +266,11 @@ with `bb provider enable <id>`.
 The person who uses OpenCode edits this file too, so Fleet Kit:
 
 - It writes only the keys that come from the manifest: `providers.<id>` for each
-  build provider, the other top-level keys of the `opencode` block (such as
-  `model` and `update`), and `enabled_providers`. It remembers which keys it
+  build provider, `agents.<id>` for each build agent, `experimental.<key>` for
+  each experimental key, `mcp.timeout`, the other top-level keys of the
+  `opencode` block (such as `model` and `update`), `enabled_providers`, and its
+  own entry in `instructions`. The person's own agents, MCP servers and
+  instructions stay. It remembers which keys it
   wrote and removes one only when the build drops it. Comments and formatting of
   the rest of the file are kept.
 - Writes under a lock directory `<config>.bb-config-lock` with an `owner.json`

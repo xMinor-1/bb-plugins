@@ -9,7 +9,7 @@
 // The manifest decides which code runs on every client, so the client limits
 // what it may ask for: plugins come from `git:https://` sources only (local
 // sources need the machine's own `allowDevSources` setting), the OpenCode
-// block may set only providers and models, `{secret:...}` may appear only in a
+// block may set only providers, models and agent limits, `{secret:...}` may appear only in a
 // provider's key or headers, and OpenCode's own `{env:...}` / `{file:...}`
 // substitutions are refused everywhere.
 import { z } from "zod";
@@ -102,7 +102,27 @@ const providerBlock = z
   .passthrough();
 
 /** The only top-level OpenCode keys a build may set. */
-export const OPENCODE_KEYS = ["providers", "model", "small_model", "update"] as const;
+export const OPENCODE_KEYS = [
+  "providers",
+  "model",
+  "small_model",
+  "update",
+  "default_agent",
+  "agents",
+  "compaction",
+  "tool_output",
+  "experimental",
+  "mcp",
+] as const;
+
+/** OpenCode agent ids, including nested ones such as `team/reviewer`. */
+const agentId = z.string().regex(/^[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_-]*)*$/, "use an OpenCode agent id such as build or team/reviewer");
+const agentModel = z.union([
+  modelRef,
+  z.object({ providerID: id, model: z.string().min(1), variant: z.string().min(1).optional() }).strict(),
+]);
+// An agent entry is OpenCode's own; only its model is checked against allowedProviders.
+const agentBlock = z.object({ model: agentModel.optional() }).passthrough();
 
 const opencodeBlock = z
   .object({
@@ -110,8 +130,21 @@ const opencodeBlock = z
     model: modelRef,
     small_model: modelRef.optional(),
     update: z.union([z.string(), z.boolean()]).optional(),
+    default_agent: agentId.optional(),
+    /** Fleet Kit owns each agent it declares; the person's other agents stay. */
+    agents: z.record(agentId, agentBlock).optional(),
+    compaction: z.record(z.string(), z.unknown()).optional(),
+    tool_output: z.record(z.string(), z.unknown()).optional(),
+    /** Fleet Kit owns each experimental key it declares. */
+    experimental: z.record(z.string(), z.unknown()).optional(),
+    /** Only the default timeouts: MCP servers belong to the person and to other plugins. */
+    mcp: z.object({ timeout: z.object({ startup: z.number().int().positive().optional(), catalog: z.number().int().positive().optional(), execution: z.number().int().positive().optional() }).strict() }).strict().optional(),
   })
   .strict();
+
+/** Agent rules Fleet Kit installs for OpenCode: at most this many lines and bytes. */
+export const AGENT_RULES_MAX_LINES = 200;
+export const AGENT_RULES_MAX_BYTES = 16 * 1024;
 
 /** bb's AI service tasks (`bb settings ai-services`). */
 export const AI_TASKS = ["thread-title", "commit-message", "voice"] as const;
@@ -161,6 +194,17 @@ const rootShape = {
   agents: z.object({ allowed: z.array(providerId).min(1) }).strict().optional(),
   /** Steps of the "First run" page, in order. */
   onboarding: z.array(onboardingStep).optional(),
+  /**
+   * Rules for OpenCode's agents, one Markdown line per item. Fleet Kit writes
+   * them to its own file in the OpenCode configuration directory and lists
+   * that file in `instructions`; the person's own instructions stay.
+   */
+  agentRules: z
+    .array(z.string().max(1000).refine((line) => !/[\r\n]/.test(line), "one line per item"))
+    .min(1)
+    .max(AGENT_RULES_MAX_LINES)
+    .refine((lines) => new TextEncoder().encode(lines.join("\n")).length <= AGENT_RULES_MAX_BYTES, `keep the rules under ${AGENT_RULES_MAX_BYTES} bytes`)
+    .optional(),
 };
 
 export const manifestSchema = z.object(rootShape).strict();
@@ -394,13 +438,17 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
       if (problem !== null) errors.push(`opencode.providers.${providerId}: ${problem}`);
     }
   }
-  for (const key of ["model", "small_model"] as const) {
-    const value = manifest.opencode[key];
+  const modelRefs: { where: string; value: z.infer<typeof agentModel> | undefined }[] = [
+    { where: "opencode.model", value: manifest.opencode.model },
+    { where: "opencode.small_model", value: manifest.opencode.small_model },
+    ...Object.entries(manifest.opencode.agents ?? {}).map(([agent, entry]) => ({ where: `opencode.agents.${agent}.model`, value: entry.model })),
+  ];
+  for (const { where, value } of modelRefs) {
     if (value === undefined) continue;
-    const provider = value.split("/")[0]!;
-    if (!allowed.has(provider)) errors.push(`opencode.${key}: provider "${provider}" is not in allowedProviders`);
+    const provider = typeof value === "string" ? value.split("/")[0]! : value.providerID;
+    if (!allowed.has(provider)) errors.push(`${where}: provider "${provider}" is not in allowedProviders`);
     if (!(provider in manifest.opencode.providers)) {
-      warnings.push(`opencode.${key}: provider "${provider}" is not declared in opencode.providers`);
+      warnings.push(`${where}: provider "${provider}" is not declared in opencode.providers`);
     }
   }
   if (manifest.agents !== undefined) {
