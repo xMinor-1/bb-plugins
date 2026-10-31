@@ -2,12 +2,12 @@
 // button. Send names the version shown here; if the draft changed meanwhile
 // (an agent revised it, someone edited it in Outlook) nothing is sent and the
 // new version is shown instead.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useBbNavigate, useRealtime } from "@get-bb/plugin-sdk/app";
 import type { Draft, MailAddress } from "../../contract";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Notice, errorText } from "./ui";
 import type { Rpc } from "./rpc";
 
@@ -32,7 +32,9 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
   const [hostId, setHostId] = useState<string | null>("hostId" in target ? target.hostId : null);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<null | "send" | "discard">(null);
+  // Our own send or discard announces itself over realtime before its answer arrives; that echo must not reload the card.
+  const acting = useRef(false);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showQuote, setShowQuote] = useState(false);
@@ -53,46 +55,51 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
     if (initial === undefined) load();
   }, [load, initial]);
   useRealtime("drafts-changed", (payload) => {
-    if ((payload as { id?: string } | null)?.id === id && outcome?.tone !== "ok") load();
+    if ((payload as { id?: string } | null)?.id === id && !acting.current && outcome?.tone !== "ok") load();
   });
+
+  const named = (text: string) => (draft?.subject ? `“${draft.subject}”: ${text}` : text);
 
   const send = async () => {
     if (!draft) return;
     setBusy(true);
+    acting.current = true;
     try {
       const result = await rpc.call("sendDraft", { ...target, id, revision: draft.revision });
+      setConfirming(null);
       if (result.status === "sent") {
-        setOutcome({ tone: "ok", text: `Sent at ${new Date(result.at).toLocaleTimeString()}.` });
-        setConfirming(false);
+        setOutcome({ tone: "ok", text: named(`sent at ${new Date(result.at).toLocaleTimeString()}.`) });
         onDone?.();
       } else {
         setOutcome({ tone: "warn", text: result.message });
-        setConfirming(false);
         load();
       }
     } catch (cause) {
       setOutcome({ tone: "error", text: errorText(cause) });
     } finally {
+      acting.current = false;
       setBusy(false);
     }
   };
 
   const discard = async () => {
-    if (!window.confirm("Discard this draft? It is moved to Deleted Items in your mailbox.")) return;
     setBusy(true);
+    acting.current = true;
     try {
       await rpc.call("discardDraft", { ...target, id });
-      setOutcome({ tone: "ok", text: "Discarded." });
+      setConfirming(null);
+      setOutcome({ tone: "ok", text: named("discarded.") });
       onDone?.();
     } catch (cause) {
       setOutcome({ tone: "error", text: errorText(cause) });
     } finally {
+      acting.current = false;
       setBusy(false);
     }
   };
 
   if (error) return <Notice tone="error">Draft {id}: {error}</Notice>;
-  if (outcome?.tone === "ok") return <Notice tone="ok">{draft?.subject ? `“${draft.subject}”: ` : ""}{outcome.text}</Notice>;
+  if (outcome?.tone === "ok") return <Notice tone="ok">{outcome.text}</Notice>;
   if (draft === undefined) return <Notice tone="info">Loading draft…</Notice>;
   if (draft === null) return <Notice tone="info">Draft {id} is no longer waiting: it was sent, discarded or deleted in Outlook.</Notice>;
 
@@ -155,51 +162,57 @@ export function DraftCard({ rpc, target, id, initial, onDone }: { rpc: Rpc; targ
           ) : null}
           {outcome ? <Notice tone={outcome.tone}>{outcome.text}</Notice> : null}
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => setConfirming(true)} disabled={busy || draft.to.length === 0}>
+            <Button onClick={() => setConfirming("send")} disabled={busy || draft.to.length === 0}>
               Send…
             </Button>
             <Button variant="outline" onClick={() => setEditing(true)} disabled={busy || !hostId}>
               Edit
             </Button>
-            <Button variant="ghost" onClick={() => void discard()} disabled={busy}>
+            <Button variant="ghost" onClick={() => setConfirming("discard")} disabled={busy}>
               Discard
             </Button>
           </div>
         </>
       )}
 
-      <Dialog open={confirming} onOpenChange={(open) => !busy && setConfirming(open)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Send this message?</DialogTitle>
-            <DialogDescription>It goes out from your mailbox exactly as shown and cannot be called back.</DialogDescription>
-          </DialogHeader>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-            <dt className="text-muted-foreground">To</dt>
-            <dd className="break-words">{formatList(draft.to)}</dd>
-            {draft.cc.length ? (
-              <>
-                <dt className="text-muted-foreground">Cc</dt>
-                <dd className="break-words">{formatList(draft.cc)}</dd>
-              </>
-            ) : null}
-            <dt className="text-muted-foreground">Subject</dt>
-            <dd className="break-words">{draft.subject || "(no subject)"}</dd>
-          </dl>
-          <p className="text-xs text-muted-foreground">
-            {draft.to.length + draft.cc.length} recipient{draft.to.length + draft.cc.length === 1 ? "" : "s"}, {shown.trim().length} characters of text
-            {quote ? " plus the quoted message" : ""}.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirming(false)} disabled={busy}>
-              Cancel
-            </Button>
-            <Button onClick={() => void send()} disabled={busy}>
-              {busy ? "Sending…" : "Send now"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirming === "send"}
+        title="Send this message?"
+        description="It goes out from your mailbox exactly as shown and cannot be called back."
+        confirmLabel="Send now"
+        busyLabel="Sending…"
+        busy={busy}
+        onConfirm={() => void send()}
+        onCancel={() => setConfirming(null)}
+      >
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+          <dt className="text-muted-foreground">To</dt>
+          <dd className="break-words">{formatList(draft.to)}</dd>
+          {draft.cc.length ? (
+            <>
+              <dt className="text-muted-foreground">Cc</dt>
+              <dd className="break-words">{formatList(draft.cc)}</dd>
+            </>
+          ) : null}
+          <dt className="text-muted-foreground">Subject</dt>
+          <dd className="break-words">{draft.subject || "(no subject)"}</dd>
+        </dl>
+        <p className="text-xs text-muted-foreground">
+          {draft.to.length + draft.cc.length} recipient{draft.to.length + draft.cc.length === 1 ? "" : "s"}, {shown.trim().length} characters of text
+          {quote ? " plus the quoted message" : ""}.
+        </p>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={confirming === "discard"}
+        title="Discard this draft?"
+        description="It moves to Deleted Items in your mailbox and is not sent."
+        confirmLabel="Discard"
+        busyLabel="Discarding…"
+        busy={busy}
+        destructive
+        onConfirm={() => void discard()}
+        onCancel={() => setConfirming(null)}
+      />
     </div>
   );
 }

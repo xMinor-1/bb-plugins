@@ -55,7 +55,8 @@ export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; fol
 
   return (
     <div className="grid min-h-0 gap-4 lg:grid-cols-[minmax(18rem,26rem)_1fr]">
-      <div className="min-w-0 space-y-2">
+      {/* Below the lg breakpoint the open message takes the list's place. */}
+      <div className={cn("min-w-0 space-y-2", selected && "hidden lg:block")}>
         <form
           className="flex gap-2"
           onSubmit={(event) => {
@@ -63,7 +64,7 @@ export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; fol
             setApplied(query.trim());
           }}
         >
-          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search: words, from:name, subject:word" />
+          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search mail" title="Words, from:name, subject:word, received:yesterday" />
           <Button type="submit" variant="outline">
             Search
           </Button>
@@ -71,6 +72,7 @@ export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; fol
             {applied ? "Clear" : "Refresh"}
           </Button>
         </form>
+        <p className="text-xs text-muted-foreground">Words, from:name, subject:word, received:yesterday</p>
         {error ? <Notice tone="error">{error}</Notice> : null}
         {messages === null && !error ? <Notice tone="info">Loading…</Notice> : null}
         {messages?.length === 0 ? <Notice tone="info">{applied ? "Nothing found." : "No messages."}</Notice> : null}
@@ -107,7 +109,12 @@ export function Mailbox({ rpc, hostId, folder }: { rpc: Rpc; hostId: string; fol
         ) : null}
       </div>
 
-      <div className="min-w-0">
+      <div className={cn("min-w-0", !selected && "hidden lg:block")}>
+        {selected ? (
+          <Button variant="ghost" size="sm" className="mb-2 lg:hidden" onClick={() => setSelected(null)}>
+            ← Back to messages
+          </Button>
+        ) : null}
         {selected ? (
           <MessageView key={selected} rpc={rpc} hostId={hostId} ref_={selected} onRead={markRead} canReply={folder !== "drafts"} />
         ) : (

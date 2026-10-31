@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { AuthMode, ConnectionStatus } from "../../contract";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Field, Notice, Section, errorText } from "./ui";
 import type { Rpc } from "./rpc";
 
@@ -61,13 +62,15 @@ export function ConnectionSection({
     }
   };
 
+  const [askForget, setAskForget] = useState(false);
+
   const forget = async () => {
-    if (!window.confirm("Disconnect mail on this machine? The saved password and the list of waiting drafts are removed; the drafts stay in Outlook.")) return;
     setBusy("forget");
     setError(null);
     try {
       onStatus(await rpc.call("forget", { hostId }));
       setPassword("");
+      setAskForget(false);
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -138,11 +141,22 @@ export function ConnectionSection({
           </Button>
         ) : null}
         {saved ? (
-          <Button variant="ghost" onClick={() => void forget()} disabled={busy !== null}>
+          <Button variant="ghost" onClick={() => setAskForget(true)} disabled={busy !== null}>
             Disconnect
           </Button>
         ) : null}
       </div>
+      <ConfirmDialog
+        open={askForget}
+        title="Disconnect mail on this machine?"
+        description="The saved password and the list of drafts waiting in bb are removed. The drafts themselves stay in your Drafts folder."
+        confirmLabel="Disconnect"
+        busyLabel="Disconnecting…"
+        busy={busy === "forget"}
+        destructive
+        onConfirm={() => void forget()}
+        onCancel={() => setAskForget(false)}
+      />
     </Section>
   );
 }

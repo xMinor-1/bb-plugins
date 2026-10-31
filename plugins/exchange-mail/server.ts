@@ -304,7 +304,14 @@ export default async function plugin(bb: BbPluginApi) {
     },
     policy: () => policyView(),
     savePolicy: async ({ rules }) => {
-      const text = formatRules(parseRules(formatRules(rules)));
+      let text: string;
+      try {
+        text = formatRules(parseRules(formatRules(rules)));
+      } catch (error) {
+        // A bad rule is the person's typo, not a server failure: keep the saved list and say what is wrong.
+        if (error instanceof PolicyError) return { rules: [...policy.rules], error: error.message };
+        throw error;
+      }
       await settings.experimental_set({ allowedModels: text });
       applyPolicy(text);
       return policyView();

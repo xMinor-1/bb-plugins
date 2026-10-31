@@ -1,5 +1,3 @@
-# Exchange Mail
-
 Your Microsoft Exchange mailbox (on-premises, Exchange Web Services) inside bb,
 with agents that help answer mail but never send it on their own.
 
