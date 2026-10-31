@@ -2,7 +2,8 @@
 // meetings): `bb.sdk.plugins.callRpc({ pluginId: "exchange-mail", method: "calendarEvents", input })`.
 // Only plugins listed in the `calendarPlugins` setting get an answer, and they
 // get less than the panel: times, subjects and places, no organizer and no
-// attendees. A plugin on the list takes on the rule the mail tools follow: the
+// attendees, and of an event marked private only its time: the subject comes
+// as "Private" and the place as null. A plugin on the list takes on the rule the mail tools follow: the
 // calendar goes to no model outside the allowed agents.
 //
 //   input  { start: ISO with a zone, end: ISO with a zone (at most 62 days later), hostId?: string }
@@ -11,20 +12,23 @@
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import type { CalendarEvent } from "../../contract";
+import { CALENDAR_TEXT_MAX } from "./limits";
 
 export const calendarEntrySchema = z
   .object({
     id: z.string(),
-    subject: z.string(),
+    /** "Private" for an event marked private. */
+    subject: z.string().max(CALENDAR_TEXT_MAX),
     start: z.string(),
     end: z.string(),
     allDay: z.boolean(),
-    location: z.string().nullable(),
+    /** null for an event marked private. */
+    location: z.string().max(CALENDAR_TEXT_MAX).nullable(),
     showAs: z.enum(["free", "tentative", "busy", "away", "elsewhere", "unknown"]),
     myResponse: z.enum(["organizer", "accepted", "tentative", "declined", "none", "unknown"]),
     kind: z.enum(["single", "occurrence", "exception"]),
     cancelled: z.boolean(),
-    /** Marked private in Outlook: show it to the person, keep it out of anything shared. */
+    /** Marked private in Outlook: only its time and free/busy come; keep even that out of anything shared. */
     private: z.boolean(),
   })
   .strict();
@@ -57,15 +61,18 @@ export const calendarRpcContract = defineRpcContract({
   },
 });
 
-/** What another plugin gets of an event: no organizer, no attendees. */
+/** Stands for the subject of an event marked private. */
+export const PRIVATE_SUBJECT = "Private";
+
+/** What another plugin gets of an event: no organizer, no attendees, and of a private one nothing but its time. */
 export function entryOf(event: CalendarEvent): CalendarEntry {
   return {
     id: event.id,
-    subject: event.subject,
+    subject: event.private ? PRIVATE_SUBJECT : event.subject,
     start: event.start,
     end: event.end,
     allDay: event.allDay,
-    location: event.location,
+    location: event.private ? null : event.location,
     showAs: event.showAs,
     myResponse: event.myResponse,
     kind: event.kind,

@@ -107,9 +107,12 @@ the system window, and both list every recipient.
   A click shows the organizer and who is invited. Arrows switch the week,
   **Today** comes back.
 - `calendar_events` gives agents the meetings of a period — "what do I have
-  tomorrow": time, subject, place, organizer, who is invited, your response,
-  and whether it was cancelled or moved. Dates are read and written in the
-  time zone of the machine with the mailbox.
+  tomorrow": time, subject, place, organizer, how many are invited (not who),
+  your response, and whether it was cancelled or moved. Dates are read and
+  written in the time zone of the machine with the mailbox.
+- **Private events** (marked private in Outlook) reach agents and other
+  plugins as their time and free/busy only: no subject, place or people. The
+  page shows them to you in full.
 - `calendar_free_time` gives the free stretches of working hours (09:00–18:00
   and 30 minutes by default, weekdays only unless asked) — "when am I free on
   Thursday". Busy, tentative and away events take time; cancelled, declined
@@ -118,7 +121,9 @@ the system window, and both list every recipient.
   thread that read it is marked the same way.
 - Nothing creates, answers or moves a meeting: there is no such tool or
   button. One request reads 500 events and 62 days at most (31 for free
-  time); the page and the agent say when the calendar had more.
+  time; an hour more when the clocks go back inside the period); the page and
+  the agent say when the calendar had more. A subject, place or organizer name
+  is kept up to 1000 characters, the list of invitees up to 4000.
 
 ### The calendar for other plugins
 
@@ -143,9 +148,11 @@ const answer = await bb.sdk.plugins.callRpc({
 - Only plugins listed in the `calendarPlugins` setting get an answer; the rest
   get `not-allowed`. The list is empty until you fill it.
 - They get less than the page: times, subjects and places, no organizer and no
-  attendees. `start` and `end` are UTC; an all-day event runs from midnight to
-  midnight of the mailbox's time zone. `private` events should stay out of
-  anything shared.
+  attendees. A private event comes with the subject `"Private"` and no place.
+  Keep even its time out of anything shared.
+- `start` and `end` are UTC. An all-day event runs from midnight to midnight of
+  the mailbox's time zone; to place it in another zone, take the local midnight
+  nearest to `start`, as the Calendar page does.
 - A plugin on the list takes on the rule the mail tools follow: the calendar
   goes to no model outside the allowed agents. List only plugins you trust
   with that.
@@ -251,7 +258,7 @@ carefully:
 | `mail_conversation` | all messages of a message's conversation in Inbox and Sent, oldest first |
 | `mail_find_person` | look someone up in the address book; with several matches the user chooses in the thread |
 | `mail_draft` | save a reply, reply-all, forward or new message as a draft, or revise one |
-| `calendar_events` | meetings of a period, recurring ones expanded: time, subject, place, organizer, invited, response, cancelled or moved |
+| `calendar_events` | meetings of a period, recurring ones expanded: time, subject, place, organizer, number invited, response, cancelled or moved; private ones as time only |
 | `calendar_free_time` | free stretches of working hours in a period, from the user's own calendar |
 
 ## Settings

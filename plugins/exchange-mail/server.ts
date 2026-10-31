@@ -125,7 +125,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Plugins that may read the calendar",
       description:
-        "Plugin ids separated by spaces or lines, for example `sticker-note`. They get meeting times, subjects and places — no organizer, no attendees — " +
+        "Plugin ids separated by spaces or lines, for example `sticker-note`. They get meeting times, subjects and places — no organizer, no attendees, and only the time of private events — " +
         "from the machine the Mail page used last. List only plugins that keep the calendar away from models outside the allowed agents. Empty: none.",
       experimental_multiline: true,
       default: "",
@@ -388,7 +388,8 @@ export default async function plugin(bb: BbPluginApi) {
     name: "calendar_events",
     description:
       "Meetings and appointments in the user's Exchange calendar for a period, recurring ones expanded into each occurrence: time, subject, place, " +
-      "organizer, who is invited, the user's response, and whether it was cancelled or moved. Read only: no tool creates or changes meetings.",
+      "organizer, how many are invited, the user's response, and whether it was cancelled or moved. Events marked private come as their time only. " +
+      "Read only: no tool creates or changes meetings.",
     presentation: label("Reading the calendar", "Read the calendar"),
     parameters: z.object({
       from: z.string().min(10).max(40).optional().describe("First day (2026-11-03) or a local time (2026-11-03T14:00); today by default"),

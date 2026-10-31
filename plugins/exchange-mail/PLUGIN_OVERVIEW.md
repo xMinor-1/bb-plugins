@@ -22,6 +22,7 @@ with agents that help answer mail but never send it on their own.
   response on each. Agents answer "what do I have tomorrow" and "when am I
   free on Thursday". Read only: meetings are made in Outlook. Plugins you list
   in a setting can show your meetings too (times, subjects and places only).
+  Events you marked private reach agents and plugins as their time only.
 
 ## Agents read; people send
 

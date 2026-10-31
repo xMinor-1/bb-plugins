@@ -78,13 +78,32 @@ export function weekStart(date: Date): Date {
 
 const addDays = (date: Date, days: number) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 
-/** The events that touch a day, all-day ones first, then by start. */
+/**
+ * The local midnight nearest to a moment. An all-day event runs from midnight
+ * to midnight of the mailbox's time zone; in a browser a few hours east or west
+ * of it, that midnight is the nearest one to the event's start.
+ */
+function nearestMidnight(ms: number): Date {
+  const at = new Date(ms);
+  const before = new Date(at.getFullYear(), at.getMonth(), at.getDate());
+  const after = addDays(before, 1);
+  return ms - before.getTime() <= after.getTime() - ms ? before : after;
+}
+
+/** Whether an event belongs on a day: all-day ones on the dates they were made for, the rest wherever they take time. */
+function onDay(event: CalendarEvent, day: Date): boolean {
+  const start = Date.parse(event.start);
+  const end = Date.parse(event.end);
+  if (!event.allDay) return start < addDays(day, 1).getTime() && end > day.getTime();
+  const first = nearestMidnight(start);
+  // A day may be 23 or 25 hours long when the clocks change.
+  const days = Math.max(1, Math.round((end - start) / (24 * 60 * 60_000)));
+  return day.getTime() >= first.getTime() && day.getTime() < addDays(first, days).getTime();
+}
+
+/** The events of a day, all-day ones first, then by start. */
 export function eventsOfDay(events: readonly CalendarEvent[], day: Date): CalendarEvent[] {
-  const from = day.getTime();
-  const to = addDays(day, 1).getTime();
-  return events
-    .filter((event) => Date.parse(event.start) < to && Date.parse(event.end) > from)
-    .sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.localeCompare(b.start));
+  return events.filter((event) => onDay(event, day)).sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.localeCompare(b.start));
 }
 
 export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc; hostId: string; now?: () => Date }) {

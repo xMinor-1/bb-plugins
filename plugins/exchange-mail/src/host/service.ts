@@ -21,8 +21,8 @@ import type {
   ToolInput,
   ToolOutput,
 } from "../../contract.js";
-import { ATTACHMENT_MAX_BYTES, CALENDAR_MAX_DAYS, CALENDAR_MAX_EVENTS } from "../shared/limits.js";
-import { fixedOffset, formatEvents, formatFreeTime, freeSlots, minutesOf, rangeOf, systemOffset, toEvent, type Offset } from "./calendar.js";
+import { ATTACHMENT_MAX_BYTES, CALENDAR_MAX_DAYS, CALENDAR_MAX_EVENTS, FREE_TIME_MAX_DAYS } from "../shared/limits.js";
+import { checkPeriod, fixedOffset, formatEvents, formatFreeTime, freeSlots, minutesOf, rangeOf, systemOffset, toEvent, type Offset } from "./calendar.js";
 import { normalizeText } from "../shared/mail-text.js";
 import { isAddress } from "../shared/recipients.js";
 import { oneAtATime, systemConfirmer, type SendConfirmer, type SendSummary } from "./confirm.js";
@@ -49,8 +49,6 @@ const INLINE_IMAGES_MAX_BYTES = 6_000_000;
 const INLINE_IMAGES_MAX = 30;
 const CONVERSATION_MAX = 50;
 /** Free time is looked for in a month at most. */
-const FREE_TIME_MAX_DAYS = 31;
-const DAY_MS = 24 * 60 * 60_000;
 /** People shown for one search: enough to choose from, few enough to read. */
 export const PEOPLE_MAX = 25;
 
@@ -473,8 +471,7 @@ export class MailService {
   async calendar(start: string, end: string, signal?: AbortSignal): Promise<CalendarOutput> {
     const from = Date.parse(start);
     const to = Date.parse(end);
-    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) throw new UserError("The calendar period is not valid: its end must come after its start.");
-    if (to - from > CALENDAR_MAX_DAYS * DAY_MS) throw new UserError(`Ask for ${CALENDAR_MAX_DAYS} days of calendar at most.`);
+    checkPeriod(from, to, CALENDAR_MAX_DAYS);
     return this.readCalendar(from, to, signal);
   }
 

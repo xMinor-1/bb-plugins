@@ -69,6 +69,17 @@ describe("the week", () => {
     expect(eventsOfDay(EVENTS, new Date(2026, 10, 6)).map((e) => e.subject)).toEqual(["Release"]);
   });
 
+  it("keeps an all-day event on its own dates when the mailbox's time zone is not the browser's", () => {
+    const days = (e: CalendarEvent) => [2, 3, 4, 5, 6, 7, 8].filter((d) => eventsOfDay([e], new Date(2026, 10, d)).length > 0);
+    // The mailbox three hours west of the browser: its midnight is 03:00 here.
+    expect(days(event({ subject: "West", start: local(5, 3), end: local(6, 3), allDay: true }))).toEqual([5]);
+    // Three hours east: 21:00 the evening before.
+    expect(days(event({ subject: "East", start: local(4, 21), end: local(5, 21), allDay: true }))).toEqual([5]);
+    expect(days(event({ subject: "Two days", start: local(5, 2), end: local(7, 2), allDay: true }))).toEqual([5, 6]);
+    // A meeting with times keeps every day it takes.
+    expect(days(event({ subject: "Night", start: local(5, 21), end: local(6, 3) }))).toEqual([5, 6]);
+  });
+
   it("asks for this week and shows each day with its events and what changed", async () => {
     const asked = renderWeek();
     await screen.findByText("Vendor call");

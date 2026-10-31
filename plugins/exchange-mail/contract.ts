@@ -6,6 +6,7 @@
 // approved agents and keeps none of it.
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { CALENDAR_ATTENDEES_MAX, CALENDAR_TEXT_MAX } from "./src/shared/limits";
 
 export const FOLDERS = ["inbox", "sent", "drafts", "deleted"] as const;
 export const folderSchema = z.enum(FOLDERS);
@@ -194,15 +195,16 @@ export const calendarEventSchema = z
   .object({
     /** Stable for the same occurrence on this machine. */
     id: z.string(),
-    subject: z.string(),
+    /** Cut to CALENDAR_TEXT_MAX on the host, like the place and the organizer's name. */
+    subject: z.string().max(CALENDAR_TEXT_MAX),
     /** ISO, UTC. An all-day event runs from midnight to midnight in the mailbox's time zone. */
     start: z.string(),
     end: z.string(),
     allDay: z.boolean(),
-    location: z.string().nullable(),
-    organizer: addressSchema.nullable(),
-    /** Who else is invited, as Exchange lists them: names separated by semicolons. */
-    attendees: z.string(),
+    location: z.string().max(CALENDAR_TEXT_MAX).nullable(),
+    organizer: z.object({ name: z.string().max(CALENDAR_TEXT_MAX).nullable(), email: z.string().max(320) }).strict().nullable(),
+    /** Who else is invited, as Exchange lists them: names separated by semicolons. Shown to the person only; agents get the count. */
+    attendees: z.string().max(CALENDAR_ATTENDEES_MAX),
     myResponse: z.enum(["organizer", "accepted", "tentative", "declined", "none", "unknown"]),
     showAs: z.enum(["free", "tentative", "busy", "away", "elsewhere", "unknown"]),
     /** single, an occurrence of a recurring meeting, or an occurrence that was moved or changed. */
