@@ -33,6 +33,12 @@ const PATHS = {
     </>
   ),
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
+  help: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M9.6 9.6a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2-2.4 3.5M12 16.9v.1" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof PATHS;

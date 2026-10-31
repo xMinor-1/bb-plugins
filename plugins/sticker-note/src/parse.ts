@@ -41,7 +41,7 @@ const RE_AFTER_TOMORROW = word("послезавтра|day after tomorrow");
 const RE_IN_DAYS = word("через\\s+(\\d{1,2})\\s+(?:дн\\p{L}*|день)|in\\s+(\\d{1,2})\\s+days?");
 const RE_IN_WEEK = word("через\\s+неделю|in\\s+a\\s+week|next\\s+week|на\\s+следующей\\s+неделе");
 const RE_RU_WEEKDAY = word(
-  "(?:(?:в|во|до|к|на|по)\\s+)?(?:(?:эту|этот|это|следующ\\p{L}*)\\s+)?(понедельник\\p{L}*|вторник\\p{L}*|сред[ауы]|четверг\\p{L}*|пятниц[аеуы]|суббот[аеуы]|воскресень[еяю])",
+  "(?:(?:в|во|до|к|на|по)\\s+)?(?:(?:эту|этот|это|следующ\\p{L}*|будущ\\p{L}*|ближайш\\p{L}*)\\s+)?(понедельник\\p{L}*|вторник\\p{L}*|сред[ауы]|четверг\\p{L}*|пятниц[аеуы]|суббот[аеуы]|воскресень[еяю])",
 );
 const RE_EN_WEEKDAY = word(`(?:(?:on|by|next|this|until)\\s+)?(${EN_WEEKDAYS.join("|")})`);
 const RE_RU_DATE = word(`(?:(?:до|к|на)\\s+)?(\\d{1,2})\\s+(${RU_MONTHS.join("|")})\\p{L}*`);
@@ -62,11 +62,37 @@ const RU_ORDINALS = [
 ];
 /** "в полвосьмого", "в половине восьмого": 7:30. */
 const RE_HALF = word(`(?:(?:в|к|до)\\s+)?(?:пол\\s*|половин[еуа]\\s+)(${RU_ORDINALS.join("|")})`);
-const RU_HOUR_WORDS = [
-  "час", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять", "десять", "одиннадцать", "двенадцать",
+/** Spelled-out hours: "в час", "до часа дня", "к пяти", "до двух часов", "в семь вечера". */
+const RU_HOURS: { nominative: string; oblique: string }[] = [
+  { nominative: "час", oblique: "часа|часу" },
+  { nominative: "два", oblique: "двух|двум" },
+  { nominative: "три", oblique: "тр[её]х|тр[её]м" },
+  { nominative: "четыре", oblique: "четыр[её]х|четыр[её]м" },
+  { nominative: "пять", oblique: "пяти" },
+  { nominative: "шесть", oblique: "шести" },
+  { nominative: "семь", oblique: "семи" },
+  { nominative: "восемь", oblique: "восьми" },
+  { nominative: "девять", oblique: "девяти" },
+  { nominative: "десять", oblique: "десяти" },
+  { nominative: "одиннадцать", oblique: "одиннадцати" },
+  { nominative: "двенадцать", oblique: "двенадцати" },
 ];
-/** "в семь вечера", "в десять утра": a spelled-out hour needs a part of the day after it. */
-const RE_HOUR_WORD = word(`(?:в|к|на|до)\\s+(${RU_HOUR_WORDS.join("|")})\\s+(утра|дня|вечера|ночи)`);
+const RE_HOUR_WORD = word(
+  `(?:в|к|на|до|после|около)\\s+(${RU_HOURS.map((h) => `${h.nominative}|${h.oblique}`).join("|")})` +
+    `(?:\\s+(час\\p{L}*))?(?:\\s+(утра|дня|вечера|ночи))?` +
+    // "в два раза", "до трёх дней" count things, they are not times.
+    `(?!\\s+(?:раз|дн|недел|месяц|минут|штук|человек|задач|страниц|лет|год|процент|тысяч|рубл))`,
+);
+function hourOfWord(token: string): number {
+  const lower = token.toLowerCase();
+  return RU_HOURS.findIndex((h) => new RegExp(`^(?:${h.nominative}|${h.oblique})$`, "u").test(lower)) + 1;
+}
+/** Times of day people say instead of a clock: lunch is 13:00, the end of the day 18:00. */
+const DAY_MARKS: [RegExp, number, number][] = [
+  [word("после\\s+обеда|after\\s+lunch"), 14, 0],
+  [word("(?:до|к|перед|в)\\s+обед\\p{L}*|(?:by|before|at)\\s+lunch(?:time)?"), 13, 0],
+  [word("(?:до|к)\\s+концу?\\s+(?:рабочего\\s+)?дня|(?:до|к)\\s+вечер[ау]|by\\s+(?:the\\s+)?end\\s+of\\s+(?:the\\s+)?day|by\\s+eod"), 18, 0],
+];
 /** "утром", "вечером": today if nothing else names the day, and a hint for bare hours. */
 const RE_DAYPART = word("утром|с\\s+утра|дн[её]м|вечером|ночью|in\\s+the\\s+(?:morning|afternoon|evening)|this\\s+(?:morning|afternoon|evening)");
 
@@ -165,8 +191,11 @@ export function parseWhen(text: string, now: LocalNow): WhenResult {
     setTime(m, bareHour(n === 1 ? 12 : n - 1), 30);
   }
   for (const m of matches(text, RE_HOUR_WORD)) {
-    const h = RU_HOUR_WORDS.indexOf(m[1]!.toLowerCase()) + 1;
-    setTime(m, ampm(h, m[2]), 0);
+    const h = hourOfWord(m[1]!);
+    const nominative = RU_HOURS[h - 1]!.nominative === m[1]!.toLowerCase();
+    // "в два" alone is too often "в два раза"; "в час" and "до двух" are times.
+    if (nominative && h !== 1 && !m[2] && !m[3]) continue;
+    setTime(m, m[3] ? ampm(h, m[3]) : bareHour(h), 0);
   }
   for (const m of matches(text, RE_NOON)) setTime(m, 12, 0);
   for (const m of matches(text, RE_HOUR_AMPM)) setTime(m, ampm(Number(m[1]), m[2]), 0);
@@ -177,6 +206,7 @@ export function parseWhen(text: string, now: LocalNow): WhenResult {
     else h = bareHour(h);
     setTime(m, h, 0);
   }
+  for (const [re, h, min] of DAY_MARKS) for (const m of matches(text, re)) setTime(m, h, min);
   if (dayPartMatch && !someday) {
     hits.push(hitOf(dayPartMatch, "when"));
     if (date === null && time === null) date = now.date;
@@ -225,10 +255,18 @@ function linksOf(text: string): { links: string[]; hits: Hit[] } {
 const COMMANDS: { action: Action; re: RegExp }[] = [
   { action: "importance", re: word("(сделай|пометь|поставь|отметь\\s+как|make|mark\\s+as|mark)\\s+((?:[\\p{L}\\p{N}]+\\s+){0,4}?)(важн\\p{L}*|срочн\\p{L}*|неважн\\p{L}*|несрочн\\p{L}*|important|urgent|low\\s+priority)") },
   { action: "undone", re: word("верни\\p{L}*|вернуть|не\\s+готово|undo|reopen|not\\s+done") },
-  { action: "done", re: word("отметь|отметить|отмечай|готово|сделал[аио]?|сделано|выполнил[аио]?|выполнено|закрой|закрыл[аио]?|вычеркни|mark\\s+(?:as\\s+)?done|done|completed?|finished") },
-  { action: "move", re: word("перенеси|перенести|переложи|сдвинь|отложи|move|postpone|reschedule|push") },
+  { action: "done", re: word("отметь|отметить|отмечай|готово|сделал[аио]?|сделано|выполнил[аио]?|выполнено|закрой|закрыл[аио]?|закрыт\\p{L}*|вычеркни|mark\\s+(?:as\\s+)?done|done|completed?|finished|closed?") },
+  { action: "move", re: word("перенеси|перенести|переложи|сдвинь|подвинь|передвинь|перемести|отложи|move|postpone|reschedule|push") },
   { action: "delete", re: word("удали|удалить|убери|убрать|сотри|delete|remove") },
 ];
+/** "Стикер 112", "номер 112", "задачу 112", "#112", "№ 112": a card by its number. */
+const RE_CARD_NUM = word(
+  "(?:стикер\\p{L}*|номер\\p{L}*|задач\\p{L}*|карточк\\p{L}*|sticker|card|task|note|number)\\s*(?:№|#|номер\\s+)?(\\d{1,5})|[#№]\\s?(\\d{1,5})",
+);
+const RE_OPEN = /^\s*(?:открой|открыть|покажи|open|show)(?![\p{L}])/iu;
+/** "Закрой задачу…", "перенеси её…", "close the task…": the verb points at "the task" in context. */
+const RE_GENERIC_OBJECT =
+  /^\s*[\p{L}]+\s+(?:(?:эту|это|последн\p{L}*|текущ\p{L}*|мою|this|the|that|my)\s+)?(?:задач\p{L}*|стикер\p{L}*|карточк\p{L}*|е[её]|это|task|card|sticker|it|this)(?![\p{L}])/iu;
 /** Phrases that start a new task even if a command word follows ("напомни отметить часы"). */
 const RE_CREATE_LEAD = /^\s*(?:напомни\p{L}*|надо|нужно|не\s+забыть|не\s+забудь|добавь\s+задачу|запиши|remind\s+me|remember\s+to|i\s+need\s+to|todo)(?![\p{L}])/iu;
 
@@ -240,7 +278,7 @@ const STOP = new Set(
       "сегодня завтра послезавтра понедельник вторник среду среда четверг пятницу пятница субботу воскресенье " +
       "через неделю следующей утра вечера часов " +
       "mark done move delete remove make important urgent today tomorrow monday tuesday wednesday thursday friday saturday sunday " +
-      "next week task please",
+      "next week task please пожалуйста последнюю последняя текущую задачку this that",
   ),
 );
 
@@ -251,6 +289,8 @@ function stems(s: string): string[] {
 interface Target {
   ids: string[];
   hits: Hit[];
+  /** The phrase had words that could name a card; false for "закрой задачу". */
+  named: boolean;
 }
 
 /** Everyday short words: in lowercase they never stand for an acronym ("что-то" is not "ТО"). */
@@ -287,7 +327,7 @@ function findTarget(text: string, cards: Pick<Card, "id" | "title" | "done">[], 
       return { key, start: m.index!, end: m.index! + m[0].length };
     })
     .filter((w): w is { key: string; start: number; end: number } => w.key !== null && !STOP.has(w.key));
-  if (words.length === 0) return { ids: [], hits: [] };
+  if (words.length === 0) return { ids: [], hits: [], named: false };
   let best = 0;
   let ids: string[] = [];
   let bestHits: Hit[] = [];
@@ -301,7 +341,7 @@ function findTarget(text: string, cards: Pick<Card, "id" | "title" | "done">[], 
       bestHits = hit.map((w) => ({ start: w.start, end: w.end, kind: "target" as const }));
     } else if (hit.length === best) ids.push(card.id);
   }
-  return { ids, hits: bestHits };
+  return { ids, hits: bestHits, named: true };
 }
 
 // ---------- titles ----------
@@ -338,10 +378,22 @@ function sortHits(hits: Hit[]): Span[] {
 export interface ParseInput {
   text: string;
   now: LocalNow;
-  cards: Pick<Card, "id" | "title" | "done">[];
+  cards: (Pick<Card, "id" | "title" | "done"> & { num?: number })[];
+  /** The card the user is dealing with: the open one, or the last one touched. */
+  contextId?: string | null;
 }
 
-export function parsePhrase({ text, now, cards }: ParseInput): ParseResult {
+export function parsePhrase({ text: said, now, cards, contextId = null }: ParseInput): ParseResult {
+  // A card named by its number. The number is blanked out (offsets kept) so
+  // "стикер 12 на завтра" never reads 12 as a time.
+  const ref = matches(said, RE_CARD_NUM)
+    .map((m) => ({ m, card: cards.find((c) => c.num === Number(m[1] ?? m[2])) }))
+    .find((r) => r.card !== undefined);
+  const refHit = ref ? hitOf(ref.m, "target") : null;
+  const text = refHit ? said.slice(0, refHit.start) + " ".repeat(refHit.end - refHit.start) + said.slice(refHit.end) : said;
+  if (ref && RE_OPEN.test(said)) {
+    return { type: "command", action: "open", targetId: ref.card!.id, spans: sortHits([hitOf(RE_OPEN.exec(said)!, "action"), refHit!]) };
+  }
   const when = parseWhen(text, now);
   const imp = importanceOf(text);
   const kind = kindOf(text);
@@ -360,7 +412,22 @@ export function parsePhrase({ text, now, cards }: ParseInput): ParseResult {
               { start: m.index! + m[0].length - m[3]!.length, end: m.index! + m[0].length, kind: "importance" },
             ]
           : [hitOf(m, "action")];
-      const target = findTarget(text, cards, action === "undone", [...actionHits, ...when.hits, ...imp.hits]);
+      const target: Target = ref
+        ? { ids: [ref.card!.id], hits: [refHit!], named: true }
+        : findTarget(text, cards, action === "undone", [...actionHits, ...when.hits, ...imp.hits]);
+      // A Russian imperative opening the phrase ("Закрой…", not "Закрыть…") is
+      // always a command, never a new task.
+      const leading = text.slice(0, actionHits[0]!.start).trim() === "";
+      const verb = text.slice(actionHits[0]!.start, actionHits[0]!.end).split(/\s+/)[0] ?? "";
+      const imperative = leading && /\p{Script=Cyrillic}/u.test(verb) && !/(?:ть|ти)$/iu.test(verb);
+      const generic = leading && RE_GENERIC_OBJECT.test(text);
+      // "Закрой задачу" points at the card in context, or the only candidate:
+      // also when the rest of the phrase is an explanation that names nothing on the board.
+      if (!target.named || (generic && target.ids.length === 0)) {
+        const pool = cards.filter((c) => c.done === (action === "undone"));
+        const implied = contextId && cards.some((c) => c.id === contextId) ? contextId : pool.length === 1 ? pool[0]!.id : null;
+        if (implied) target.ids = [implied];
+      }
       const spans = sortHits([...actionHits, ...target.hits, ...(action === "move" ? when.hits : [])]);
       if (target.ids.length === 1) {
         const base = { type: "command" as const, action, targetId: target.ids[0]!, spans };
@@ -371,13 +438,14 @@ export function parsePhrase({ text, now, cards }: ParseInput): ParseResult {
       if (target.ids.length > 1) return { type: "ambiguous", action, candidateIds: target.ids.slice(0, 3), spans };
       // A command word with no task to point at: short phrases are failed
       // commands, longer ones are probably a new task ("отменить подписку").
-      if (text.trim().split(/\s+/).length <= 4) return { type: "notFound", action, spans };
+      if (!target.named || generic) return { type: "notFound", action, named: false, spans };
+      if (imperative || text.trim().split(/\s+/).length <= 4) return { type: "notFound", action, named: true, spans };
       break;
     }
   }
 
   const draft: Draft = {
-    title: titleFrom(text, [...when.hits, ...imp.hits, ...links.hits]) || text.trim(),
+    title: titleFrom(said, [...when.hits, ...imp.hits, ...links.hits]) || said.trim(),
     due: toDue(when),
     importance: when.someday && imp.importance === "normal" ? "low" : imp.importance,
     kind: kind.kind,

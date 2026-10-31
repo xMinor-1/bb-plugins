@@ -8,6 +8,7 @@ const now = { date: "2026-10-31", time: "13:40" };
 function card(id: string, due: Due | null, extra: Partial<Card> = {}): Card {
   return {
     id,
+    num: 1,
     title: id,
     notes: [],
     links: [],

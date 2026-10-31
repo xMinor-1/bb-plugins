@@ -14,22 +14,30 @@ The interface is in English and Russian, with a switch in the board's title bar.
   *Soon* (the next 7 days), *Later* (further out or no date) and *Done*.
   Important cards carry a folded yellow corner, low-priority ones are dimmed.
   Drag a card to another column to reschedule it; the round check marks it done.
-- **Dictation on the board.** Press the microphone, or hold Space anywhere on
-  the board, and speak. The phrase is understood at once and its parts are
-  highlighted: when, importance, work, links.
+- **Dictation from anywhere in bb.** Press the hotkey (Alt+S, ⌥S on a Mac, set in
+  the plugin settings) and speak; press it again to add. Pressed outside the
+  board, it opens the board and starts recording. The microphone button works
+  too. The phrase is understood at once and its parts are highlighted: when,
+  importance, work, links.
   - New tasks: "Tomorrow at 10 call the service about the MOT", "On Thursday renew
     the car insurance sravni.ru", "Someday buy vacuum filters", "Вечером в полвосьмого
-    забрать посылку", "12 декабря подать документы, это важно".
+    забрать посылку", "В понедельник до обеда посмотреть презентацию" (lunch is
+    13:00, the end of the day 18:00), "12 декабря подать документы, это важно".
   - Commands: "mark the parcel done", "move the service call to Wednesday at 12",
     "postpone the PRD", "make the passport urgent", "delete the filters",
     "reopen the leads report". When two cards match, the board asks which one.
-  - Every change shows a toast with **Undo**.
+  - Every sticker has a number, so "move sticker 112 to done", "закрой задачу 12"
+    or "открой стикер 7" need no wording at all.
+  - "Close the task" with no name acts on the card you dealt with last (created,
+    opened, moved) in the past 15 minutes, or on the only open card.
+  - One line under the input says what was done, with the sticker's number and
+    an **Undo** button: "Закрыто: #12 «Смотреть презентацию»".
 - **An open card** with editable title, date and time, importance, kind
   (work or personal), links, notes and what you originally said. At the bottom
   is a second dictation bar: details go into the notes ("add that the code is
-  4417"), requests go to an agent ("ask the agent to compare the prices"). A
-  request starts an ordinary bb thread with the card as context, and the card
-  links to it.
+  4417"), requests go to an agent ("ask the agent to compare the prices"), and
+  commands act on this card ("close it", "move to Monday at 10"). A request
+  starts an ordinary bb thread with the card as context, and the card links to it.
 - **A badge** with today's open cards on the navigation item, red when something
   is overdue, and a glass sticker button with the same count in the sidebar footer.
 - Typing works everywhere dictation does: Enter submits.
@@ -47,6 +55,9 @@ works by typing and says how to turn dictation on.
 
 ## Settings
 
+- **Dictation hotkey.** Default Alt+S. Examples: Ctrl+Shift+Space, Cmd+J, F2.
+  Letters follow the physical key, so the keyboard layout does not matter.
+  Empty turns it off.
 - **Project for agent chats.** Where a request said inside a card starts its
   thread. Empty: a project named *Personal* (or *Личное*) if there is one,
   otherwise the first project.
@@ -61,8 +72,9 @@ works by typing and says how to turn dictation on.
   of the day, importance words, work words and links. bb gives plugins no text
   model, and rules answer instantly. The browser sends its own date and time, so
   "today" and "tonight" mean the user's local day.
-- Commands find their card by the words of the phrase against open card titles
-  (finished ones for "reopen"). A tie is reported instead of guessed.
+- Commands find their card by its number, or by the words of the phrase against
+  open card titles (finished ones for "reopen"). A tie is reported instead of
+  guessed. Numbers are never reused.
 - Undo keeps the last 30 board states in the server's memory.
 - Inside a card, `src/compose.ts` decides between a note and an agent request
   by the verb: "find", "compare", "prepare", "check", "ask the agent" start a chat.

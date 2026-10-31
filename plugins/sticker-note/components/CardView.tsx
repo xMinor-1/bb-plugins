@@ -129,6 +129,9 @@ export function CardView({ card, column, now, flash, onOpen, onToggleDone }: Car
       >
         <Icon name="check" size={11} />
       </button>
+      <span className="sn-num" aria-label={`#${card.num}`}>
+        #{card.num}
+      </span>
       {when}
       <div className="sn-title">{card.title}</div>
       {meta ? <div className="sn-meta">{meta}</div> : null}
