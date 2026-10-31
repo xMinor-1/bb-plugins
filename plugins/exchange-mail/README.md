@@ -206,7 +206,10 @@ bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
   `{ state: "done" | "todo" | "problem", summary, path }`: `done` once the saved
   connection passed its last check, `summary` is one line in `lang` with no
   address, login or password, `path` is the Mail page. It reads the saved
-  connection only and sends nothing to Exchange.
+  connection only and sends nothing to Exchange; a machine's answer serves for
+  5 seconds (on Windows each one starts PowerShell to look at the password), and
+  a change of the connection drops it. A machine that is not connected and one
+  that cannot read its state are told apart.
 - Attachment text is extracted on the host — PDF with pdf.js (`unpdf`, no
   fonts loaded), text as UTF-8, UTF-16 or Windows-1251 — and only the text
   goes to the agent. Files go to the panel only when you open or save them.

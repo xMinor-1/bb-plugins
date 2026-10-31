@@ -47,7 +47,22 @@ describe("when", () => {
     ["вечером", "2026-10-31", null],
     ["в семь вечера", "2026-10-31", "19:00"],
     ["в десять утра", "2026-11-01", "10:00"],
+    ["до часа дня", "2026-11-01", "13:00"],
+    ["в час", "2026-11-01", "13:00"],
+    ["к пяти", "2026-10-31", "17:00"],
+    ["до двух часов дня", "2026-10-31", "14:00"],
+    ["в понедельник до обеда", "2026-11-02", "13:00"],
+    ["после обеда", "2026-10-31", "14:00"],
+    ["к концу дня", "2026-10-31", "18:00"],
+    ["в будущий понедельник", "2026-11-02", null],
+    ["в два раза быстрее", null, null],
     ["Dec 12", "2026-12-12", null],
+    ["в 16 15", "2026-10-31", "16:15"],
+    ["в 9 30", "2026-11-01", "09:30"],
+    ["к 4 15 вечера", "2026-10-31", "16:15"],
+    ["в 16 часов 15 минут", "2026-10-31", "16:15"],
+    ["завтра в 8 05 утра", "2026-11-01", "08:05"],
+    ["15 октября в 10 30", "2027-10-15", "10:30"],
   ])("%s", (text, date, time) => {
     const w = parseWhen(text, now);
     expect(w.date).toBe(date);
@@ -65,6 +80,11 @@ describe("when", () => {
 });
 
 describe("new tasks", () => {
+  it("a clock time said with a pause keeps its minutes", () => {
+    const r = parse("сходить поесть в 16 15");
+    expect(r).toMatchObject({ type: "create", draft: { title: "Сходить поесть", due: { date: "2026-10-31", time: "16:15" } } });
+  });
+
   it("prototype phrase 1", () => {
     const r = parse("Сегодня в 16:00 отправить Ирине презентацию по тарифам, это важно");
     expect(r).toMatchObject({
@@ -98,6 +118,15 @@ describe("new tasks", () => {
     if (r.type !== "create") return;
     expect(r.draft.title).toBe("Забрать посылку в пункте выдачи");
     expect(r.draft.due).toEqual({ date: "2026-10-31", time: "19:30" });
+  });
+
+  it("the owner's work phrase: next Monday, by one in the afternoon", () => {
+    const r = parse("В будущий понедельник надо смотреть презентацию до часа дня и дать комментарии по почте.");
+    expect(r.type === "create" && r.draft).toMatchObject({
+      title: "Смотреть презентацию и дать комментарии по почте",
+      due: { date: "2026-11-02", time: "13:00" },
+      kind: "work",
+    });
   });
 
   it("strips the lead-in", () => {
@@ -140,6 +169,37 @@ describe("commands", () => {
       expect(parsePhrase({ text, now, cards: withPrd })).toMatchObject({ type: "command", action: "move", targetId: "c8" });
     }
     expect(parsePhrase({ text: "перенеси ТО на среду", now, cards })).toMatchObject({ type: "command", targetId: "c5" });
+  });
+
+  it("'закрой задачу' acts on the card in context", () => {
+    expect(parsePhrase({ text: "Закрой задачу", now, cards, contextId: "c9" })).toMatchObject({ type: "command", action: "done", targetId: "c9" });
+    expect(parsePhrase({ text: "перенеси её на завтра", now, cards, contextId: "c3" })).toMatchObject({
+      type: "command",
+      action: "move",
+      targetId: "c3",
+      due: { date: "2026-11-01", time: null },
+    });
+  });
+  it("'закрой задачу' with one open card closes it, with several asks which", () => {
+    const one = [{ id: "only", title: "Смотреть презентацию", done: false }];
+    expect(parsePhrase({ text: "закрой задачу", now, cards: one })).toMatchObject({ type: "command", targetId: "only" });
+    expect(parse("закрой задачу")).toMatchObject({ type: "notFound", named: false });
+  });
+  it("'закрой задачу' plus an explanation still closes the only open card", () => {
+    const one = [
+      { id: "talk", title: "Смотреть презентацию и дать комментарии по почте", done: false },
+      { id: "old", title: "Отправить отчёт", done: true },
+    ];
+    const text = "Закрой задачу, пожалуйста. Я отсмотрел макеты, всё хорошо";
+    expect(parsePhrase({ text, now, cards: one })).toMatchObject({ type: "command", action: "done", targetId: "talk" });
+    expect(parse(text)).toMatchObject({ type: "notFound", named: false });
+  });
+  it("an imperative that matches nothing is not turned into a new task", () => {
+    expect(parse("Удали подписку на онлайн-кинотеатр в приложении")).toMatchObject({ type: "notFound", named: true });
+    expect(parse("Удалить подписку на онлайн-кинотеатр в приложении").type).toBe("create");
+  });
+  it("a named card wins over the context", () => {
+    expect(parsePhrase({ text: "отметь посылку", now, cards, contextId: "c9" })).toMatchObject({ targetId: "c3" });
   });
 
   it("delete", () => {

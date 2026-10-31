@@ -49,7 +49,7 @@ describe("setupFromStatus", () => {
   });
 });
 
-async function setup(options: { hosts?: string[]; primary?: string | null; lastHost?: string; hostAnswer?: (hostId: string) => ConnectionStatus } = {}) {
+async function setup(options: { hosts?: string[]; offline?: string[]; primary?: string | null; lastHost?: string; hostAnswer?: (hostId: string) => ConnectionStatus } = {}) {
   const asked: string[] = [];
   const { bb, harness } = createFakePluginHost({
     pluginId: "exchange-mail",
@@ -57,13 +57,17 @@ async function setup(options: { hosts?: string[]; primary?: string | null; lastH
     agentSkillIds: ["exchange-mail"],
     experimental_hostEntry: true,
     sdk: {
-      hosts: { list: async () => (options.hosts ?? ["host_mac"]).map((id) => ({ id, name: id, status: "connected", lifecycle: { phase: "ready" } })) },
+      hosts: {
+        list: async () =>
+          (options.hosts ?? ["host_mac"]).map((id) => ({ id, name: id, status: options.offline?.includes(id) ? "disconnected" : "connected", lifecycle: { phase: "ready" } })),
+      },
       system: { config: async () => ({ primaryHostId: options.primary === undefined ? "host_mac" : options.primary }) },
     } as never,
     experimental_callHostRpc: async ({ method, hostId }) => {
+      if (method === "forget") return status({ url: null, auth: null, user: null, hasPassword: false, lastCheck: null });
       if (method !== "status") throw new Error(`unexpected ${method}`);
       asked.push(hostId);
-      if (!options.hostAnswer) throw new Error("host offline");
+      if (!options.hostAnswer) throw new Error("connection file is broken");
       return options.hostAnswer(hostId);
     },
   });
@@ -92,9 +96,25 @@ describe("setupStatus RPC", () => {
     expect(asked).toEqual(["host_mac"]);
   });
 
-  it("reports an unreachable machine and a bb without machines as problems", async () => {
-    const offline = await setup();
+  it("tells an unreachable machine from one that cannot read its state", async () => {
+    const offline = await setup({ offline: ["host_mac"], hostAnswer: () => status({}) });
     expect(await offline.harness.callRpc("setupStatus", {}, asPlugin)).toEqual({ state: "problem", summary: "The machine with mail is not reachable", path: SETUP_PATH });
+    expect(offline.asked).toEqual([]);
+    const broken = await setup();
+    expect(await broken.harness.callRpc("setupStatus", {}, asPlugin)).toEqual({ state: "problem", summary: "The plugin could not read its state on that machine", path: SETUP_PATH });
+  });
+
+  it("asks the host once for a few seconds, and again after the connection changes", async () => {
+    const { harness, asked } = await setup({ hostAnswer: () => status({}) });
+    await harness.callRpc("setupStatus", {}, asPlugin);
+    await harness.callRpc("setupStatus", { lang: "ru" }, asPlugin);
+    expect(asked).toEqual(["host_mac"]);
+    await harness.callRpc("forget", { hostId: "host_mac" });
+    await harness.callRpc("setupStatus", {}, asPlugin);
+    expect(asked).toEqual(["host_mac", "host_mac"]);
+  });
+
+  it("reports a bb without machines as a problem", async () => {
     const none = await setup({ hosts: [], primary: null });
     expect(await none.harness.callRpc("setupStatus", {}, asPlugin)).toEqual({ state: "problem", summary: "No machine is connected to bb", path: SETUP_PATH });
     expect(none.asked).toEqual([]);

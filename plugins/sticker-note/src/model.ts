@@ -21,6 +21,8 @@ export const chatSchema = z.object({
 
 export const cardSchema = z.object({
   id: z.string(),
+  /** The sticker's number on the board, never reused: "move sticker 112 to done". */
+  num: z.number().int().positive(),
   title: z.string(),
   notes: z.array(z.string()),
   links: z.array(z.string()),
@@ -60,7 +62,8 @@ export const draftSchema = z.object({
 });
 export type Draft = z.infer<typeof draftSchema>;
 
-export const actionSchema = z.enum(["done", "undone", "move", "importance", "delete"]);
+/** "open" only shows the card; the board does it. */
+export const actionSchema = z.enum(["done", "undone", "move", "importance", "delete", "open"]);
 export type Action = z.infer<typeof actionSchema>;
 
 export const parseResultSchema = z.discriminatedUnion("type", [
@@ -68,7 +71,10 @@ export const parseResultSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("command"),
     action: actionSchema,
+    /** The first card; "open" shows it. */
     targetId: z.string(),
+    /** Every card the command applies to ("закрой задачи 6 и 1"), targetId first. */
+    targetIds: z.array(z.string()).min(1),
     /** For "move": the new due date; null clears it. */
     due: dueSchema.nullable().optional(),
     /** For "importance". */
@@ -76,7 +82,13 @@ export const parseResultSchema = z.discriminatedUnion("type", [
     spans: z.array(spanSchema),
   }),
   z.object({ type: z.literal("ambiguous"), action: actionSchema, candidateIds: z.array(z.string()), spans: z.array(spanSchema) }),
-  z.object({ type: z.literal("notFound"), action: actionSchema, spans: z.array(spanSchema) }),
+  z.object({
+    type: z.literal("notFound"),
+    action: actionSchema,
+    /** False when the phrase named no task at all ("закрой задачу" with several open). */
+    named: z.boolean(),
+    spans: z.array(spanSchema),
+  }),
 ]);
 export type ParseResult = z.infer<typeof parseResultSchema>;
 

@@ -33,6 +33,15 @@ const PATHS = {
     </>
   ),
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
+  /** "To tomorrow": an arrow into the next day's edge. */
+  next: <path d="M4 12h11M11 7.5l4.5 4.5-4.5 4.5M19.5 5.5v13" />,
+  flag: <path d="M6 20.5V4.5M6 5h10.5l-2.2 4 2.2 4H6" />,
+  help: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M9.6 9.6a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2-2.4 3.5M12 16.9v.1" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof PATHS;

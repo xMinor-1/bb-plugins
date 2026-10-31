@@ -5,13 +5,15 @@ import { useLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 import { overdueMinutes } from "../src/board";
-import type { LocalNow } from "../src/dates";
+import { addDays, type LocalNow } from "../src/dates";
 import { messages } from "../src/messages";
 import type { Card, Column } from "../src/model";
 import { doneText, linkLabel, shortWhen } from "./format";
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
 
 export const DRAG_TYPE = "application/x-sticker-note-card";
+
+export type QuickAction = "tomorrow" | "important" | "delete";
 
 interface CardViewProps {
   card: Card;
@@ -20,9 +22,10 @@ interface CardViewProps {
   flash: boolean;
   onOpen: (id: string) => void;
   onToggleDone: (card: Card) => void;
+  onQuick: (card: Card, action: QuickAction) => void;
 }
 
-export function CardView({ card, column, now, flash, onOpen, onToggleDone }: CardViewProps) {
+export function CardView({ card, column, now, flash, onOpen, onToggleDone, onQuick }: CardViewProps) {
   const m = useMessages(messages);
   const lang = useLang();
   const late = overdueMinutes(card, now);
@@ -89,9 +92,26 @@ export function CardView({ card, column, now, flash, onOpen, onToggleDone }: Car
     );
 
   const open = (event: MouseEvent | KeyboardEvent) => {
-    if ((event.target as HTMLElement).closest(".sn-chk")) return;
+    if ((event.target as HTMLElement).closest(".sn-chk, .sn-quick")) return;
     onOpen(card.id);
   };
+
+  const quickButton = (action: QuickAction, icon: IconName, label: string, className?: string) => (
+    <button
+      type="button"
+      className={className}
+      aria-label={label}
+      title={label}
+      onClick={(event) => {
+        event.stopPropagation();
+        onQuick(card, action);
+      }}
+    >
+      <Icon name={icon} size={14} />
+    </button>
+  );
+  const tomorrow = addDays(now.date, 1);
+  const important = card.importance === "high";
 
   return (
     <article
@@ -129,6 +149,16 @@ export function CardView({ card, column, now, flash, onOpen, onToggleDone }: Car
       >
         <Icon name="check" size={11} />
       </button>
+      <span className="sn-num" aria-label={`#${card.num}`}>
+        #{card.num}
+      </span>
+      <div className="sn-quick">
+        {!card.done && card.due?.date !== tomorrow ? quickButton("tomorrow", "next", m.quickTomorrow) : null}
+        {!card.done
+          ? quickButton("important", "flag", important ? m.quickNormal : m.quickImportant, important ? "on" : undefined)
+          : null}
+        {quickButton("delete", "trash", m.quickDelete, "del")}
+      </div>
       {when}
       <div className="sn-title">{card.title}</div>
       {meta ? <div className="sn-meta">{meta}</div> : null}

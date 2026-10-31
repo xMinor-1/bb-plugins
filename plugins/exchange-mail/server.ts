@@ -26,7 +26,7 @@
 // panel only shows it.
 import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { attachmentContentSchema, attachmentInputSchema, connectionStatusSchema, conversationSchema, draftInputSchema, draftSchema, folderSchema, hostContract, inlineImagesSchema, langSchema, listInputSchema, listOutputSchema, messageSchema, saveConnectionInputSchema, sendResultSchema, type ToolInput } from "./contract";
+import { attachmentContentSchema, attachmentInputSchema, connectionStatusSchema, conversationSchema, draftInputSchema, draftSchema, folderSchema, hostContract, inlineImagesSchema, langSchema, listInputSchema, listOutputSchema, messageSchema, saveConnectionInputSchema, sendResultSchema, type ConnectionStatus, type Lang, type ToolInput } from "./contract";
 import { groupModels } from "./src/shared/models";
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
 import { setupFromStatus, setupStatusContract, setupStep } from "./src/shared/setup";
@@ -70,6 +70,8 @@ const TOOL_TIMEOUT_MS = 120_000;
 const MODELS_TIMEOUT_MS = 15_000;
 /** The setup page waits on this answer; the host reads only its own files. */
 const SETUP_TIMEOUT_MS = 10_000;
+/** How long a host's answer serves the setup page: on Windows each answer starts PowerShell to look at the password. */
+const SETUP_FRESH_MS = 5_000;
 /** Send waits for the person in the system window (src/host/confirm.ts gives up after 4 minutes). */
 const SEND_TIMEOUT_MS = 6 * 60_000;
 /** Fork chains longer than this are not walked; such a thread counts as holding mail. */
@@ -351,6 +353,10 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   const changed = (id: string) => bb.realtime.publish(DRAFTS_CHANGED, { id });
+  /** Recent host answers for setupStatus, by machine. */
+  const setupAnswers = new Map<string, { at: number; status: Promise<ConnectionStatus> }>();
+  /** A change of the connection: the setup page should see it at once, not after the cache expires. */
+  const connectionChanged = <T>(answer: Promise<T>): Promise<T> => answer.finally(() => setupAnswers.clear());
   const policyView = () => ({ rules: [...policy.rules], error: policyError });
 
   type RpcHandlers = Parameters<typeof bb.rpc.register<typeof rpcContract>>[1];
@@ -382,9 +388,9 @@ export default async function plugin(bb: BbPluginApi) {
       await kv.set("ui:lastHost", hostId);
       return call("status", hostId, {});
     },
-    saveConnection: ({ hostId, ...input }) => call("saveConnection", hostId, input),
-    forget: ({ hostId }) => call("forget", hostId, {}),
-    check: ({ hostId, retry }) => call("check", hostId, { retry }, 120_000),
+    saveConnection: ({ hostId, ...input }) => connectionChanged(call("saveConnection", hostId, input)),
+    forget: ({ hostId }) => connectionChanged(call("forget", hostId, {})),
+    check: ({ hostId, retry }) => connectionChanged(call("check", hostId, { retry }, 120_000)),
     list: ({ hostId, ...input }) => call("list", hostId, input),
     read: ({ hostId, ref }) => call("read", hostId, { ref, markRead: true }),
     conversation: ({ hostId, ref }) => call("conversation", hostId, { ref }),
@@ -446,19 +452,32 @@ export default async function plugin(bb: BbPluginApi) {
     return primaryHostId ?? hosts[0]?.id ?? null;
   }
 
+  /** The step on a machine; a host's answer serves for SETUP_FRESH_MS. */
+  async function setupOn(machine: string, lang: Lang) {
+    const host = (await bb.sdk.hosts.list()).find((candidate) => candidate.id === machine);
+    if (!host || host.lifecycle.phase === "destroyed" || host.status !== "connected") return setupStep("problem", "offline", lang);
+    let cached = setupAnswers.get(machine);
+    if (!cached || Date.now() - cached.at > SETUP_FRESH_MS) {
+      const status = call("status", machine, {}, SETUP_TIMEOUT_MS);
+      cached = { at: Date.now(), status };
+      setupAnswers.set(machine, cached);
+      status.catch(() => setupAnswers.delete(machine));
+    }
+    try {
+      return setupFromStatus(await cached.status, lang);
+    } catch (error) {
+      bb.log.info(`setupStatus: ${machine} could not read its state: ${error instanceof Error ? error.message : String(error)}`);
+      return setupStep("problem", "unreadable", lang);
+    }
+  }
+
   // Open to other plugins, unlike the panel's methods: the answer holds no mail, address or login.
   bb.rpc.register(
     setupStatusContract,
     {
       setupStatus: async ({ lang = "en", hostId: requested }) => {
         const machine = await setupMachine(requested);
-        if (!machine) return setupStep("problem", "noMachine", lang);
-        try {
-          return setupFromStatus(await call("status", machine, {}, SETUP_TIMEOUT_MS), lang);
-        } catch (error) {
-          bb.log.info(`setupStatus: ${machine} did not answer: ${error instanceof Error ? error.message : String(error)}`);
-          return setupStep("problem", "offline", lang);
-        }
+        return machine ? setupOn(machine, lang) : setupStep("problem", "noMachine", lang);
       },
     },
     { experimental_discoverable: true, experimental_description: "Exchange Mail setup state for a bb build's onboarding page." },

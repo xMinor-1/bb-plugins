@@ -41,6 +41,7 @@ const TEXT = {
     failed: "The last check failed, see the Mail page",
     noCurl: "curl did not start on this machine",
     offline: "The machine with mail is not reachable",
+    unreadable: "The plugin could not read its state on that machine",
     noMachine: "No machine is connected to bb",
   },
   ru: {
@@ -52,6 +53,7 @@ const TEXT = {
     failed: "Последняя проверка не прошла, подробности на странице почты",
     noCurl: "На этой машине не запустился curl",
     offline: "Машина с почтой не на связи",
+    unreadable: "Плагин не смог прочитать своё состояние на этой машине",
     noMachine: "К bb не подключена ни одна машина",
   },
 } satisfies Record<Lang, Record<string, string>>;

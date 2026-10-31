@@ -1,12 +1,14 @@
 // The dictation bar: a microphone, a text field, and a live view of what was
-// heard. The board uses it for new tasks and commands, an open card for notes
-// and agent requests. Holding Space inside `spaceScope` records too.
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+// heard. The board uses it for new tasks and commands, an open card for notes,
+// agent requests and commands on that card. The hotkey (hooks/dictation.ts)
+// drives whichever bar is active.
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { messagesNow, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
+import { registerDictationTarget } from "../hooks/dictation";
 import { useRecorder, type RecorderError } from "../hooks/useRecorder";
 import { messages } from "../src/messages";
 import type { Span } from "../src/model";
@@ -27,8 +29,10 @@ export interface CaptureBarProps {
   placeholder: string;
   /** Status shown while `onText` runs, picked from the phrase. */
   busyLabel: (text: string) => string;
-  /** Where holding Space starts a recording; null turns it off. */
-  spaceScope: RefObject<HTMLElement | null> | null;
+  /** Whether the hotkey drives this bar now. */
+  hotkeyTarget: boolean;
+  /** Shown as a hint on the board bar; null hides it. */
+  hotkeyLabel: string | null;
   /** Runs the phrase; resolves to spans to highlight, or null. Throws on failure. */
   onText: (text: string, spoken: boolean) => Promise<Span[] | null>;
 }
@@ -59,12 +63,7 @@ function Highlighted({ text, spans }: { text: string; spans: Span[] }) {
   return <>{parts}</>;
 }
 
-function isInteractive(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return target.closest("input, textarea, select, button, a, [contenteditable=''], [contenteditable='true'], [role='button'], [role='textbox']") !== null;
-}
-
-export function CaptureBar({ variant, placeholder, busyLabel, spaceScope, onText }: CaptureBarProps) {
+export function CaptureBar({ variant, placeholder, busyLabel, hotkeyTarget, hotkeyLabel, onText }: CaptureBarProps) {
   const m = useMessages(messages);
   const [phase, setPhase] = useState<Phase>({ type: "idle" });
   const [value, setValue] = useState("");
@@ -110,39 +109,30 @@ export function CaptureBar({ variant, placeholder, busyLabel, spaceScope, onText
 
   useEffect(() => () => window.clearTimeout(shownTimer.current), []);
 
-  // Hold Space to talk. The key starts a recording only when focus is on no
-  // control, so Space still presses buttons and types into fields.
+  // The hotkey toggles: start, then stop and add. Escape drops a recording.
   const live = useRef({ state, busy, start, stop });
   live.current = { state, busy, start, stop };
   useEffect(() => {
-    if (!spaceScope) return;
-    let held = false;
-    const inScope = (target: EventTarget | null) => {
-      const scope = spaceScope.current;
-      if (!scope) return false;
-      return target === document.body || (target instanceof Node && scope.contains(target));
-    };
-    const down = (event: KeyboardEvent) => {
-      if (event.code !== "Space" || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return;
-      if (!inScope(event.target) || isInteractive(event.target)) return;
-      if (live.current.state !== "idle" || live.current.busy) return;
+    if (!hotkeyTarget) return;
+    return registerDictationTarget({
+      toggle: () => {
+        const { state: now, busy: working } = live.current;
+        if (now === "recording") live.current.stop();
+        else if (now === "idle" && !working) void live.current.start();
+      },
+    });
+  }, [hotkeyTarget]);
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
       event.preventDefault();
-      held = true;
-      void live.current.start();
+      event.stopPropagation();
+      cancel();
     };
-    const up = (event: KeyboardEvent) => {
-      if (event.code !== "Space" || !held) return;
-      held = false;
-      event.preventDefault();
-      live.current.stop();
-    };
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-    };
-  }, [spaceScope]);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording, cancel]);
 
   const dataState = recording ? "rec" : busy ? "parse" : phase.type === "shown" ? "shown" : "idle";
   const seconds = recorder.seconds;
@@ -219,9 +209,9 @@ export function CaptureBar({ variant, placeholder, busyLabel, spaceScope, onText
           </>
         ) : statusText ? (
           <span className="sn-cap-status">{statusText}</span>
-        ) : variant === "board" && phase.type === "idle" && spaceScope ? (
+        ) : variant === "board" && phase.type === "idle" && hotkeyLabel ? (
           <span className="sn-hold">
-            {m.holdBefore} <kbd>{m.holdKey}</kbd> {m.holdAfter}
+            {m.pressBefore} <kbd>{hotkeyLabel}</kbd> {m.pressAfter}
           </span>
         ) : null}
       </div>

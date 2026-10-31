@@ -1,80 +1,43 @@
-// The Sticker Note page: the dictation bar, what was understood, four
-// columns by time, and the open card.
+// The Sticker Note page: the dictation bar, one line about what was just done,
+// four columns by time, and the open card.
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { toast } from "sonner";
-import type { PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
+import { useSettings, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
 
-import { LanguageSwitch, messagesNow, useLang, useMessages, type Lang } from "@/lib/i18n";
+import { LanguageSwitch, messagesNow, useLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
+import { DEFAULT_HOTKEY, hotkeyLabel, parseHotkey } from "../hooks/dictation";
 import { errorText, useCards, type CardsRpc } from "../hooks/useCards";
 import { useNow } from "../hooks/useNow";
 import { filterStore, useStore, type Filter } from "../hooks/stores";
 import { COLUMNS, columnOf, layoutToday, sortColumn } from "../src/board";
-import { fullDay, localNow, type LocalNow } from "../src/dates";
+import { addDays, fullDay, localNow, type LocalNow } from "../src/dates";
 import { messages } from "../src/messages";
-import type { Action, Card, Column, ParseResult } from "../src/model";
+import type { Card, Column } from "../src/model";
 import { CaptureBar } from "./CaptureBar";
-import { CardView, DRAG_TYPE } from "./CardView";
+import { CardView, DRAG_TYPE, type QuickAction } from "./CardView";
 import { Detail } from "./Detail";
-import { columnName, importanceName, linkLabel, shorten, whenText, type Messages } from "./format";
+import { columnName, type Messages } from "./format";
+import { Icon } from "./icons";
+import { addedText, commandText, whichText, type LogLine } from "./log";
 
 /** Finished cards shown at most; older ones stay stored until pruned. */
 const DONE_SHOWN = 40;
 const FLASH_MS = 1800;
-const CHIPS_MS = 6000;
-
-type ChipKind = "when" | "imp" | "work" | "link" | "act" | "target";
-interface Chip {
-  kind: ChipKind;
-  text: string;
-}
+/** How long the last card you dealt with stays "the task" for "закрой задачу". */
+const CONTEXT_MS = 15 * 60_000;
 
 function passes(filter: Filter, card: Card): boolean {
   return filter === "all" || (filter === "work") === (card.kind === "work");
 }
 
-function actionName(m: Messages, action: Action) {
-  return { done: m.actDone, undone: m.actUndone, move: m.actMove, importance: m.actImportance, delete: m.actDelete }[action];
-}
-
-function chipsFor(m: Messages, parse: ParseResult, card: Card | null, cards: Card[], today: string, lang: Lang): Chip[] {
-  if (parse.type === "create") {
-    const { draft } = parse;
-    const chips: Chip[] = [{ kind: "when", text: draft.due ? whenText(m, draft.due, today, lang) : m.chipNoDate }];
-    if (draft.importance === "high") chips.push({ kind: "imp", text: m.chipImportant });
-    if (draft.importance === "low") chips.push({ kind: "imp", text: m.chipLow });
-    if (draft.kind === "work") chips.push({ kind: "work", text: m.chipWork });
-    for (const link of draft.links) chips.push({ kind: "link", text: linkLabel(link) });
-    return chips;
-  }
-  const chips: Chip[] = [{ kind: "act", text: actionName(m, parse.action) }];
-  if (parse.type === "command") {
-    const target = card ?? cards.find((c) => c.id === parse.targetId);
-    if (target) chips.push({ kind: "target", text: shorten(target.title, 48) });
-    if (parse.action === "move") chips.push({ kind: "when", text: parse.due ? whenText(m, parse.due, today, lang) : m.chipNoDate });
-    if (parse.action === "importance" && parse.importance) chips.push({ kind: "imp", text: importanceName(m, parse.importance) });
-  }
-  return chips;
-}
-
-export function useNotify(rpc: CardsRpc) {
-  return useCallback(
-    (text: string, undoToken: string | null) => {
-      if (!undoToken) return void toast(text);
-      toast(text, {
-        action: {
-          label: messagesNow(messages).undo,
-          onClick: () => {
-            rpc.call("undo", { token: undoToken }).catch((cause: unknown) => {
-              toast.error(messagesNow(messages).error(errorText(cause)));
-            });
-          },
-        },
-      });
-    },
-    [rpc],
-  );
+/** The hotkey from the plugin settings, as a hint label; null when it is off or unreadable. */
+export function useHotkeyLabel(): string | null {
+  const { values } = useSettings();
+  const raw = values?.hotkey;
+  const hotkey = parseHotkey(typeof raw === "string" ? raw : DEFAULT_HOTKEY);
+  return hotkey ? hotkeyLabel(hotkey) : null;
 }
 
 export function BoardHeader(_props: PluginNavPanelProps) {
@@ -97,20 +60,69 @@ export function BoardHeader(_props: PluginNavPanelProps) {
   );
 }
 
+function LogView({ log, onUndo }: { log: LogLine | null; onUndo: (token: string) => void }) {
+  const m = useMessages(messages);
+  return (
+    <div className="sn-log-row" aria-live="polite">
+      {log ? (
+        <div key={log.at} className={cn("sn-log", log.tone)}>
+          <Icon name={log.tone === "ok" ? "check" : "help"} size={13} />
+          <span className="sn-log-text">{log.text}</span>
+          {log.undoToken ? (
+            <button type="button" className="sn-log-undo" onClick={() => onUndo(log.undoToken!)}>
+              {m.undo}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function useLog(rpc: CardsRpc) {
+  const [log, setLog] = useState<LogLine | null>(null);
+  const say = useCallback((text: string, undoToken: string | null, tone: LogLine["tone"] = "ok") => {
+    setLog({ text, undoToken, tone, at: Date.now() });
+  }, []);
+  const undo = useCallback(
+    (token: string) => {
+      rpc.call("undo", { token }).then(
+        (result) => say(result.restored ? messagesNow(messages).logReverted : messagesNow(messages).logUndoGone, null),
+        (cause: unknown) => toast.error(messagesNow(messages).error(errorText(cause))),
+      );
+    },
+    [rpc, say],
+  );
+  return { log, say, undo };
+}
+
 export function BoardPage(_props: PluginNavPanelProps) {
   const m = useMessages(messages);
   const lang = useLang();
   const { rpc, cards, error, refetch } = useCards();
   const now = useNow();
   const filter = useStore(filterStore);
-  const notify = useNotify(rpc);
+  const hotkey = useHotkeyLabel();
+  const { log, say, undo } = useLog(rpc);
   const rootRef = useRef<HTMLDivElement>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ ids: string[]; at: number } | null>(null);
-  const [chips, setChips] = useState<{ list: Chip[]; at: number } | null>(null);
   const [dropColumn, setDropColumn] = useState<Column | null>(null);
+  const context = useRef<{ id: string; at: number } | null>(null);
+  const touch = useCallback((id: string) => {
+    context.current = { id, at: Date.now() };
+  }, []);
 
   const highlight = useCallback((ids: string[]) => setFlash({ ids, at: Date.now() }), []);
+
+  const openCardById = useCallback(
+    (id: string) => {
+      touch(id);
+      setOpenId(id);
+    },
+    [touch],
+  );
+
 
   useEffect(() => {
     if (!flash) return;
@@ -120,57 +132,53 @@ export function BoardPage(_props: PluginNavPanelProps) {
     return () => window.clearTimeout(timer);
   }, [flash]);
 
-  useEffect(() => {
-    if (!chips) return;
-    const timer = window.setTimeout(() => setChips(null), CHIPS_MS);
-    return () => window.clearTimeout(timer);
-  }, [chips]);
-
   const cardsRef = useRef(cards);
   cardsRef.current = cards;
 
+  const reveal = (card: Card) => {
+    if (!passes(filterStore.get(), card)) filterStore.set("all");
+    highlight([card.id]);
+    touch(card.id);
+  };
+
   const capture = async (text: string, spoken: boolean) => {
     const at = localNow();
-    const { parse, card, undoToken } = await rpc.call("capture", { text, now: at, spoken });
+    const recent = context.current && Date.now() - context.current.at < CONTEXT_MS ? context.current.id : null;
+    const { parse, card, cards: touched, undoToken } = await rpc.call("capture", { text, now: at, spoken, contextId: recent });
     const t = messagesNow(messages);
     const list = cardsRef.current ?? [];
-    setChips({ list: chipsFor(t, parse, card, list, at.date, lang), at: Date.now() });
-    const reveal = (target: Card | null) => {
-      if (target && !passes(filterStore.get(), target)) filterStore.set("all");
-      if (target) highlight([target.id]);
-    };
     switch (parse.type) {
       case "create":
-        notify(t.added(columnName(t, columnOf(card!, at.date))), undoToken);
-        reveal(card);
+        say(addedText(t, card!, at.date, lang), undoToken);
+        reveal(card!);
         break;
-      case "command": {
-        const title = shorten(card?.title ?? "", 40);
-        const text = {
-          done: t.markedTitle(title),
-          undone: t.reopened,
-          move: card?.due ? t.movedTo(whenText(t, card.due, at.date, lang)) : t.movedCol(t.colLater),
-          importance: t.importanceSet(importanceName(t, card?.importance ?? "high").toLowerCase()),
-          delete: t.deleted,
-        }[parse.action];
-        notify(text, undoToken);
-        if (parse.action !== "delete") reveal(card);
-        if (openId === parse.targetId && parse.action === "delete") setOpenId(null);
+      case "command":
+        if (card && parse.action === "open") {
+          openCardById(card.id);
+          say(commandText(t, "open", card, at.date, lang), null);
+        } else if (card) {
+          say(commandText(t, parse.action, touched, at.date, lang), undoToken);
+          if (parse.action === "delete") {
+            if (openId && touched.some((c) => c.id === openId)) setOpenId(null);
+            context.current = null;
+          } else if (touched.length > 1) {
+            if (touched.some((c) => !passes(filterStore.get(), c))) filterStore.set("all");
+            highlight(touched.map((c) => c.id));
+            context.current = null;
+          } else reveal(card);
+        }
         break;
-      }
       case "ambiguous": {
-        const titles = parse.candidateIds
-          .map((id) => list.find((c) => c.id === id)?.title)
-          .filter((x): x is string => Boolean(x))
-          .map((x) => `«${shorten(x, 30)}»`)
-          .join(lang === "ru" ? " или " : " or ");
-        toast(t.whichOne(titles));
+        const candidates = parse.candidateIds
+          .map((id) => list.find((c) => c.id === id))
+          .filter((c): c is Card => c !== undefined);
+        say(whichText(t, candidates, lang), null, "ask");
         if (parse.candidateIds.length) filterStore.set("all");
         highlight(parse.candidateIds);
         break;
       }
       case "notFound":
-        toast(t.notFound);
+        say(parse.named ? t.logNotFound : t.logUnnamed, null, "ask");
         break;
     }
     return parse.spans;
@@ -179,21 +187,49 @@ export function BoardPage(_props: PluginNavPanelProps) {
   const toggleDone = useCallback(
     (card: Card) => {
       const t = messagesNow(messages);
+      touch(card.id);
       rpc.call("card_update", { id: card.id, patch: { done: !card.done } }).then(
-        (result) => notify(card.done ? t.reopened : t.marked, result.undoToken),
+        (result) => say(commandText(t, card.done ? "undone" : "done", card, localNow().date, lang), result.undoToken),
         (cause: unknown) => toast.error(t.error(errorText(cause))),
       );
     },
-    [rpc, notify],
+    [rpc, say, touch, lang],
   );
+
+  /** The small buttons on a card: tomorrow, important, delete. Each line in the log can be undone. */
+  const quick = (card: Card, action: QuickAction) => {
+    const t = messagesNow(messages);
+    const at = localNow();
+    const fail = (cause: unknown) => toast.error(t.error(errorText(cause)));
+    if (action === "delete") {
+      rpc.call("card_delete", { id: card.id }).then((result) => {
+        say(commandText(t, "delete", card, at.date, lang), result.undoToken);
+        if (openId === card.id) setOpenId(null);
+        if (context.current?.id === card.id) context.current = null;
+      }, fail);
+      return;
+    }
+    touch(card.id);
+    const patch =
+      action === "tomorrow"
+        ? { due: { date: addDays(at.date, 1), time: card.due?.time ?? null } }
+        : { importance: card.importance === "high" ? ("normal" as const) : ("high" as const) };
+    rpc.call("card_update", { id: card.id, patch }).then((result) => {
+      say(commandText(t, action === "tomorrow" ? "move" : "importance", result.card ?? card, at.date, lang), result.undoToken);
+      highlight([card.id]);
+    }, fail);
+  };
 
   const moveTo = (id: string, column: Column) => {
     const card = cards?.find((c) => c.id === id);
     if (!card || columnOf(card, now.date) === column) return;
     const t = messagesNow(messages);
-    rpc.call("card_move", { id, column, now: localNow() }).then(
+    const at = localNow();
+    touch(id);
+    rpc.call("card_move", { id, column, now: at }).then(
       (result) => {
-        notify(column === "done" ? t.marked : t.movedCol(columnName(t, column)), result.undoToken);
+        const after = result.card ?? card;
+        say(commandText(t, column === "done" ? "done" : "move", after, at.date, lang), result.undoToken);
         highlight([id]);
       },
       (cause: unknown) => toast.error(t.error(errorText(cause))),
@@ -220,8 +256,9 @@ export function BoardPage(_props: PluginNavPanelProps) {
       column={column}
       now={now}
       flash={flashing.has(card.id)}
-      onOpen={setOpenId}
+      onOpen={openCardById}
       onToggleDone={toggleDone}
+      onQuick={quick}
     />
   );
 
@@ -243,8 +280,8 @@ export function BoardPage(_props: PluginNavPanelProps) {
     },
   });
 
-  const subtitle = (column: Column, now: LocalNow) =>
-    ({ today: fullDay(now.date, lang), soon: m.subSoon, later: m.subLater, done: m.subDone })[column];
+  const subtitle = (column: Column, today: LocalNow) =>
+    ({ today: fullDay(today.date, lang), soon: m.subSoon, later: m.subLater, done: m.subDone })[column];
 
   return (
     <div ref={rootRef} className="sn-root">
@@ -252,17 +289,11 @@ export function BoardPage(_props: PluginNavPanelProps) {
         variant="board"
         placeholder={m.placeholder}
         busyLabel={() => m.understanding}
-        spaceScope={openCard ? null : rootRef}
+        hotkeyTarget={!openCard}
+        hotkeyLabel={hotkey}
         onText={capture}
       />
-      <div className="sn-parsed" aria-live="polite">
-        {chips?.list.map((chip, i) => (
-          <span key={`${chips.at}-${i}`} className={cn("sn-pchip", `k-${chip.kind}`)} style={{ animationDelay: `${i * 90}ms` }}>
-            <i />
-            {chip.text}
-          </span>
-        ))}
-      </div>
+      <LogView log={log} onUndo={undo} />
 
       {error && !cards ? (
         <div className="sn-error">
@@ -303,7 +334,13 @@ export function BoardPage(_props: PluginNavPanelProps) {
       )}
 
       {openCard ? (
-        <Detail card={openCard} now={now} rpc={rpc} onClose={() => setOpenId(null)} onChanged={notify} />
+        <Detail
+          card={openCard}
+          now={now}
+          rpc={rpc}
+          onClose={() => setOpenId(null)}
+          onChanged={(text, undoToken) => say(text, undoToken)}
+        />
       ) : null}
     </div>
   );
@@ -321,15 +358,10 @@ function TodayColumn({
   renderCard: (card: Card, column: Column) => ReactNode;
 }) {
   const { timed, nowIndex, untimed } = layoutToday(cards, now);
-  const line = (
-    <div key="now" className="sn-now">
-      {m.now(now.time)}
-    </div>
-  );
   return (
     <>
       {timed.slice(0, nowIndex).map((card) => renderCard(card, "today"))}
-      {line}
+      <div className="sn-now">{m.now(now.time)}</div>
       {timed.slice(nowIndex).map((card) => renderCard(card, "today"))}
       {untimed.length ? (
         <>
