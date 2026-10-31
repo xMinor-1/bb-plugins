@@ -209,11 +209,21 @@ export default async function plugin(bb: BbPluginApi) {
 
   const allowHttp = process.env[DEV_HTTP_FLAG] === "1";
   /** Settings for a host call; the server's own OpenCode variables go only to the server's own machine. */
+  let primaryHost: string | null = null;
+  const primaryHostId = async (): Promise<string> => {
+    primaryHost ??= await bb.sdk.system.config().then(
+      (config) => config.primaryHostId ?? null,
+      () => null,
+    );
+    // Guessing would send this server's OpenCode folder to another machine, or leave it out here.
+    if (primaryHost === null) throw new Error("[mcp:machine-unknown] bb did not say which machine is its own; try again in a moment.");
+    return primaryHost;
+  };
   const writeConfig = async (id: string): Promise<WriteConfig> => {
     const values = await settings.get();
-    const primary = await bb.sdk.system.config().then((config) => config.primaryHostId, () => null);
     const serverEnvironment: WriteConfig["serverEnvironment"] = {};
-    if (id === primary) {
+    const ownVariables = ["OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"].some((key) => process.env[key]);
+    if (ownVariables && id === (await primaryHostId())) {
       for (const key of ["OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"] as const) if (process.env[key]) serverEnvironment[key] = process.env[key];
     }
     return { opencodeConfigDir: values.opencodeConfigDir, timeoutSec: Math.max(0, Math.trunc(values.callTimeoutSeconds)), serverEnvironment, ...(allowHttp ? { allowHttp } : {}) };

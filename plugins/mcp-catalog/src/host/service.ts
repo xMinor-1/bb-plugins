@@ -2,10 +2,14 @@
 //
 // state.json (0600, in the plugin's host data directory) keeps addresses,
 // plain headers, on/off, timeouts and the last check — never a token. Tokens
-// live in the OS credential store under names derived from the server and
-// header. For a server that is on, the token is also written to a 0600 file
-// that opencode.json refers to with `{file:…}`; the file goes when the server
-// is switched off or removed.
+// live in the OS credential store. For a server that is on, the token is also
+// written to a 0600 file that opencode.json refers to with `{file:…}`.
+//
+// Every pasted token gets a new store key (and so a new file name). The old
+// key is retired, not overwritten: it is deleted only after opencode.json no
+// longer refers to it. A paste that fails half way leaves nothing behind, and
+// OpenCode — which watches opencode.json but not the token files — sees the
+// reference change and loads the new token.
 //
 // Order, so OpenCode never meets a reference to a missing file: token files
 // first, then opencode.json; when switching off, opencode.json first, then the
@@ -14,31 +18,27 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { CatalogItem, Health, ImportResult, ServerView, Status, WriteConfig } from "../../contract.js";
-import { ConfigTextError, isSecretHeader, parseClientConfig, splitScheme, urlProblem } from "../shared/parse-config.js";
+import { ConfigTextError, isCredential, parseClientConfig, splitScheme, urlProblem } from "../shared/parse-config.js";
 import { CatalogError, fetchCatalog } from "./catalog.js";
 import { findOpenCode } from "./find-opencode.js";
 import { ConfigFileError, writeMcpServers, type McpEntry } from "./opencode-mcp.js";
 import { resolveOpenCodeLocation } from "./opencode-location.js";
 import { probeServer, type ProbeResult } from "./probe.js";
-import { openSecretStore, type SecretStore } from "./secret-store.js";
+import { checkSecretValue, openSecretStore, type SecretStore } from "./secret-store.js";
 
 const PARALLEL_CHECKS = 3;
 const CATALOG_TTL_MS = 5 * 60_000;
+/** How long an answer other than "OpenCode 2 or later" is trusted: the person may be updating OpenCode right now. */
+const VERSION_RECHECK_MS = 60_000;
 
 interface StoredHeader {
   name: string;
   /** A plain value, kept here. */
   value?: string;
-  /** The OS store name holding the credential part. */
+  /** The OS store key holding the credential part; also the token file's name. */
   secret?: string;
   /** Fixed text before the credential, such as "Bearer ". */
   prefix?: string;
-  /**
-   * Changes with every new value. The token file is named after it, so a new
-   * token changes the reference in opencode.json and OpenCode, which watches
-   * that file but not the token files, loads it.
-   */
-  version?: string;
 }
 
 interface StoredServer {
@@ -53,15 +53,19 @@ interface StoredServer {
 interface State {
   version: 1;
   servers: Record<string, StoredServer>;
-  /** Names this plugin wrote under `mcp.servers` in opencode.json. */
+  /** Names this plugin wrote under `mcp.servers`, and the file they are in. */
   owned: string[];
-  /** Names held in opencode.json by entries this plugin did not write. */
+  ownedFile: string | null;
+  /** Names held in that file by entries this plugin did not write. */
   conflicts: string[];
+  /** Store keys replaced by newer tokens, deleted once opencode.json no longer refers to them. */
+  retired: string[];
   configFile: string | null;
   configError: string | null;
 }
 
 const EMPTY_HEALTH: Health = { status: "unknown", since: null, checkedAt: null, detail: null, tools: null };
+const emptyState = (): State => ({ version: 1, servers: {}, owned: [], ownedFile: null, conflicts: [], retired: [], configFile: null, configError: null });
 
 /** An error the panel shows in the person's language: "[mcp:<code>] English text". */
 export class TaggedError extends Error {
@@ -73,8 +77,9 @@ export class TaggedError extends Error {
   }
 }
 
-export function secretName(server: string, header: string): string {
-  return `t-${createHash("sha256").update(`${server}\n${header.toLowerCase()}`).digest("hex").slice(0, 24)}`;
+/** A fresh store key for one header of one server: stable prefix, new suffix per token. */
+export function secretName(server: string, header: string, version: string = randomUUID().slice(0, 8)): string {
+  return `t-${createHash("sha256").update(`${server}\n${header.toLowerCase()}`).digest("hex").slice(0, 24)}-${version}`;
 }
 
 /** A path as `{file:…}` carries it: forward slashes, which OpenCode reads on every system. */
@@ -83,6 +88,10 @@ export function fileReference(path: string): string {
   if (/[{}"\x00-\x1f]/.test(portable)) throw new TaggedError("config-failed", "The plugin's data directory has characters a {file:} reference cannot carry.");
   return `{file:${portable}}`;
 }
+
+/** Own properties only: a server called "constructor" must not find Object's. */
+const serverOf = (state: State, name: string): StoredServer | undefined => (Object.hasOwn(state.servers, name) ? state.servers[name] : undefined);
+const secretsOf = (server: StoredServer | undefined) => (server?.headers ?? []).map((header) => header.secret).filter((key): key is string => Boolean(key));
 
 export interface ServiceOptions {
   dataDir: string;
@@ -97,12 +106,12 @@ export interface ServiceOptions {
 }
 
 export class McpService {
-  private state: State | null = null;
+  private state: Promise<State> | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly tokens = new Map<string, string>();
   private readonly inflight = new Map<string, Promise<void>>();
   private catalogCache: { url: string; at: number; items: CatalogItem[] } | null = null;
-  private majorCache: Promise<number | null> | null = null;
+  private major: { value: number | null; at: number } | null = null;
   private readonly store: SecretStore;
   private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => number;
@@ -127,19 +136,20 @@ export class McpService {
     return run;
   }
 
-  private async load(): Promise<State> {
-    if (this.state) return this.state;
+  /** The state, read once per worker; concurrent first calls share the read. */
+  private load(): Promise<State> {
+    this.state ??= this.read().catch((error: unknown) => {
+      this.state = null;
+      throw error;
+    });
+    return this.state;
+  }
+
+  private async read(): Promise<State> {
     try {
       const value = JSON.parse(await readFile(this.stateFile, "utf8")) as Partial<State>;
       if (value?.version !== 1 || typeof value.servers !== "object" || value.servers === null) throw new Error("unknown state");
-      this.state = {
-        version: 1,
-        servers: value.servers,
-        owned: value.owned ?? [],
-        conflicts: value.conflicts ?? [],
-        configFile: value.configFile ?? null,
-        configError: value.configError ?? null,
-      };
+      return { ...emptyState(), ...value, servers: value.servers };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
@@ -147,9 +157,8 @@ export class McpService {
         // Unreadable: kept aside for a person to look at, never silently overwritten.
         await rename(this.stateFile, `${this.stateFile}.broken-${this.now()}`).catch(() => undefined);
       }
-      this.state = { version: 1, servers: {}, owned: [], conflicts: [], configFile: null, configError: null };
+      return emptyState();
     }
-    return this.state;
   }
 
   private async save(): Promise<void> {
@@ -187,11 +196,11 @@ export class McpService {
     return this.view(await this.load());
   }
 
-  private async token(name: string): Promise<string | null> {
-    const cached = this.tokens.get(name);
+  private async token(key: string): Promise<string | null> {
+    const cached = this.tokens.get(key);
     if (cached !== undefined) return cached;
-    const value = await this.store.get(name);
-    if (value !== null) this.tokens.set(name, value);
+    const value = await this.store.get(key);
+    if (value !== null) this.tokens.set(key, value);
     return value;
   }
 
@@ -222,39 +231,58 @@ export class McpService {
         throw error;
       }
       const state = await this.load();
+
+      // Everything new is prepared and stored under new keys first; the state changes only when all of it worked.
+      const prepared: { name: string; server: StoredServer; previous: StoredServer | undefined }[] = [];
+      const written: string[] = [];
+      try {
+        for (const server of parsed.servers) {
+          const previous = serverOf(state, server.name);
+          const headers: StoredHeader[] = [];
+          for (const header of server.headers) {
+            if (!isCredential(header.name, header.value)) {
+              headers.push({ name: header.name, value: header.value });
+              continue;
+            }
+            const { prefix, secret } = splitScheme(header.value);
+            const key = secretName(server.name, header.name);
+            try {
+              const value = checkSecretValue(secret);
+              await this.store.set(key, value);
+              written.push(key);
+              this.tokens.set(key, value);
+            } catch (error) {
+              throw new TaggedError("store-failed", `Could not save the ${header.name} of ${server.name} in ${this.store.label}: ${(error as Error).message}`);
+            }
+            headers.push({ name: header.name, secret: key, ...(prefix ? { prefix } : {}) });
+          }
+          prepared.push({
+            name: server.name,
+            previous,
+            server: {
+              url: server.url,
+              headers,
+              enabled: previous?.enabled ?? true,
+              timeoutSec: previous?.timeoutSec ?? null,
+              addedAt: previous?.addedAt ?? this.now(),
+              health: { ...EMPTY_HEALTH },
+            },
+          });
+        }
+      } catch (error) {
+        for (const key of written) {
+          this.tokens.delete(key);
+          await this.store.delete(key).catch(() => false);
+        }
+        throw error;
+      }
+
       const added: string[] = [];
       const updated: string[] = [];
-      for (const server of parsed.servers) {
-        const previous = state.servers[server.name];
-        const headers: StoredHeader[] = [];
-        for (const header of server.headers) {
-          if (!isSecretHeader(header.name)) {
-            headers.push({ name: header.name, value: header.value });
-            continue;
-          }
-          const { prefix, secret } = splitScheme(header.value);
-          const key = secretName(server.name, header.name);
-          try {
-            await this.store.set(key, secret);
-          } catch (error) {
-            throw new TaggedError("store-failed", `Could not save the token of ${server.name} in ${this.store.label}: ${(error as Error).message}`);
-          }
-          this.tokens.set(key, secret.trim());
-          headers.push({ name: header.name, secret: key, version: randomUUID().slice(0, 8), ...(prefix ? { prefix } : {}) });
-        }
-        // Credentials a new version of the settings no longer has.
-        for (const old of previous?.headers ?? []) {
-          if (old.secret && !headers.some((header) => header.secret === old.secret)) await this.forgetSecret(old.secret);
-        }
-        state.servers[server.name] = {
-          url: server.url,
-          headers,
-          enabled: previous?.enabled ?? true,
-          timeoutSec: previous?.timeoutSec ?? null,
-          addedAt: previous?.addedAt ?? this.now(),
-          health: { ...EMPTY_HEALTH },
-        };
-        (previous ? updated : added).push(server.name);
+      for (const { name, server, previous } of prepared) {
+        state.retired.push(...secretsOf(previous));
+        state.servers[name] = server;
+        (previous ? updated : added).push(name);
       }
       await this.save();
       await this.syncLocked(config, new Set());
@@ -265,7 +293,7 @@ export class McpService {
   setEnabled(name: string, enabled: boolean, replace: boolean, config: WriteConfig): Promise<Status> {
     return this.serial(async () => {
       const state = await this.load();
-      const server = state.servers[name];
+      const server = serverOf(state, name);
       if (!server) throw new TaggedError("not-found", `There is no MCP server called ${name} on this machine.`);
       server.enabled = enabled;
       await this.save();
@@ -277,7 +305,7 @@ export class McpService {
   setTimeout(name: string, timeoutSec: number | null, config: WriteConfig): Promise<Status> {
     return this.serial(async () => {
       const state = await this.load();
-      const server = state.servers[name];
+      const server = serverOf(state, name);
       if (!server) throw new TaggedError("not-found", `There is no MCP server called ${name} on this machine.`);
       server.timeoutSec = timeoutSec;
       await this.save();
@@ -289,7 +317,7 @@ export class McpService {
   remove(name: string, config: WriteConfig): Promise<Status> {
     return this.serial(async () => {
       const state = await this.load();
-      const server = state.servers[name];
+      const server = serverOf(state, name);
       if (!server) return this.view(state);
       server.enabled = false;
       await this.syncLocked(config, new Set());
@@ -297,7 +325,7 @@ export class McpService {
         // opencode.json could not be written: keep the server so its entry is not orphaned.
         throw new TaggedError("config-failed", `${name} is still in opencode.json; try again.`);
       }
-      for (const header of server.headers) if (header.secret) await this.forgetSecret(header.secret);
+      for (const key of secretsOf(server)) await this.forgetSecret(key);
       delete state.servers[name];
       state.conflicts = state.conflicts.filter((item) => item !== name);
       await this.save();
@@ -312,21 +340,20 @@ export class McpService {
     });
   }
 
-  private async forgetSecret(name: string): Promise<void> {
-    this.tokens.delete(name);
-    await this.store.delete(name).catch(() => false);
-    for (const entry of await readdir(this.tokenDir).catch(() => [] as string[])) {
-      if (entry === name || entry.startsWith(`${name}.`)) await rm(join(this.tokenDir, entry), { force: true });
-    }
+  private async forgetSecret(key: string): Promise<void> {
+    this.tokens.delete(key);
+    await this.store.delete(key).catch(() => false);
+    await rm(join(this.tokenDir, key), { force: true });
   }
 
-  private openCodeMajor(): Promise<number | null> {
+  private async openCodeMajor(): Promise<number | null> {
     if (this.options.openCodeMajor) return this.options.openCodeMajor();
-    this.majorCache ??= findOpenCode(this.env).then(
-      (binary) => (binary ? Number(/^(\d+)\./.exec(binary.version)?.[1] ?? NaN) || null : null),
-      () => null,
-    );
-    return this.majorCache;
+    const known = this.major;
+    if (known && ((known.value ?? 0) >= 2 || this.now() - known.at < VERSION_RECHECK_MS)) return known.value;
+    const binary = await findOpenCode(this.env).catch(() => null);
+    const value = binary ? Number(/^(\d+)\./.exec(binary.version)?.[1] ?? NaN) || null : null;
+    this.major = { value, at: this.now() };
+    return value;
   }
 
   private async writeTokenFile(name: string, value: string): Promise<string> {
@@ -345,7 +372,7 @@ export class McpService {
     return target;
   }
 
-  /** opencode.json and the token files, made to match the saved list. Called inside serial(). */
+  /** opencode.json, the token files and retired keys, made to match the saved list. Called inside serial(). */
   private async syncLocked(config: WriteConfig, replace: ReadonlySet<string>): Promise<void> {
     const state = await this.load();
     try {
@@ -359,6 +386,16 @@ export class McpService {
       if (enabled.length > 0 && (await this.openCodeMajor()) === 1) {
         throw new TaggedError("opencode-1", "OpenCode 1 is installed on this machine; MCP Catalog writes the OpenCode 2 configuration. Update OpenCode to 2.");
       }
+
+      // The configuration moved (a setting changed): take this plugin's entries out of the old file first,
+      // so names there are not orphaned and names in the new file are judged afresh.
+      if (state.ownedFile !== null && state.ownedFile !== location.configFile) {
+        if (state.owned.length > 0) await writeMcpServers(state.ownedFile, [], state.owned, new Set());
+        state.owned = [];
+        state.conflicts = [];
+      }
+      state.ownedFile = location.configFile;
+
       const wanted: McpEntry[] = [];
       for (const [name, server] of enabled) {
         const headers: Record<string, string> = {};
@@ -373,7 +410,7 @@ export class McpService {
             missing = true;
             break;
           }
-          const path = await this.writeTokenFile(tokenFileName(header), value);
+          const path = await this.writeTokenFile(header.secret, value);
           headers[header.name] = `${header.prefix ?? ""}${fileReference(path)}`;
         }
         if (missing) {
@@ -392,11 +429,14 @@ export class McpService {
       state.owned = result.owned;
       state.conflicts = result.conflicts;
       state.configError = null;
-      // Token files only for entries that are in opencode.json now.
-      const live = new Set(result.owned.flatMap((name) => (state.servers[name]?.headers ?? []).filter((header) => header.secret).map(tokenFileName)));
+
+      // Token files only for entries that are in opencode.json now; retired keys go for good.
+      const live = new Set(result.owned.flatMap((name) => secretsOf(serverOf(state, name))));
       for (const entry of await readdir(this.tokenDir).catch(() => [] as string[])) {
         if (!live.has(entry)) await rm(join(this.tokenDir, entry), { force: true });
       }
+      for (const key of state.retired) await this.forgetSecret(key);
+      state.retired = [];
     } catch (error) {
       state.configError = describeWriteError(error);
     }
@@ -441,7 +481,7 @@ export class McpService {
     const running = this.inflight.get(name);
     if (running) return running;
     const run = (async () => {
-      const server = (await this.load()).servers[name];
+      const server = serverOf(await this.load(), name);
       if (!server) return;
       const headers = await this.resolvedHeaders(server).catch(() => null);
       const problem = urlProblem(server.url, allowHttp);
@@ -452,9 +492,9 @@ export class McpService {
             ? { status: "unauthorized", detail: "token missing from the OS store", tools: null }
             : await probeServer(server.url, headers, { signal, fetchImpl: this.options.fetchImpl });
       await this.serial(async () => {
-        const current = (await this.load()).servers[name];
+        const current = serverOf(await this.load(), name);
         // Replaced or removed meanwhile: this result is about the old settings.
-        if (!current || current.url !== server.url || current.health !== server.health) return;
+        if (current !== server) return;
         this.recordHealth(current, result);
         await this.save();
       });
@@ -486,8 +526,6 @@ export class McpService {
     }
   }
 }
-
-const tokenFileName = (header: StoredHeader) => `${header.secret}.${header.version ?? "0"}`;
 
 function describeWriteError(error: unknown): string {
   if (error instanceof TaggedError) return error.message;

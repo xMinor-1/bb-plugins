@@ -75,12 +75,16 @@ company:
   Windows Credential Manager or, elsewhere, a 0600 file under
   `~/.local/share/bb-mcp-catalog/secrets`. For a server that is on, the token
   is also written to a 0600 file in the plugin's data directory, and
-  `opencode.json` refers to it: `"Authorization": "Bearer {file:/…/tokens/t-….…}"`.
+  `opencode.json` refers to it: `"Authorization": "Bearer {file:/…/tokens/t-…}"`.
   OpenCode 2 replaces the reference with the file's content when it loads the
   configuration (checked on OpenCode 2.2.5). Switching a server off removes
   the entry and then the file; the token stays in the OS store until you
-  remove the server. A new token gets a new file name, so OpenCode, which
-  watches `opencode.json`, picks it up.
+  remove the server. A new token is stored under a new name, so its file name
+  changes too and OpenCode, which watches `opencode.json`, picks it up; the
+  old token is deleted only after `opencode.json` stops referring to it. A
+  paste that cannot be saved completely changes nothing. Headers are treated
+  as credentials by name or by a token-like value (long, no spaces, letters
+  and digits).
 - **`opencode.json`.** The plugin writes only `mcp.servers.<name>` for servers
   that are on, with `oauth: false` and `timeout.execution`, under the same
   write lock as Fleet Kit (`<file>.bb-config-lock`), and keeps one backup of

@@ -1,12 +1,12 @@
 // The machine's side end to end, on a file credential store, a temporary
 // OpenCode directory and stub MCP servers.
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WriteConfig } from "../contract";
-import { openFileSecretStore } from "../src/host/secret-store";
-import { fileReference, McpService, secretName } from "../src/host/service";
+import { openFileSecretStore, type SecretStore } from "../src/host/secret-store";
+import { fileReference, McpService } from "../src/host/service";
 import { startStubMcp, type Stub } from "./stub-mcp";
 
 const TOKEN_A = "tok-synthetic-aaaaaaaaaaaa";
@@ -19,10 +19,10 @@ let stubB: Stub;
 let config: WriteConfig;
 let major: number | null;
 
-const make = () =>
+const make = (store: SecretStore = openFileSecretStore(join(root, "store"))) =>
   new McpService({
     dataDir: join(root, "data"),
-    store: openFileSecretStore(join(root, "store")),
+    store,
     // A host worker's trimmed environment: the OpenCode directory comes from the server.
     env: { HOME: join(root, "home"), PATH: "" },
     userHome: join(root, "home"),
@@ -39,6 +39,13 @@ const pasted = (tokenA = TOKEN_A) =>
   });
 
 const opencodeFile = () => join(root, "opencode", "opencode.json");
+const stateText = () => readFile(join(root, "data", "state.json"), "utf8");
+/** The store key a header's token is kept under, from state.json. */
+const keyOf = async (server: string, header: string): Promise<string> => {
+  const state = JSON.parse(await stateText());
+  return state.servers[server].headers.find((item: { name: string }) => item.name === header).secret;
+};
+const storeFiles = () => readdir(join(root, "store")).catch(() => [] as string[]);
 const readOpencode = async () => JSON.parse(await readFile(opencodeFile(), "utf8"));
 const everything = async () => {
   const files = [opencodeFile(), join(root, "data", "state.json")];
@@ -81,7 +88,7 @@ describe("connecting servers", () => {
     expect(file.mcp.servers.tracker_cd34.headers["X-Api-Key"]).toMatch(/^\{file:.+\}$/);
 
     const store = openFileSecretStore(join(root, "store"));
-    expect(await store.get(secretName("wiki_ab12", "Authorization"))).toBe(TOKEN_A);
+    expect(await store.get(await keyOf("wiki_ab12", "Authorization"))).toBe(TOKEN_A);
     expect(result.status.servers[0]?.secretHeaders).toEqual(["X-Api-Key"]);
   });
 
@@ -112,6 +119,7 @@ describe("connecting servers", () => {
     expect(refused.servers.find((server) => server.name === "wiki_ab12")!.health.status).toBe("unauthorized");
 
     const oldReference = /\{file:(.+)\}/.exec((await readOpencode()).mcp.servers.wiki_ab12.headers.Authorization)![1]!;
+    const oldKey = await keyOf("wiki_ab12", "Authorization");
     stubA.options.token = TOKEN_NEW;
     const rotated = await service.importConfig(pasted(TOKEN_NEW), config);
     expect(rotated.updated).toEqual(["wiki_ab12", "tracker_cd34"]);
@@ -120,8 +128,41 @@ describe("connecting servers", () => {
     expect(reference).not.toBe(oldReference);
     expect(await readFile(reference, "utf8")).toBe(TOKEN_NEW);
     await expect(stat(oldReference)).rejects.toThrow();
+    // The replaced token leaves the store once opencode.json no longer points at it.
+    const store = openFileSecretStore(join(root, "store"));
+    expect(await store.get(oldKey)).toBeNull();
+    expect(await store.get(await keyOf("wiki_ab12", "Authorization"))).toBe(TOKEN_NEW);
+    expect((await storeFiles()).length).toBe(2);
     const fixed = await service.check(["wiki_ab12"], 0, config);
     expect(fixed.servers.find((server) => server.name === "wiki_ab12")!.health.status).toBe("ok");
+  });
+
+  it("a paste the store fails half way through changes nothing", async () => {
+    const files = openFileSecretStore(join(root, "store"));
+    let failNext = false;
+    const flaky: SecretStore = {
+      ...files,
+      has: (name) => files.has(name),
+      get: (name) => files.get(name),
+      delete: (name) => files.delete(name),
+      async set(name, value) {
+        // The second token of the paste is refused, after the first is already stored.
+        if (failNext && (await storeFiles()).length >= 3) throw new Error("store locked");
+        await files.set(name, value);
+      },
+    };
+    const service = make(flaky);
+    await service.importConfig(pasted(), config);
+    const before = { state: await stateText(), opencode: await readFile(opencodeFile(), "utf8"), store: (await storeFiles()).sort() };
+
+    failNext = true;
+    await expect(service.importConfig(pasted(TOKEN_NEW), config)).rejects.toThrow(/^\[mcp:store-failed\]/);
+    expect(await stateText()).toBe(before.state);
+    expect(await readFile(opencodeFile(), "utf8")).toBe(before.opencode);
+    expect((await storeFiles()).sort()).toEqual(before.store);
+    expect((await service.status()).servers.map((server) => server.health.status)).toEqual(["unknown", "unknown"]);
+    const reference = /\{file:(.+)\}/.exec((await readOpencode()).mcp.servers.wiki_ab12.headers.Authorization)![1]!;
+    expect(await readFile(reference, "utf8")).toBe(TOKEN_A);
   });
 });
 
@@ -131,10 +172,11 @@ describe("on, off, timeouts, removal", () => {
     await service.importConfig(pasted(), config);
     await service.setEnabled("wiki_ab12", false, false, config);
     expect((await readOpencode()).mcp.servers.wiki_ab12).toBeUndefined();
+    const key = await keyOf("wiki_ab12", "Authorization");
     const files = await readdir(join(root, "data", "tokens"));
-    expect(files.some((file) => file.startsWith(secretName("wiki_ab12", "Authorization")))).toBe(false);
+    expect(files).not.toContain(key);
     expect(files.length).toBe(1);
-    expect(await openFileSecretStore(join(root, "store")).get(secretName("wiki_ab12", "Authorization"))).toBe(TOKEN_A);
+    expect(await openFileSecretStore(join(root, "store")).get(key)).toBe(TOKEN_A);
 
     await service.setEnabled("wiki_ab12", true, false, config);
     expect((await readOpencode()).mcp.servers.wiki_ab12.url).toBe(stubA.url);
@@ -153,10 +195,12 @@ describe("on, off, timeouts, removal", () => {
   it("removal clears the entry, the files and the store", async () => {
     const service = make();
     await service.importConfig(pasted(), config);
+    const key = await keyOf("wiki_ab12", "Authorization");
     const status = await service.remove("wiki_ab12", config);
     expect(status.servers.map((server) => server.name)).toEqual(["tracker_cd34"]);
     expect((await readOpencode()).mcp.servers.wiki_ab12).toBeUndefined();
-    expect(await openFileSecretStore(join(root, "store")).get(secretName("wiki_ab12", "Authorization"))).toBeNull();
+    expect(await openFileSecretStore(join(root, "store")).get(key)).toBeNull();
+    expect(await readdir(join(root, "data", "tokens"))).not.toContain(key);
   });
 });
 
@@ -189,6 +233,26 @@ describe("opencode.json it did not write", () => {
     expect(fromHome.configFile).toBe(join(root, "home", ".config", "opencode", "opencode.json"));
   });
 
+  it("moving to another opencode.json takes its entries out of the old one and respects the new one's", async () => {
+    const service = make();
+    await service.importConfig(pasted(), config);
+    const other = await mkdtempDir(join(root, "other"));
+    await writeFile(join(other, "opencode.json"), JSON.stringify({ mcp: { servers: { wiki_ab12: { type: "remote", url: "https://mine.example.com/mcp" } } } }));
+
+    const moved = await service.sync({ ...config, serverEnvironment: { OPENCODE_CONFIG_DIR: other } });
+    expect(moved.configError).toBeNull();
+    expect((await readOpencode()).mcp?.servers ?? {}).toEqual({});
+    const file = JSON.parse(await readFile(join(other, "opencode.json"), "utf8"));
+    expect(file.mcp.servers.wiki_ab12.url).toBe("https://mine.example.com/mcp");
+    expect(file.mcp.servers.tracker_cd34.url).toBe(stubB.url);
+    expect(moved.servers.find((server) => server.name === "wiki_ab12")!.conflict).toBe(true);
+
+    // And back: the entry it never wrote in the other file stays there.
+    await service.sync(config);
+    expect(JSON.parse(await readFile(join(other, "opencode.json"), "utf8")).mcp.servers).toEqual({ wiki_ab12: { type: "remote", url: "https://mine.example.com/mcp" } });
+    expect(Object.keys((await readOpencode()).mcp.servers).sort()).toEqual(["tracker_cd34", "wiki_ab12"]);
+  });
+
   it("refuses plain http unless the developer switch is on", async () => {
     const result = await make().importConfig(pasted(), { ...config, allowHttp: false });
     expect(result.added).toEqual([]);
@@ -203,6 +267,28 @@ describe("opencode.json it did not write", () => {
     await expect(stat(opencodeFile())).rejects.toThrow();
   });
 
+  it("asks the OpenCode version again after an update to 2", async () => {
+    const bin = await mkdtempDir(join(root, "bin"));
+    const reported = join(root, "version.txt");
+    await writeFile(reported, "1.14.0\n");
+    await writeFile(join(bin, "opencode"), `#!/bin/sh\nread v < "${reported}"\necho "$v"\n`);
+    await chmod(join(bin, "opencode"), 0o755);
+    let now = 1_000_000;
+    const service = new McpService({
+      dataDir: join(root, "data"),
+      store: openFileSecretStore(join(root, "store")),
+      env: { HOME: join(root, "home"), PATH: bin },
+      userHome: join(root, "home"),
+      now: () => now,
+    });
+    expect((await service.importConfig(pasted(), config)).status.configError).toMatch(/^\[mcp:opencode-1\]/);
+    await writeFile(reported, "2.2.5\n");
+    expect((await service.sync(config)).configError).toMatch(/^\[mcp:opencode-1\]/);
+    now += 61_000;
+    expect((await service.sync(config)).configError).toBeNull();
+    expect(Object.keys((await readOpencode()).mcp.servers).sort()).toEqual(["tracker_cd34", "wiki_ab12"]);
+  });
+
   it("does not touch an opencode.json that is not valid JSON", async () => {
     const dir = await mkdtempDir(join(root, "opencode"));
     await writeFile(join(dir, "opencode.json"), "{ broken");
@@ -214,7 +300,6 @@ describe("opencode.json it did not write", () => {
 });
 
 async function mkdtempDir(path: string): Promise<string> {
-  const { mkdir } = await import("node:fs/promises");
   await mkdir(path, { recursive: true });
   return path;
 }

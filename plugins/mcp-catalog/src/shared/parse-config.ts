@@ -36,7 +36,8 @@ const isObject = (value: unknown): value is Json => value !== null && typeof val
 /** Names a client reserves inside `mcp`, never servers. */
 const RESERVED = new Set(["servers", "timeout", "$schema"]);
 const REMOTE_TYPES = new Set(["remote", "http", "streamable-http", "streamablehttp", "streamable_http", "sse"]);
-const REFERENCE = /\{(?:env|file):[^}]*\}|\$\{[^}]*\}/i;
+/** A substitution the client would expand, closed or not: `{env:…}`, `{file:…}`, `${…}`. */
+const REFERENCE = /\{(?:env|file):|\$\{/i;
 const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/;
 /** Query parameters that carry a credential. */
 const SECRET_PARAM = /token|key|secret|password|passwd|auth|session|signature|sig$/i;
@@ -146,9 +147,20 @@ export function parseClientConfig(text: string, options: { allowHttp?: boolean }
   return { servers, skipped };
 }
 
-/** Headers whose values are credentials and go to the OS store. */
+/** Headers whose names say they carry a credential. */
 export function isSecretHeader(name: string): boolean {
-  return /^(authorization|proxy-authorization|cookie)$/i.test(name) || /token|key|secret|auth|password|session|credential/i.test(name);
+  return /^(authorization|proxy-authorization|cookie)$/i.test(name) || /token|key|secret|auth|password|pass$|pat$|jwt|session|credential|signature/i.test(name);
+}
+
+/** A value that looks like a token whatever the header is called: long, no spaces, letters and digits. */
+function looksLikeToken(value: string): boolean {
+  const { secret } = splitScheme(value);
+  return secret.length >= 16 && /^[A-Za-z0-9._~+/=-]+$/.test(secret) && /[A-Za-z]/.test(secret) && /\d/.test(secret);
+}
+
+/** Whether a header goes to the OS store: by its name, or by a value that looks like a token. */
+export function isCredential(name: string, value: string): boolean {
+  return isSecretHeader(name) || looksLikeToken(value);
 }
 
 /**

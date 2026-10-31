@@ -79,7 +79,8 @@ try {
   await open("en");
   await page.locator("#mcp-paste").fill(JSON.stringify({ mcp: { corp_gitlab_00aa11bb: { type: "remote", url: "http://127.0.0.1:7900/u/1/gitlab/mcp", headers: { Authorization: "Bearer tok-synthetic-unknown-333" } } } }));
   await page.getByRole("button", { name: "Add", exact: true }).click();
-  await page.getByText("Added: corp_gitlab_00aa11bb.").waitFor({ timeout: 20_000 });
+  // "Updated" on a second run, when the server is already there.
+  await page.getByText(/^(Added|Updated): corp_gitlab_00aa11bb\.$/).waitFor({ timeout: 20_000 });
   if ((await page.locator("#mcp-paste").inputValue()) !== "") failures.push("the paste field kept the text after Add");
   await page.locator('[data-server="corp_gitlab_00aa11bb"]').getByText("Token not accepted").waitFor({ timeout: 30_000 });
   if ((await page.content()).includes("tok-synthetic-unknown-333")) failures.push("the token is on the page after Add");
@@ -88,6 +89,12 @@ try {
   // Switching off from the panel.
   await page.getByRole("switch", { name: "Use corp_gitlab_00aa11bb in new threads" }).click();
   await page.waitForFunction(() => document.querySelector('[data-server="corp_gitlab_00aa11bb"] [role=switch]')?.getAttribute("aria-checked") === "false", null, { timeout: 20_000 });
+
+  // Removal from the panel, which also leaves the stand as the next run expects it.
+  const row = page.locator('[data-server="corp_gitlab_00aa11bb"]');
+  await row.getByRole("button", { name: "Remove", exact: true }).click();
+  await row.getByRole("button", { name: "Yes, remove", exact: true }).click();
+  await row.waitFor({ state: "detached", timeout: 20_000 });
 } finally {
   await browser.close();
 }

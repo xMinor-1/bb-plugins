@@ -1,6 +1,6 @@
 // Pasted client settings → remote servers, in every shape the plugin accepts.
 import { describe, expect, it } from "vitest";
-import { ConfigTextError, isSecretHeader, parseClientConfig, splitScheme } from "../src/shared/parse-config";
+import { ConfigTextError, isCredential, isSecretHeader, parseClientConfig, splitScheme } from "../src/shared/parse-config";
 
 const TOKEN = "tok-synthetic-0123456789";
 const remote = (url = "https://mcp.example.com/u/1/srv/mcp") => ({ type: "remote", url, headers: { Authorization: `Bearer ${TOKEN}` } });
@@ -70,12 +70,30 @@ describe("parseClientConfig", () => {
     const text = JSON.stringify({ mcp: { env: { type: "remote", url: `https://mcp.example.com/mcp?api_key=${TOKEN}` } } });
     expect(JSON.stringify(parseClientConfig(text).skipped)).not.toContain(TOKEN);
   });
+
+  it("skips a substitution even when it is not closed", () => {
+    const text = JSON.stringify({
+      mcp: {
+        a: { type: "remote", url: "https://mcp.example.com/mcp", headers: { Authorization: "Bearer {env:TOKEN" } },
+        b: { type: "remote", url: "https://mcp.example.com/mcp", headers: { "X-Key": "${TOKEN" } },
+        c: { type: "remote", url: "https://mcp.example.com/{file:x/mcp" },
+      },
+    });
+    expect(parseClientConfig(text).skipped.map((skip) => skip.reason)).toEqual(["reference", "reference", "reference"]);
+  });
 });
 
 describe("credentials", () => {
   it("knows which headers hold secrets", () => {
     for (const name of ["Authorization", "authorization", "X-Api-Key", "X-Auth-Token", "Cookie", "Proxy-Authorization"]) expect(isSecretHeader(name), name).toBe(true);
     for (const name of ["X-Tenant", "Accept-Language"]) expect(isSecretHeader(name), name).toBe(false);
+  });
+
+  it("treats a token-like value as a secret whatever the header is called", () => {
+    for (const name of ["X-Pat", "X-JWT", "X-Gitlab-Pass"]) expect(isCredential(name, "short"), name).toBe(true);
+    expect(isCredential("X-Custom", TOKEN)).toBe(true);
+    expect(isCredential("X-Custom", "Bearer glpat-0123456789abcdefXYZ")).toBe(true);
+    for (const value of ["team-1", "application/json", "ru-RU,ru;q=0.9", "a value with spaces 1234567890"]) expect(isCredential("X-Tenant", value), value).toBe(false);
   });
 
   it("keeps only the token part of a scheme", () => {
