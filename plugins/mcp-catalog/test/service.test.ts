@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WriteConfig } from "../contract";
 import { openFileSecretStore } from "../src/host/secret-store";
-import { McpService, secretName } from "../src/host/service";
+import { fileReference, McpService, secretName } from "../src/host/service";
 import { startStubMcp, type Stub } from "./stub-mcp";
 
 const TOKEN_A = "tok-synthetic-aaaaaaaaaaaa";
@@ -218,3 +218,12 @@ async function mkdtempDir(path: string): Promise<string> {
   await mkdir(path, { recursive: true });
   return path;
 }
+
+describe("fileReference", () => {
+  it("carries Windows paths with forward slashes and refuses characters that would break it", () => {
+    expect(fileReference("C:\\Users\\Ivan Petrov\\.bb\\plugins\\mcp-catalog\\tokens\\t-1.ab")).toBe("{file:C:/Users/Ivan Petrov/.bb/plugins/mcp-catalog/tokens/t-1.ab}");
+    expect(fileReference("/home/u/.bb/tokens/t-1.ab")).toBe("{file:/home/u/.bb/tokens/t-1.ab}");
+    expect(() => fileReference("/home/u/{x}/t")).toThrow(/cannot carry/);
+    expect(() => fileReference('/home/u/"x/t')).toThrow(/cannot carry/);
+  });
+});
