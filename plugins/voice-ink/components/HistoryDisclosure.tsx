@@ -11,7 +11,8 @@ import { Icon } from "@/components/ui/icon";
 import { describeStoredFailure } from "@/lib/failures";
 import { defineMessages, intlLocale, useLang, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { PANEL_PATH, type HistoryEntry } from "../contract";
+import type { HistoryEntry } from "../contract";
+import { PANEL_PATH } from "../src/shared/paths";
 import type { rpcContract } from "../server";
 
 /** Enough to cover a working session, few enough to read at a glance. */

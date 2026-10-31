@@ -1,0 +1,188 @@
+# Builds the whisper.cpp server that voice-ink downloads and runs, for the
+# platforms bb runs on. The archives are build artifacts: whoever mirrors them
+# for their own users uploads them next to the model and puts the addresses and
+# SHA-256 sums in the plugin's settings.
+#
+# - mac-arm64: Metal on, shader library embedded, everything linked statically.
+# - win-x64:   CPU variants picked at runtime (GGML_BACKEND_DL), no OpenMP, the
+#              Visual C++ runtime DLLs shipped next to the executable, so the
+#              machine needs no redistributable installed.
+# - linux-x64: AVX2, no OpenMP, static libstdc++; for servers and testing.
+#
+# Each archive holds whisper-server, the libraries it loads, whisper.cpp's
+# LICENSE and BUILD-INFO.txt. A smoke test transcribes whisper.cpp's own
+# sample with the tiny model before anything is uploaded.
+name: voice-ink whisper.cpp
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/voice-ink-whisper-cpp.yml"
+      - "plugins/voice-ink/whisper-cpp/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: mac-arm64
+            os: macos-15
+          - target: win-x64
+            os: windows-2022
+          - target: linux-x64
+            os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          path: plugins-repo
+
+      - name: Read the pinned whisper.cpp version
+        id: version
+        run: echo "ref=$(tr -d '[:space:]' < plugins-repo/plugins/voice-ink/whisper-cpp/VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out whisper.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: ${{ steps.version.outputs.ref }}
+          path: whisper.cpp
+
+      - name: Configure (macOS)
+        if: matrix.target == 'mac-arm64'
+        working-directory: whisper.cpp
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_OPENMP=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_SDL2=OFF
+
+      - name: Configure (Windows)
+        if: matrix.target == 'win-x64'
+        working-directory: whisper.cpp
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_OPENMP=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_SDL2=OFF
+
+      - name: Configure (Linux)
+        if: matrix.target == 'linux-x64'
+        working-directory: whisper.cpp
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+            -DGGML_OPENMP=OFF \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++" \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_SDL2=OFF
+
+      - name: Build
+        working-directory: whisper.cpp
+        run: |
+          if [ "${{ matrix.target }}" = "win-x64" ]; then
+            # The CPU variants are separate targets loaded at runtime, not link
+            # dependencies of the server, so everything is built.
+            cmake --build build --config Release -j 4
+          else
+            cmake --build build --config Release -j 4 --target whisper-server
+          fi
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          out="whisper-cpp-${{ matrix.target }}"
+          mkdir -p "$out"
+          if [ "${{ matrix.target }}" = "win-x64" ]; then
+            bin=whisper.cpp/build/bin/Release
+            cp "$bin/whisper-server.exe" "$out/"
+            cp "$bin"/*.dll "$out/"
+            # The Visual C++ runtime, app-local (Microsoft's redist.txt allows it).
+            vs="$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)"
+            vs="$(cygpath -u "$vs")"
+            crt="$(ls -d "$vs"/VC/Redist/MSVC/[0-9]*/x64/Microsoft.VC14*.CRT | sort | tail -n 1)"
+            echo "CRT from: $crt"
+            cp "$crt"/*.dll "$out/"
+          else
+            cp whisper.cpp/build/bin/whisper-server "$out/"
+            chmod 755 "$out/whisper-server"
+          fi
+          cp whisper.cpp/LICENSE "$out/LICENSE-whisper.cpp.txt"
+          {
+            echo "whisper.cpp ${{ steps.version.outputs.ref }} ($(git -C whisper.cpp rev-parse HEAD))"
+            echo "target: ${{ matrix.target }}"
+            echo "runner: ${{ matrix.os }}"
+            echo "built by: ${{ github.repository }}@${{ github.sha }}, run ${{ github.run_id }}"
+            grep -E '^(BUILD_SHARED_LIBS|GGML_[A-Z_]+|CMAKE_OSX_DEPLOYMENT_TARGET):' whisper.cpp/build/CMakeCache.txt \
+              | grep -E 'NATIVE|METAL|OPENMP|BACKEND_DL|CPU_ALL_VARIANTS|AVX|FMA|F16C|SHARED|DEPLOYMENT' || true
+          } > "$out/BUILD-INFO.txt"
+          cat "$out/BUILD-INFO.txt"
+          ls -la "$out"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Show linked libraries
+        run: |
+          dir="${{ steps.package.outputs.dir }}"
+          case "${{ matrix.target }}" in
+            mac-arm64) otool -L "$dir/whisper-server" ;;
+            linux-x64) ldd "$dir/whisper-server" ;;
+            win-x64) objdump -p "$dir/whisper-server.exe" | grep 'DLL Name' || true ;;
+          esac
+
+      - name: Smoke test with the tiny model
+        run: |
+          set -euo pipefail
+          dir="${{ steps.package.outputs.dir }}"
+          curl -sSfL -o ggml-tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          exe="$dir/whisper-server"
+          [ "${{ matrix.target }}" = "win-x64" ] && exe="$dir/whisper-server.exe"
+          "$exe" -m ggml-tiny.bin --host 127.0.0.1 --port 18178 -t 2 > server.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:18178/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -sSf -F file=@whisper.cpp/samples/jfk.wav -F response_format=json -F language=en \
+            http://127.0.0.1:18178/inference | tee result.json
+          kill "$pid" || true
+          grep -qi "ask not what your country" result.json || { echo; cat server.log; exit 1; }
+          grep -iE 'metal|cpu|backend' server.log | head -20 || true
+
+      - name: Archive
+        id: archive
+        run: |
+          set -euo pipefail
+          dir="${{ steps.package.outputs.dir }}"
+          if [ "${{ matrix.target }}" = "win-x64" ]; then
+            (cd "$dir" && 7z a -tzip "../$dir.zip" . > /dev/null)
+          else
+            (cd "$dir" && zip -q -r "../$dir.zip" .)
+          fi
+          if command -v sha256sum > /dev/null; then sha256sum "$dir.zip" > "$dir.zip.sha256"; else shasum -a 256 "$dir.zip" > "$dir.zip.sha256"; fi
+          cat "$dir.zip.sha256"
+          ls -la "$dir.zip"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-cpp-${{ matrix.target }}
+          path: |
+            whisper-cpp-${{ matrix.target }}.zip
+            whisper-cpp-${{ matrix.target }}.zip.sha256
+          retention-days: 90

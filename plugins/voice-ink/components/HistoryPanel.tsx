@@ -21,7 +21,8 @@ import {
   type Lang,
 } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { HISTORY_AUDIO_URL, type HistoryEntry } from "../contract";
+import type { HistoryEntry } from "../contract";
+import { HISTORY_AUDIO_URL } from "../src/shared/paths";
 import type { rpcContract } from "../server";
 
 const PAGE_SIZE = 50;

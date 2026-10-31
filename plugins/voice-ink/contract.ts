@@ -3,9 +3,42 @@
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
+/** A file the plugin downloads: where from, and the SHA-256 it must have. */
+export const assetSpecSchema = z.object({ url: z.string(), sha256: z.string() }).strict();
+export type AssetSpecConfig = z.infer<typeof assetSpecSchema>;
+
+/** What the whisper.cpp engine downloads; the host picks the program for its own platform. */
+export const whisperCppConfigSchema = z
+  .object({
+    /**
+     * A ggml model file. With `parts`, the file is put together from them
+     * (each checked on its own) and `sha256` is the sum of the whole; `url`
+     * then only names the file and may be empty.
+     */
+    model: assetSpecSchema.extend({ parts: z.array(assetSpecSchema).max(200).default([]) }).strict(),
+    /** Zip archives with whisper-server, keyed by `<process.platform>-<process.arch>`. */
+    runtimes: z.record(z.string(), assetSpecSchema.nullable()),
+    /** `Name: value` sent with the downloads to their own origin, or null. */
+    authHeader: z.string().nullable(),
+  })
+  .strict();
+export type WhisperCppConfig = z.infer<typeof whisperCppConfigSchema>;
+
+export const ENGINES = ["faster-whisper", "whisper.cpp"] as const;
+export type EngineKind = (typeof ENGINES)[number];
+
 /** How the worker should be run; the server owns these, the host applies them. */
 export const engineConfigSchema = z
   .object({
+    /** Which recognizer runs: Python with faster-whisper, or whisper.cpp's server. */
+    engine: z.enum(ENGINES).default("faster-whisper"),
+    /** Downloads for the whisper.cpp engine; null when the other engine is chosen. */
+    whisperCpp: whisperCppConfigSchema.nullable().default(null),
+    /**
+     * Online features are off: faster-whisper loads its models from the local
+     * cache only and never fetches them from Hugging Face on its own.
+     */
+    offline: z.boolean().default(false),
     /** faster-whisper model name or a local CTranslate2 directory. */
     model: z.string().min(1),
     /** CTranslate2 quantization; int8 is the only one that keeps CPU usable. */
@@ -75,8 +108,21 @@ export const engineStatusSchema = z
   .object({
     /** "ready" only once a model is loaded and a request would run now. */
     state: z.enum(["idle", "loading", "ready", "failed"]),
+    engine: z.enum(ENGINES),
     model: z.string().nullable(),
     pythonPath: z.string().nullable(),
+    /** The whisper.cpp server program, once it is downloaded. */
+    runtimePath: z.string().nullable(),
+    /**
+     * Whether a dictation could start now without a download: Python found, or
+     * the whisper.cpp program and model checked. The model may still need loading.
+     */
+    assetsReady: z.boolean(),
+    /** A download in progress, for the status line and the setup page. */
+    download: z
+      .object({ label: z.string(), doneBytes: z.number(), totalBytes: z.number().nullable() })
+      .strict()
+      .nullable(),
     message: z.string().nullable(),
   })
   .strict();
@@ -144,7 +190,11 @@ export const voiceHostContract = defineRpcContract({
     output: engineStatusSchema,
   },
   "voice.status": {
-    input: z.object({ warmUp: z.boolean() }).strict(),
+    /**
+     * `ensureFiles`: bb's readiness poll — whisper.cpp files that are missing
+     * (a fresh worker, a failed download whose retry is due) start downloading.
+     */
+    input: z.object({ warmUp: z.boolean(), ensureFiles: z.boolean().optional() }).strict(),
     output: engineStatusSchema,
   },
   "voice.last": {
@@ -384,9 +434,4 @@ export const rpcContract = defineRpcContract({
   },
 });
 
-/** The nav panel's route segment: /plugins/voice-ink/history/<entry id>. */
-export const PANEL_PATH = "history";
-
-/** Where the panel fetches audio bytes; the server streams them from the host. */
-export const HISTORY_AUDIO_ROUTE = "/history/audio";
-export const HISTORY_AUDIO_URL = `/api/v1/plugins/voice-ink/http${HISTORY_AUDIO_ROUTE}`;
+export { HISTORY_AUDIO_ROUTE, HISTORY_AUDIO_URL, PANEL_PATH } from "./src/shared/paths.js";

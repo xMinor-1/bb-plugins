@@ -2,7 +2,7 @@
 // on, and answers both bb's own voice service (the built-in microphone button,
 // relayed by the server's AI service) and the plugin's streaming methods (its
 // own button).
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import {
@@ -16,6 +16,7 @@ import {
 import { TranscriptHistory } from "./history.js";
 import { polishTranscript } from "./polish.js";
 import { QuickVoice } from "./quick-voice.js";
+import { WhisperCppEngine } from "./whisper-cpp-engine.js";
 import { WhisperEngine } from "./whisper-engine.js";
 import { WORKER_SOURCE } from "./worker-source.js";
 
@@ -36,6 +37,9 @@ const TIMEOUT_GRACE_MS = 500;
  * restarted answers with these rather than refusing the request.
  */
 const DEFAULT_CONFIG: EngineConfig = {
+  engine: "faster-whisper",
+  whisperCpp: null,
+  offline: false,
   model: "small",
   computeType: "int8",
   threads: 2,
@@ -68,8 +72,11 @@ interface HostContext {
   experimental_retainWorker(): { dispose(): Promise<void> };
 }
 
-let engine: WhisperEngine | null = null;
-let preparing: Promise<WhisperEngine> | null = null;
+/** Either recognizer; both answer the same calls. */
+type Engine = WhisperEngine | WhisperCppEngine;
+
+let engine: Engine | null = null;
+let preparing: Promise<Engine> | null = null;
 let history: TranscriptHistory | null = null;
 /**
  * Worker retention has to be requested from the call that is running now: a
@@ -78,41 +85,59 @@ let history: TranscriptHistory | null = null;
  */
 let activeContext: HostContext | null = null;
 
-async function engineFor(context: HostContext): Promise<WhisperEngine> {
+function kindOf(running: Engine): EngineConfig["engine"] {
+  return running instanceof WhisperCppEngine ? "whisper.cpp" : "faster-whisper";
+}
+
+/**
+ * The running engine, created on first use from the configuration mirrored on
+ * disk. `desired` is a configuration about to be applied: when it names the
+ * other engine, the running one is retired and replaced.
+ */
+async function engineFor(context: HostContext, desired?: EngineConfig): Promise<Engine> {
   activeContext = context;
-  if (engine !== null) return engine;
-  if (preparing !== null) return preparing;
+  const fits = (running: Engine) => desired === undefined || kindOf(running) === desired.engine;
+  if (preparing !== null) {
+    const ready = await preparing;
+    if (fits(ready)) return ready;
+  }
+  if (engine !== null) {
+    if (fits(engine)) return engine;
+    const retired = engine;
+    engine = null;
+    await retired.dispose();
+  }
 
   preparing = (async () => {
     const { dataDir, tempDir } = context.experimental_paths;
     await mkdir(dataDir, { recursive: true });
-    // Rewritten every time the worker starts, so a plugin update always runs
-    // its own Python and never a stale copy from an earlier install.
-    const workerScript = join(dataDir, "worker.py");
-    await writeFile(workerScript, WORKER_SOURCE, "utf8");
-
-    const created = new WhisperEngine({
-      dataDir,
-      tempDir,
-      workerScript,
-      log: (message, fields) => {
-        console.log(`[voice-ink] ${message}${fields ? ` ${JSON.stringify(fields)}` : ""}`);
-      },
-      retainWorker: () => (activeContext ?? context).experimental_retainWorker(),
-    });
+    const config = desired ?? (await readStoredConfig(dataDir));
+    const log = (message: string, fields?: Record<string, unknown>) => {
+      console.log(`[voice-ink] ${message}${fields ? ` ${JSON.stringify(fields)}` : ""}`);
+    };
+    const retainWorker = () => (activeContext ?? context).experimental_retainWorker();
+    let created: Engine;
+    if (config.engine === "whisper.cpp") {
+      created = new WhisperCppEngine({ dataDir, log, retainWorker });
+    } else {
+      // Rewritten every time the worker starts, so a plugin update always runs
+      // its own Python and never a stale copy from an earlier install.
+      const workerScript = join(dataDir, "worker.py");
+      await writeFile(workerScript, WORKER_SOURCE, "utf8");
+      created = new WhisperEngine({ dataDir, tempDir, workerScript, log, retainWorker });
+    }
     context.lifecycle.signal.addEventListener(
       "abort",
       () => {
         void created.dispose();
-        engine = null;
+        if (engine === created) engine = null;
       },
       { once: true },
     );
     // The daemon may retire this worker between phrases; the settings live in
     // the server, so they are mirrored here and reread on the way back up.
-    const stored = await readStoredConfig(dataDir);
-    await created.configure(stored);
-    historyFor(context).setPolicy(stored.history);
+    await created.configure(config);
+    historyFor(context).setPolicy(config.history);
     engine = created;
     return created;
   })().finally(() => {
@@ -193,7 +218,7 @@ export default experimental_defineHostEntry({
         .begin({
           audio: Buffer.from(input.audioBase64, "base64"),
           mimeType: input.mimeType,
-          model: active.currentConfig()?.model ?? DEFAULT_CONFIG.model,
+          model: active.status().model ?? DEFAULT_CONFIG.model,
           source: "voice",
         })
         .catch(() => null);
@@ -256,20 +281,20 @@ export default experimental_defineHostEntry({
     }),
 
     "voice.configure": async ({ config }, context): Promise<EngineStatus> => {
-      const active = await engineFor(context as HostContext);
+      const active = await engineFor(context as HostContext, config);
       const status = await active.configure(config);
       historyFor(context as HostContext).setPolicy(config.history);
-      await writeFile(
-        configPath(context.experimental_paths.dataDir),
-        JSON.stringify(config),
-        "utf8",
-      );
+      // Owner-only: the mirror holds the cleanup key and the download header.
+      const mirror = configPath(context.experimental_paths.dataDir);
+      await writeFile(mirror, JSON.stringify(config), { encoding: "utf8", mode: 0o600 });
+      if (process.platform !== "win32") await chmod(mirror, 0o600).catch(() => {});
       return status;
     },
 
-    "voice.status": async ({ warmUp }, context): Promise<EngineStatus> => {
+    "voice.status": async ({ warmUp, ensureFiles }, context): Promise<EngineStatus> => {
       const active = await engineFor(context as HostContext);
-      return warmUp ? active.warmUp() : active.status();
+      if (warmUp) return active.warmUp();
+      return ensureFiles === true && active instanceof WhisperCppEngine ? active.ensureFiles() : active.status();
     },
 
     "voice.last": async (_input, context): Promise<{ text: string | null }> => {
