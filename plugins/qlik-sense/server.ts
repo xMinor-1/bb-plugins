@@ -17,6 +17,7 @@ import { catalogSchema, checkLinkResultSchema, checkSignInResultSchema, connecti
 import { normalizeBaseUrl } from "./src/shared/links";
 import { groupModels } from "./src/shared/models";
 import { createPolicy, formatRules, parseRules, PolicyError, type Policy } from "./src/shared/policy";
+import { setupFromStatus, setupStatusContract, setupStep } from "./src/shared/setup";
 
 const hostIdInput = z.object({ hostId: z.string().min(1).max(200) }).strict();
 const ruleSchema = z.object({ provider: z.string().min(1).max(200), model: z.string().min(1).max(300) }).strict();
@@ -63,6 +64,8 @@ export const rpcContract = defineRpcContract({
 const SKILL = "qlik-sense";
 const DATA_TIMEOUT_MS = 300_000;
 const MODELS_TIMEOUT_MS = 15_000;
+/** The setup page waits on this answer; the host reads only its own files. */
+const SETUP_TIMEOUT_MS = 10_000;
 
 const appParam = z.string().max(300).optional().describe("App id or name from qlik_reports. May be omitted when only one app is enabled.");
 const filtersParam = z
@@ -340,6 +343,36 @@ export default async function plugin(bb: BbPluginApi) {
       return { providers: out.filter((provider) => provider.groups.length > 0) };
     },
   });
+
+  // ---------- The onboarding step (src/shared/setup.ts) ----------
+
+  /** The machine the person set Qlik up on: named by the caller, else the panel's last machine, else bb's own machine. */
+  async function setupMachine(requested: string | undefined): Promise<string | null> {
+    if (requested) return requested;
+    const hosts = (await bb.sdk.hosts.list()).filter((candidate) => candidate.lifecycle.phase !== "destroyed");
+    const last = await kv.get<string>("ui:lastHost");
+    if (last && hosts.some((candidate) => candidate.id === last)) return last;
+    const { primaryHostId } = await bb.sdk.system.config();
+    return primaryHostId ?? hosts[0]?.id ?? null;
+  }
+
+  // Other plugins may ask: the answer holds no report, address or login.
+  bb.rpc.register(
+    setupStatusContract,
+    {
+      setupStatus: async ({ lang = "en", hostId: requested }) => {
+        const machine = await setupMachine(requested);
+        if (!machine) return setupStep("problem", "noMachine", lang);
+        try {
+          return setupFromStatus(await call("status", machine, {}, SETUP_TIMEOUT_MS), lang);
+        } catch (error) {
+          bb.log.info(`setupStatus: ${machine} did not answer: ${error instanceof Error ? error.message : String(error)}`);
+          return setupStep("problem", "offline", lang);
+        }
+      },
+    },
+    { experimental_discoverable: true, experimental_description: "Qlik Sense setup state for a bb build's onboarding page." },
+  );
 }
 
 const TOOL_NAMES = ["qlik_reports", "qlik_list_sheets", "qlik_sheet_objects", "qlik_list_fields", "qlik_field_values", "qlik_get_data", "qlik_query"];

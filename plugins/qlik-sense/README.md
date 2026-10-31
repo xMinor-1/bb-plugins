@@ -106,6 +106,14 @@ bb server (server.ts)                     machine where agents run (src/host.ts)
   session cookie, re-signs in once when the session expires, and talks to the
   engine (Engine API, JSON-RPC over WebSocket). State lives in the plugin's
   data directory on that machine.
+- **Setup status for other plugins.** `setupStatus` answers a build's
+  onboarding page, such as Fleet Kit's. Input
+  `{ lang?: "en" | "ru", hostId?: string }`; without `hostId` it asks the
+  machine the Qlik page used last, else bb's own machine. Output
+  `{ state: "done" | "todo" | "problem", summary, path }`: `done` once the
+  sign-in passed its last check and at least one report is enabled for agents.
+  `summary` is one line in `lang` with no address, login or report names,
+  `path` is the Qlik page. It reads the saved state only and sends nothing to Qlik.
 - bb runs its processes with `--use-system-ca`, so corporate certificate
   authorities trusted by the OS are trusted here too.
 
