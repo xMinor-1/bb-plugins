@@ -28,6 +28,10 @@
       "source": "./plugins/fleet-kit"
     },
     {
+      "name": "mcp-catalog",
+      "source": "./plugins/mcp-catalog"
+    },
+    {
       "name": "qlik-sense",
       "source": "./plugins/qlik-sense"
     },
