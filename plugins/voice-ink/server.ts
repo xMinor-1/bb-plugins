@@ -11,10 +11,15 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { z } from "zod";
+import { defineRpcContract } from "@get-bb/plugin-sdk";
 import {
+  ENGINES,
   HISTORY_AUDIO_ROUTE,
+  PANEL_PATH,
   rpcContract,
   voiceHostContract,
+  type AssetSpecConfig,
   type ConversationTiming,
   type EngineConfig,
   type EngineStatus,
@@ -37,6 +42,12 @@ const SERVICE_ID = "voice-ink";
  * with what it has just before that, so the composer never gets nothing.
  */
 const VOICE_WAIT_MS = 70_000;
+
+/** How long warming up may take: loading the model, not downloading it (that runs in the background). */
+const WARMUP_WAIT_MS = 180_000;
+
+/** `bb voice-ink transcribe`: the host's own limit for one file, plus the way back. */
+const TRANSCRIBE_FILE_WAIT_MS = 610_000;
 
 /** Where python/tts_server.py listens unless the settings say otherwise. */
 const DEFAULT_SPEECH_SERVICE_URL = "http://127.0.0.1:38951";
@@ -64,6 +75,56 @@ type CleanupProvider = (typeof CLEANUP_PROVIDERS)[number];
 function parseCleanupProvider(value: string): CleanupProvider {
   return CLEANUP_PROVIDERS.find((candidate) => candidate === value) ?? "off";
 }
+
+/**
+ * The whisper.cpp engine's defaults: the quantized large-v3-turbo model from
+ * whisper.cpp's own model repository, and whisper.cpp's own Windows build.
+ * Builds for macOS (Metal) and Linux come from this repository's workflow
+ * (.github/workflows/voice-ink-whisper-cpp.yml) and are set per installation.
+ */
+const DEFAULT_WHISPER_CPP_MODEL_URL =
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
+const DEFAULT_WHISPER_CPP_MODEL_SHA256 = "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2";
+const DEFAULT_WHISPER_CPP_WINDOWS_URL =
+  "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip";
+const DEFAULT_WHISPER_CPP_WINDOWS_SHA256 = "6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb";
+
+/** The onboarding answer for a build's setup page, shared with the other plugins of this repository. */
+const setupStatusContract = defineRpcContract({
+  setupStatus: {
+    experimental_description:
+      "Whether local speech recognition is set up on a machine: done, todo or problem, with one line for a person. Reads the saved state only.",
+    input: z.object({ lang: z.enum(["en", "ru"]).optional(), hostId: z.string().min(1).max(200).optional() }).strict(),
+    output: z
+      .object({
+        state: z.enum(["done", "todo", "problem"]),
+        summary: z.string().max(200),
+        path: z.string().regex(/^\/plugins\//).optional(),
+      })
+      .strict(),
+  },
+});
+
+const SETUP_TEXT = {
+  en: {
+    done: "Voice input is ready on this machine",
+    downloading: (percent: number | null) =>
+      percent === null ? "Downloading the speech model" : `Downloading the speech model: ${percent}%`,
+    notSelected: "The speech model is ready; pick Voice Ink for voice input in Settings, AI services",
+    notReady: "Speech recognition is not ready yet; `bb voice-ink status` shows why",
+    failed: "Speech recognition could not be set up; `bb voice-ink status` shows why",
+    noMachine: "No machine is connected to bb",
+  },
+  ru: {
+    done: "Голосовой ввод на этой машине готов",
+    downloading: (percent: number | null) =>
+      percent === null ? "Скачивается модель распознавания речи" : `Скачивается модель распознавания речи: ${percent}%`,
+    notSelected: "Модель на месте; выберите Voice Ink для голосового ввода в настройках, AI services",
+    notReady: "Распознавание речи ещё не готово; причину покажет `bb voice-ink status`",
+    failed: "Распознавание речи не удалось настроить; причину покажет `bb voice-ink status`",
+    noMachine: "К bb не подключена ни одна машина",
+  },
+} as const;
 
 /** Models offered in settings, fastest first. Measurements are in the README. */
 const MODEL_OPTIONS = ["small", "medium", "large-v3-turbo"] as const;
@@ -106,11 +167,63 @@ function parseNonNegativeInt(value: string, fallback: number): number {
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
+    // whisper.cpp needs nothing installed: the plugin downloads the program and
+    // the model from the addresses below and checks their SHA-256.
+    engine: {
+      type: "select",
+      label: "Recognition engine",
+      options: [...ENGINES],
+      default: "faster-whisper",
+    },
     model: {
       type: "select",
-      label: "Model",
+      label: "Model (faster-whisper)",
       options: [...MODEL_OPTIONS],
       default: "medium",
+    },
+    whisperCppModelUrl: {
+      type: "string",
+      label: "whisper.cpp model address (a ggml .bin file)",
+      default: DEFAULT_WHISPER_CPP_MODEL_URL,
+    },
+    whisperCppModelSha256: {
+      type: "string",
+      label: "whisper.cpp model SHA-256",
+      default: DEFAULT_WHISPER_CPP_MODEL_SHA256,
+    },
+    whisperCppMacArm64Url: {
+      type: "string",
+      label: "whisper.cpp program for macOS on Apple silicon (zip address)",
+      default: "",
+    },
+    whisperCppMacArm64Sha256: { type: "string", label: "SHA-256 of the macOS zip", default: "" },
+    whisperCppWindowsX64Url: {
+      type: "string",
+      label: "whisper.cpp program for Windows x64 (zip address)",
+      default: DEFAULT_WHISPER_CPP_WINDOWS_URL,
+    },
+    whisperCppWindowsX64Sha256: {
+      type: "string",
+      label: "SHA-256 of the Windows zip",
+      default: DEFAULT_WHISPER_CPP_WINDOWS_SHA256,
+    },
+    whisperCppLinuxX64Url: {
+      type: "string",
+      label: "whisper.cpp program for Linux x64 (zip address)",
+      default: "",
+    },
+    whisperCppLinuxX64Sha256: { type: "string", label: "SHA-256 of the Linux zip", default: "" },
+    downloadHeader: {
+      type: "string",
+      label: "Header sent with the downloads, if the server needs one (Name: value)",
+      secret: true,
+    },
+    // Off keeps every word on this machine: no transcript cleanup by an online
+    // model and no quick voice, whatever the settings below say.
+    onlineServices: {
+      type: "boolean",
+      label: "Allow features that send text to online services (transcript cleanup, quick voice)",
+      default: true,
     },
     language: {
       type: "select",
@@ -259,7 +372,25 @@ export default async function plugin(bb: BbPluginApi) {
   async function currentConfig(): Promise<EngineConfig> {
     const values = await settings.get();
     const model = values.model;
+    const spec = (url: string, sha256: string): AssetSpecConfig => ({
+      url: url.trim(),
+      sha256: sha256.trim().toLowerCase(),
+    });
+    const engine = values.engine === "whisper.cpp" ? "whisper.cpp" : "faster-whisper";
     return {
+      engine,
+      whisperCpp:
+        engine === "whisper.cpp"
+          ? {
+              model: spec(values.whisperCppModelUrl, values.whisperCppModelSha256),
+              runtimes: {
+                "darwin-arm64": spec(values.whisperCppMacArm64Url, values.whisperCppMacArm64Sha256),
+                "win32-x64": spec(values.whisperCppWindowsX64Url, values.whisperCppWindowsX64Sha256),
+                "linux-x64": spec(values.whisperCppLinuxX64Url, values.whisperCppLinuxX64Sha256),
+              },
+              authHeader: values.downloadHeader?.trim() ? values.downloadHeader.trim() : null,
+            }
+          : null,
       model: MODEL_REPOS[model] ?? model,
       computeType: values.computeType,
       ...splitCores(parsePositiveInt(values.cpuCores, 2)),
@@ -279,7 +410,7 @@ export default async function plugin(bb: BbPluginApi) {
       punctuate: values.punctuation,
       paragraphPauseSec: parsePositiveFloat(values.paragraphPause, 1.2),
       polish: {
-        provider: parseCleanupProvider(values.cleanup),
+        provider: values.onlineServices ? parseCleanupProvider(values.cleanup) : "off",
         apiKey: values.cleanupApiKey?.trim() === "" ? null : (values.cleanupApiKey ?? null),
         model: values.cleanupModel.trim(),
         baseUrl: values.cleanupBaseUrl.trim() === "" ? null : values.cleanupBaseUrl.trim(),
@@ -306,7 +437,9 @@ export default async function plugin(bb: BbPluginApi) {
     const config = await currentConfig();
     const status = await host.call("voice.configure", { config }, { hostId: id });
     if (!warmUp) return status;
-    return host.call("voice.status", { warmUp: true }, { hostId: id });
+    // Loading a large model on a slow CPU, or Metal compiling its kernels on
+    // the first start, outlasts the 30 seconds a host call gets by default.
+    return host.call("voice.status", { warmUp: true }, { hostId: id, timeoutMs: WARMUP_WAIT_MS });
   }
 
   bb.experimental_aiServices.register({
@@ -337,9 +470,14 @@ export default async function plugin(bb: BbPluginApi) {
     },
     // Without a machine there is nothing to run the model on; bb then hides the
     // microphone instead of offering a button that can only fail.
+    // So is a whisper.cpp engine whose program or model is still downloading.
     status: async () => {
       try {
-        await hostId();
+        const id = await hostId();
+        const status = await host.call("voice.status", { warmUp: false }, { hostId: id, timeoutMs: 5_000 });
+        if (!status.assetsReady) {
+          return { ready: false, message: status.message ?? "the speech model is not downloaded yet" };
+        }
         return { ready: true };
       } catch (error) {
         return { ready: false, message: error instanceof Error ? error.message : String(error) };
@@ -372,7 +510,8 @@ export default async function plugin(bb: BbPluginApi) {
     speak: async ({ text }) => speak(text),
     conversation_config: async () => {
       const values = await settings.get();
-      if (values.quickVoice) {
+      const quickVoice = values.quickVoice && values.onlineServices;
+      if (quickVoice) {
         // The resident model starts loading now, while the user says the first phrase.
         void hostId()
           .then((id) =>
@@ -384,12 +523,14 @@ export default async function plugin(bb: BbPluginApi) {
         endOfSpeechMs: parsePositiveInt(values.endOfSpeechMs, 900),
         bargeIn: values.bargeIn,
         marker: values.conversationMarker.trim(),
-        quickVoice: values.quickVoice,
+        quickVoice,
       };
     },
     quick_reply: async ({ text, recent }): Promise<QuickReplyResult> => {
       const values = await settings.get();
-      if (!values.quickVoice) return { ok: false, code: "off", message: "quick voice is off" };
+      if (!values.quickVoice || !values.onlineServices) {
+        return { ok: false, code: "off", message: "quick voice is off" };
+      }
       const started = Date.now();
       const history = recent
         .map((line) => `${line.who === "user" ? "User" : "Agent"}: ${line.text}`)
@@ -436,6 +577,46 @@ export default async function plugin(bb: BbPluginApi) {
       return { ok: true as const };
     },
   });
+
+  // The one method other plugins may call: a build's setup page asks whether
+  // voice input works here. It reads the host's state; no download, no address.
+  bb.rpc.register(
+    setupStatusContract,
+    {
+      setupStatus: async ({ lang = "en", hostId: requested }) => {
+        const text = SETUP_TEXT[lang];
+        const path = `/plugins/${bb.pluginId}/${PANEL_PATH}`;
+        let machine: string;
+        try {
+          machine = requested ?? (await hostId());
+        } catch {
+          return { state: "problem" as const, summary: text.noMachine };
+        }
+        let status: EngineStatus;
+        try {
+          status = await host.call("voice.status", { warmUp: false }, { hostId: machine, timeoutMs: 4_000 });
+        } catch {
+          return { state: "problem" as const, summary: text.notReady, path };
+        }
+        if (status.download !== null) {
+          const { doneBytes, totalBytes } = status.download;
+          const percent = totalBytes !== null && totalBytes > 0 ? Math.min(100, Math.floor((doneBytes / totalBytes) * 100)) : null;
+          return { state: "todo" as const, summary: text.downloading(percent), path };
+        }
+        if (!status.assetsReady) {
+          return status.state === "failed"
+            ? { state: "problem" as const, summary: text.failed, path }
+            : { state: "todo" as const, summary: text.notReady, path };
+        }
+        const services = await bb.sdk.system.aiServices().catch(() => null);
+        const voice = services?.selections.voice;
+        const selected = voice?.mode === "service" && voice.pluginId === bb.pluginId && voice.serviceId === SERVICE_ID;
+        if (!selected) return { state: "todo" as const, summary: text.notSelected, path };
+        return { state: "done" as const, summary: text.done, path };
+      },
+    },
+    { experimental_discoverable: true, experimental_description: "Voice Ink setup state for a bb build's onboarding page." },
+  );
 
   function quickTarget(values: { quickModel: string; claudePath: string }) {
     return {
@@ -636,11 +817,13 @@ export default async function plugin(bb: BbPluginApi) {
         case "status":
         case "warmup": {
           const status = await applyConfig(command === "warmup");
-          const lines = [
-            `state:  ${status.state}`,
-            `model:  ${status.model ?? "-"}`,
-            `python: ${status.pythonPath ?? "not resolved yet"}`,
-          ];
+          const lines = [`engine: ${status.engine}`, `state:  ${status.state}`, `model:  ${status.model ?? "-"}`];
+          if (status.engine === "whisper.cpp") {
+            lines.push(`files:  ${status.assetsReady ? "downloaded and checked" : "not downloaded yet"}`);
+            if (status.runtimePath !== null) lines.push(`server: ${status.runtimePath}`);
+          } else {
+            lines.push(`python: ${status.pythonPath ?? "not resolved yet"}`);
+          }
           if (status.message !== null) lines.push(`note:   ${status.message}`);
           return reply(status, lines.join("\n"));
         }
@@ -658,7 +841,8 @@ export default async function plugin(bb: BbPluginApi) {
               mimeType: `audio/${basename(file).split(".").pop() ?? "wav"}`,
               language: null,
             },
-            { hostId: id },
+            // The host gives a file up to ten minutes; the call waits that long too.
+            { hostId: id, timeoutMs: TRANSCRIBE_FILE_WAIT_MS },
           );
           if (!result.ok) {
             return { exitCode: 1, stderr: `${result.code}: ${result.message}` };

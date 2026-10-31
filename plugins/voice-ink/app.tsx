@@ -18,7 +18,7 @@ import { Icon } from "@/components/ui/icon";
 import { useDictation } from "@/hooks/useDictation";
 import { defineMessages, getLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { PANEL_PATH } from "./contract";
+import { PANEL_PATH } from "./src/shared/paths";
 import type { rpcContract } from "./server";
 
 const messages = defineMessages(
