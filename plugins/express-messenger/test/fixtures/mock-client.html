@@ -1,0 +1,67 @@
+<!doctype html><meta charset="utf-8"><body><div id="root"></div>
+<script>
+// A stand-in for the eXpress web client: a store shaped like the real one, made-up people and chats.
+// `?signin` shows the sign-in screen instead of the chats.
+if (location.search.includes('signin')) document.body.classList.add('body--auth');
+const P = (huid, name, extra = {}) => ({ userHuid: huid, isMe: false, ctsProfile: { name, companyPosition: 'Analyst', department: 'Logistics', email: extra.email || null, isBot: false },
+  searchStrings: [name.toLowerCase()], fastSortSearch: { nameTransliterations: extra.tr || [], nameKeyboardVariants: [] } });
+const profiles = {
+  me: { userHuid: 'me', isMe: true, ctsProfile: { name: 'Owner Test' } },
+  h1: P('h1', 'Alexander Volkov', { email: 'a.volkov@example.com', tr: ['Александр Волков'] }),
+  h2: P('h2', 'Alexandra Volkova', { tr: ['Александра Волкова'] }),
+  h3: P('h3', 'Dmitry Ivanov', { tr: ['Дмитрий Иванов'] }),
+};
+const chats = [
+  { groupChatId: 'c1', chatType: 'chat', name: '', members: ['me', 'h1'] },
+  { groupChatId: 'c2', chatType: 'chat', name: '', members: ['me', 'h2'] },
+  { groupChatId: 'c3', chatType: 'chat', name: '', members: ['me', 'h3'] },
+  { groupChatId: 'c4', chatType: 'group_chat', name: 'Т2 ЦП', members: ['me', 'h1', 'h3'], lastEventInsertedAt: 1700000780000 },
+  { groupChatId: 'c5', chatType: 'channel', name: 'Company news', members: ['me'] },
+  { groupChatId: 'c6', chatType: 'voex_call', name: 'Call', members: ['me', 'h1'] },
+];
+const state = { chats: location.search.includes('signin') ? [] : chats, profiles, unreadChats: { c4: 7, c3: 1 }, indexes: { visibleChats: ['c1', 'c2', 'c3', 'c4', 'c5'] } };
+const store = { getState: () => state, dispatch: () => {}, subscribe: () => {} };
+const hostRoot = { return: null, memoizedProps: null };
+const provider = { return: null, child: null, sibling: null, memoizedProps: { store } };
+hostRoot.child = provider; provider.return = hostRoot;
+document.getElementById('root')['__reactContainer$t'] = { current: hostRoot };
+state.messages = [];
+state.settings = { mainSettings: { sendButton: 'enter' } };
+const HISTORY = {
+  c4: Array.from({ length: 14 }, (_, i) => ({ groupChatId: 'c4', sender: i % 2 ? 'h1' : 'h3', insertedAt: { valueOf: () => 1700000000000 + i * 60000 },
+    payload: { body: 'Message ' + (i + 1) }, stealth: i === 13 ? { burn: 1 } : null })),
+};
+// A chat at #/chats/<id>: header, message list, composer. Unread clears only when the list is visible.
+const view = document.createElement('div');
+view.innerHTML = '<div class="chat-header-title-container__text" id="hdr"></div><div class="chat-messages" id="list"></div>' +
+  '<div class="message-input__message-field"><div contenteditable="true" id="ed" style="min-height:20px"></div></div>';
+document.body.appendChild(view);
+function route() {
+  const m = location.hash.match(/^#\/chats\/(.+)$/);
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  if (!m) { document.getElementById('hdr').textContent = ''; state.messages = []; return; }
+  const id = m[1];
+  const chat = chats.find((c) => c.groupChatId === id);
+  const other = chat.members.find((h) => h !== 'me');
+  document.getElementById('hdr').textContent = chat.name || profiles[other].ctsProfile.name;
+  setTimeout(() => {
+    state.messages = (HISTORY[id] || []).slice();
+    for (const msg of state.messages) { const r = document.createElement('div'); r.className = 'chat-message-row'; r.textContent = msg.payload.body; list.appendChild(r); }
+    setTimeout(() => {
+      const row = list.querySelector('.chat-message-row');
+      if (row && getComputedStyle(row).display !== 'none') state.unreadChats[id] = 0;
+    }, 800);
+  }, 600);
+}
+window.addEventListener('hashchange', route);
+document.getElementById('ed').addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter' || ev.ctrlKey || ev.metaKey) return;
+  ev.preventDefault();
+  const t = ev.target.innerText.trim(); if (!t) return;
+  const id = location.hash.split('/').pop();
+  state.messages.push({ groupChatId: id, sender: 'me', insertedAt: { valueOf: () => Date.now() }, payload: { body: t }, stealth: null });
+  window.sentLog = (window.sentLog || []).concat([[id, t]]);
+  ev.target.innerText = '';
+});
+</script>
