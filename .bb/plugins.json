@@ -20,6 +20,10 @@
       "source": "./plugins/exchange-mail"
     },
     {
+      "name": "express-messenger",
+      "source": "./plugins/express-messenger"
+    },
+    {
       "name": "file-manager",
       "source": "./plugins/file-manager"
     },
