@@ -32,9 +32,10 @@ The logo is drawn as an image, so a script inside the SVG does not run. Use a sq
 
 ## How it works
 
-`experimental_appOverlay` mounts a component that renders nothing for the life of the app window; a content script
-cannot read settings. The component adds one stylesheet and a `MutationObserver` on `<head>`, because bb rewrites
-the title and icons as the route, theme and unread state change. Everything is undone when the plugin stops.
+A content script runs in every window, also on the onboarding screen, where overlays and other slots are not mounted
+yet. It reads the settings from this plugin's own route (`GET /branding`) and checks again every 30 seconds, because
+settings can arrive after the plugin starts. It adds one stylesheet and a `MutationObserver` on `<head>`, because bb
+rewrites the title and icons as the route, theme and unread state change. Everything is undone when the plugin stops.
 
 The selector matches bb's built asset name (`/assets/bb-logo-*`). If a bb release renames the file, the logo
 falls back to bb's and nothing breaks.

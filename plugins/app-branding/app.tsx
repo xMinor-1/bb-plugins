@@ -1,16 +1,17 @@
-import { definePluginApp, useSettings } from "@get-bb/plugin-sdk/app";
-import { useEffect } from "react";
-import { applyBranding, readBranding } from "./src/branding";
-
-// Renders nothing: it exists to read the settings, which a content script cannot do,
-// and it lives as long as the app window, on every route.
-function Branding() {
-  const { values } = useSettings();
-  const { appName, logoSvg } = readBranding(values ?? {});
-  useEffect(() => applyBranding(document, { appName, logoSvg }), [appName, logoSvg]);
-  return null;
-}
+import { definePluginApp } from "@get-bb/plugin-sdk/app";
+import { watchBranding } from "./src/branding";
 
 export default definePluginApp((app) => {
-  app.slots.experimental_appOverlay({ id: "branding", component: Branding });
+  // A content script and not an overlay: bb's onboarding screen, which carries its logo, replaces the app shell,
+  // so overlays only appear after it. A content script has no settings hook, so it asks this plugin's server.
+  app.contentScripts.register({
+    id: "branding",
+    mount({ pluginId }) {
+      return watchBranding(document, async () => {
+        const response = await fetch(`/api/v1/plugins/${encodeURIComponent(pluginId)}/http/branding`);
+        if (!response.ok) throw new Error(`Branding settings: HTTP ${response.status}`);
+        return (await response.json()) as Record<string, unknown>;
+      });
+    },
+  });
 });

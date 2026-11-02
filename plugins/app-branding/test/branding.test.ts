@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyBranding as apply, type Branding, isUsableLogo, readBranding, svgDataUrl } from "../src/branding";
+import { applyBranding as apply, type Branding, isUsableLogo, readBranding, svgDataUrl, watchBranding } from "../src/branding";
 
 const LOGO = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>';
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -75,5 +75,34 @@ describe("applyBranding", () => {
     applyBranding(document, { appName: "Acme", logoSvg: "" });
     expect(document.title).toBe("Acme");
     expect(hrefOf("favicon-32")).toBe("/favicon-32x32.png");
+  });
+});
+
+describe("watchBranding", () => {
+  it("picks up settings that arrive later, and undoes on stop", async () => {
+    let values: Record<string, unknown> = { appName: "", logoSvg: "" };
+    const stop = watchBranding(document, async () => values, 5);
+    await settle();
+    expect(document.title).toBe("bb");
+    values = { appName: "Acme", logoSvg: LOGO };
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(document.title).toBe("Acme");
+    expect(hrefOf("favicon-32")).toBe(svgDataUrl(LOGO));
+    stop();
+    expect(document.title).toBe("bb");
+    expect(hrefOf("favicon-32")).toBe("/favicon-32x32.png");
+  });
+
+  it("keeps what it shows while the server is away", async () => {
+    let fail = false;
+    const stop = watchBranding(document, async () => {
+      if (fail) throw new Error("down");
+      return { appName: "Acme", logoSvg: "" };
+    }, 5);
+    await settle();
+    fail = true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(document.title).toBe("Acme");
+    stop();
   });
 });

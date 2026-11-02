@@ -1,10 +1,10 @@
-// bb-plugin-app-branding — server entry. It only declares the settings; the page does the work (app.tsx).
+// bb-plugin-app-branding — server entry. It declares the settings and hands them to the page, which does the work.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { MAX_LOGO_LENGTH, isUsableLogo } from "./src/branding";
+import { MAX_LOGO_LENGTH, isUsableLogo, readBranding } from "./src/branding";
 
 export default function appBranding(bb: BbPluginApi) {
-  bb.settings.define({
+  const settings = bb.settings.define({
     appName: {
       type: "string",
       label: "App name",
@@ -17,8 +17,9 @@ export default function appBranding(bb: BbPluginApi) {
       label: "Logo (SVG)",
       description: `SVG source that replaces the bb logo and favicon, up to ${MAX_LOGO_LENGTH} characters. It is drawn as an image, so scripts in it do not run. Empty keeps the bb logo.`,
       experimental_multiline: true,
-      experimental_schema: z.string().refine((value) => value.trim() === "" || isUsableLogo(value), "Logo must be SVG source"),
+      experimental_schema: z.string().refine((value) => value.trim() === "" || isUsableLogo(value.trim()), "Logo must be SVG source"),
       default: "",
     },
   });
+  bb.http.route("GET", "/branding", async (context) => context.json(readBranding(await settings.get())));
 }

@@ -3,6 +3,8 @@ export const MAX_LOGO_LENGTH = 64 * 1024;
 const BB_TITLE = "bb";
 const LOGO_IMAGES = 'img[src*="/assets/bb-logo-"]';
 const ICON_LINKS = 'link[rel~="icon"], link[rel="apple-touch-icon"]';
+// A build's settings can arrive after the plugin starts, while a window is already open.
+const RECHECK_MS = 30_000;
 
 export type Branding = { appName: string; logoSvg: string };
 
@@ -57,5 +59,31 @@ export function applyBranding(doc: Document, { appName, logoSvg }: Branding): ()
     style.remove();
     for (const [link, href] of originals) link.setAttribute("href", href);
     if (appName && doc.title === appName) doc.title = BB_TITLE;
+  };
+}
+
+/** Keeps the page on the current settings. Returns the undo. */
+export function watchBranding(doc: Document, load: () => Promise<Record<string, unknown>>, recheckMs = RECHECK_MS): () => void {
+  let applied = "";
+  let undo = () => {};
+  let stopped = false;
+  const check = async () => {
+    try {
+      const branding = readBranding(await load());
+      const key = JSON.stringify(branding);
+      if (stopped || key === applied) return;
+      undo();
+      undo = applyBranding(doc, branding);
+      applied = key;
+    } catch {
+      // The server is restarting: the next check gets it, and the page keeps what it shows.
+    }
+  };
+  void check();
+  const timer = setInterval(() => void check(), recheckMs);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    undo();
   };
 }
