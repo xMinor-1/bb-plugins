@@ -166,8 +166,9 @@ its limits are in code, not only in its prompt:
   of the request.
 
 **OpenCode needs one more step.** OpenCode 2.2.5 runs commands, reads and writes
-without asking in every permission mode, so nothing above stops its own tools. Its
-own permissions do: define a primary agent that may only read, and name it in
+without asking in every permission mode, so nothing above stops its own tools (checked
+through bb 0.48.1 on macOS: only an agent rule with `effect: "ask"` asks, and only in
+`accept-edits`; `full` runs it without a word). Its own permissions do: define a primary agent that may only read, and name it in
 **Locked agent for watch digests**. Without that setting, an OpenCode digest agent
 starts no threads. Before each start the plugin asks bb whether the provider offers that
 agent on the machine of the rule; if not, the rule says so and tries again later, and
@@ -189,7 +190,7 @@ nothing reads the chat.
 }
 ```
 
-Checked on OpenCode 2.2.5 over ACP, the way bb runs it: such an agent is offered the
+Checked on OpenCode 2.2.5 over ACP and through bb 0.48.1: such an agent is offered the
 plugin's read tool and `skill` only, and calls to `shell`, `read`, `write`, `edit`,
 `glob`, `grep`, `webfetch`, `websearch`, `subagent` and `execute` are refused. The check
 before a start sees the agent's id, not its permissions: keep the agent and the setting
