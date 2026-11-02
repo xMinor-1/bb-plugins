@@ -6,6 +6,7 @@ description: Answer questions from the company data service configured for this 
 # Company data service
 
 Two tools read one company HTTP service, signed in as the user. Both are read-only.
+If they are not listed directly, find them with your tool search first.
 
 1. Call `data_service_guide` before the first question in a thread. It returns the
    rules of this service and its methods with their parameters. Follow those rules.

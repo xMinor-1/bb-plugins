@@ -64,6 +64,7 @@ describe("agent configuration", () => {
   it("offers the tools, the skill and the method list only to allowed models", async () => {
     const { configure } = await setup();
     const allowed = text(await configure("acp-opencode", "corp/large"));
+    expect(allowed).toContain("tool search");
     for (const expected of ["data_service_call", "data_service_guide", "http-data-service", "Sales data", "Answers questions about sales.", "items, stages"]) {
       expect(allowed).toContain(expected);
     }

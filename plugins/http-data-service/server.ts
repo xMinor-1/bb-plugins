@@ -305,7 +305,7 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       tools: TOOL_NAMES,
       skills: [SKILL],
-      instructions: `${config.name}:${about} Before the first question in a thread call ${TOOL_GUIDE}, then read data with ${TOOL_CALL}. Methods: ${methods || "none configured"}.`,
+      instructions: `${config.name}:${about} Before the first question in a thread call ${TOOL_GUIDE}, then read data with ${TOOL_CALL}. If they are not listed directly, find them with your tool search before saying they are missing. Methods: ${methods || "none configured"}.`,
     };
   });
 
