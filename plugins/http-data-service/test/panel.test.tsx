@@ -47,6 +47,34 @@ function open(options: { status?: ConnectionStatus; check?: { ok: boolean; code:
   return calls;
 }
 
+describe("the panel's name", () => {
+  const load = async () => (await loadPluginApp(() => import("../app"))).navPanels[0]!;
+
+  it("is generic until the service name is known, then comes from the remembered name", async () => {
+    expect((await load()).title).toBe("Data Service");
+    const { useServiceName } = await import("../src/app/service-name");
+    function Name() {
+      return <p>{useServiceName() ?? "none"}</p>;
+    }
+    renderSlot({ component: Name }, {}, { rpc: { config: () => CONFIG } as unknown as PluginRpcTestHandlers<typeof rpcContract> });
+    await screen.findByText("Sales data");
+    expect((await load()).title).toBe("Sales data");
+  });
+
+  it("keeps the generic title when storage does not work", async () => {
+    const { rememberedTitle } = await import("../src/app/service-name");
+    const read = localStorage.getItem;
+    Storage.prototype.getItem = () => {
+      throw new Error("blocked");
+    };
+    try {
+      expect(rememberedTitle()).toBe("Data Service");
+    } finally {
+      Storage.prototype.getItem = read;
+    }
+  });
+});
+
 async function signIn() {
   fireEvent.change(await screen.findByLabelText(/^Login/), { target: { value: "person" } });
   fireEvent.change(screen.getByLabelText(/^Password/), { target: { value: "secret-value" } });
