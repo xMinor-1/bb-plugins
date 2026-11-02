@@ -21,7 +21,7 @@ let dataDir = "";
 let service: MessengerService;
 const asked: SendSummary[] = [];
 const askedRules: RuleSummary[] = [];
-let answer: "send" | "cancel" = "send";
+let answer: "send" | "cancel" | "no-window" = "send";
 let session: { ended: boolean; quirks: { draft?: string; garble?: boolean; mention?: boolean; ignoreEnter?: boolean } } = { ended: false, quirks: {} };
 const refused = { ok: false as const, reason: "cancelled" as const, message: "The user did not confirm in the system window. Nothing was sent." };
 const confirmer: SendConfirmer = {
@@ -31,6 +31,7 @@ const confirmer: SendConfirmer = {
   },
   async confirmRule(summary) {
     askedRules.push(summary);
+    if (answer === "no-window") return { ok: false, reason: "unavailable", message: "This machine has no desktop session to show the confirmation window. No rule was added." };
     return answer === "send" ? { ok: true } : refused;
   },
 };
@@ -232,6 +233,10 @@ describe.skipIf(!browser)("host service on a mock web client", () => {
     const no = await service.confirmRule(url, { chatId: "c1", last: 5, cooldownMinutes: 20, note: null });
     expect(no).toMatchObject({ ok: false, chat: null });
     expect(no.message).toContain("[express:not-confirmed]");
+    answer = "no-window";
+    const noWindow = await service.confirmRule(url, { chatId: "c1", last: 5, cooldownMinutes: 20, note: null });
+    expect(noWindow).toMatchObject({ ok: false, chat: null });
+    expect(noWindow.message).toContain("[express:window-unavailable]");
     const unknown = await service.confirmRule(url, { chatId: "nope", last: 5, cooldownMinutes: 20, note: null });
     expect(unknown.message).toContain("[express:not-in-directory]");
   });

@@ -67,6 +67,12 @@ export function MessengerPage() {
   const [busy, setBusy] = useState<"signIn" | "sync" | "forget" | "check" | null>(null);
   const [note, setNote] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const statusRequest = useRef(0);
+  const noteRef = useRef<HTMLDivElement>(null);
+
+  // The note is at the top, and the buttons of a long page are not: it must not appear out of sight.
+  useEffect(() => {
+    if (note) noteRef.current?.scrollIntoView({ block: "nearest" });
+  }, [note]);
 
   const when = useCallback(
     (ms: number) => new Intl.DateTimeFormat(intlLocale(lang), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(ms)),
@@ -137,7 +143,7 @@ export function MessengerPage() {
       </header>
 
       {!overview.url ? <Notice tone="error">{t.noUrl}</Notice> : null}
-      {note ? <Notice tone={note.tone}>{note.text}</Notice> : null}
+      <div ref={noteRef}>{note ? <Notice tone={note.tone}>{note.text}</Notice> : null}</div>
 
       <Section title={t.machine}>
         {overview.machines.length === 0 ? (
@@ -260,13 +266,13 @@ export function MessengerPage() {
             );
           })}
         </ul>
-        {ready && hostId ? <AddRule hostId={hostId} onError={(text) => setNote({ tone: "error", text })} /> : null}
+        {ready && hostId ? <AddRule hostId={hostId} /> : null}
       </Section>
     </div>
   );
 }
 
-function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) => void }) {
+function AddRule({ hostId }: { hostId: string }) {
   const t = useMessages(messages);
   const lang = useLang();
   const hostError = useHostError();
@@ -278,6 +284,8 @@ function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) 
   const [cooldown, setCooldown] = useState("15");
   const [instructions, setInstructions] = useState("");
   const [asking, setAsking] = useState(false);
+  // Next to the buttons that caused it: the page's own note is a long way up.
+  const [problem, setProblem] = useState<string | null>(null);
   const request = useRef(0);
 
   const search = (event: FormEvent) => {
@@ -285,13 +293,14 @@ function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) 
     if (!query.trim()) return;
     const mine = ++request.current;
     setSearching(true);
+    setProblem(null);
     rpc
       .call("findChats", { hostId, query: query.trim() })
       .then(
         (value) => {
           if (mine === request.current) setFound(value);
         },
-        (cause) => onError(hostError(errorText(cause))),
+        (cause) => setProblem(errorText(cause)),
       )
       .finally(() => {
         if (mine === request.current) setSearching(false);
@@ -302,19 +311,20 @@ function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) 
     const lastN = Math.min(50, Math.max(1, Number(last) || 10));
     const minutes = Math.min(1440, Math.max(1, Number(cooldown) || 15));
     setAsking(true);
+    setProblem(null);
     rpc
       .call("addRule", { hostId, chatId, last: lastN, cooldownMinutes: minutes, lang, ...(instructions.trim() ? { instructions: instructions.trim() } : {}) })
       .then(
         (result) => {
           if (!result.ok) {
-            onError(hostError(result.message));
+            setProblem(result.message);
             return;
           }
           setFound(null);
           setQuery("");
           setInstructions("");
         },
-        (cause) => onError(hostError(errorText(cause))),
+        (cause) => setProblem(errorText(cause)),
       )
       .finally(() => setAsking(false));
   };
@@ -360,6 +370,7 @@ function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) 
           ))}
         </ul>
       ) : null}
+      {problem ? <Notice tone="error">{hostError(problem)}</Notice> : null}
     </div>
   );
 }

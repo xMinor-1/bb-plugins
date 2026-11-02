@@ -11,6 +11,9 @@ export const hostErrors = defineMessages(
     "no-browser": "No Chromium-based browser found: install Google Chrome, Microsoft Edge or Chromium.",
     busy: "A sign-in window is open on this machine. Finish signing in first.",
     "not-confirmed": "The rule was not confirmed in the window on the machine, so it was not added.",
+    "window-timeout": "Nobody answered the window on the machine in time, so the rule was not added.",
+    "window-unavailable": "The confirmation window did not open on that machine (no desktop session, or the window was blocked), so the rule was not added.",
+    "window-busy": "Another request is waiting in a window on that machine. Answer it first; this rule was not added.",
     "not-in-directory": "This chat is not in the directory on that machine. Update the directory and try again.",
   } satisfies Record<PanelCode, string>,
   {
@@ -19,6 +22,9 @@ export const hostErrors = defineMessages(
     "no-browser": "Не найден браузер на Chromium: поставьте Google Chrome, Microsoft Edge или Chromium.",
     busy: "На этой машине открыто окно входа. Сначала закончите вход.",
     "not-confirmed": "Правило не подтвердили в окне на машине, поэтому оно не добавлено.",
+    "window-timeout": "В окне на машине вовремя не ответили, поэтому правило не добавлено.",
+    "window-unavailable": "Окно подтверждения не открылось на той машине (нет рабочего стола или окно заблокировано), поэтому правило не добавлено.",
+    "window-busy": "На той машине другой запрос ждёт ответа в окне. Сначала ответьте на него; это правило не добавлено.",
     "not-in-directory": "Этого чата нет в справочнике на той машине. Обновите справочник и попробуйте снова.",
   },
 );

@@ -4,7 +4,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Chat, Lang, Matches, RuleDraft, Snapshot, Status, ToolCall, ToolOutput } from "../../contract.js";
-import { tagged } from "../shared/errors.js";
+import { tagged, type PanelCode } from "../shared/errors.js";
 import { lookKey, score } from "../shared/match.js";
 import { dataBlock, indentedLines, oneLine, quoted } from "../shared/untrusted.js";
 import { BrowserError, findBrowser, Page, sleep, unreachableError } from "./browser.js";
@@ -46,6 +46,9 @@ const OPEN_PAGE_READY_MS = 20_000;
 const OPEN_PAGE_SIGN_IN_MS = 2000;
 /** After a failed check the watcher leaves the browser alone for this long; each failure in a row moves to the next. */
 const WATCH_PAUSE_MINUTES = [1, 2, 5, 10, 15];
+
+/** How the panel says why a rule's window gave no yes. */
+const WINDOW_CODES: Record<"cancelled" | "timeout" | "unavailable" | "busy", PanelCode> = { cancelled: "not-confirmed", timeout: "window-timeout", unavailable: "window-unavailable", busy: "window-busy" };
 
 type Ready = { auth: boolean; unreachable: boolean; store: boolean; chats: number };
 type SendState = { mine: number; empty: boolean; exact: boolean; sendButton: string };
@@ -338,7 +341,7 @@ export class MessengerService {
     const refusal = note ? windowRefusal(note) : null;
     if (refusal) return { ok: false, message: `No rule was added. ${refusal}`, chat: null };
     const answer = await this.confirmer.confirmRule({ chat: chat.name, kind: chat.kind, members: chat.members, person: chat.person, last: draft.last, cooldownMinutes: draft.cooldownMinutes, note }, signal, draft.lang);
-    if (!answer.ok) return { ok: false, message: answer.reason === "cancelled" ? tagged("not-confirmed", answer.message) : answer.message, chat: null };
+    if (!answer.ok) return { ok: false, message: tagged(WINDOW_CODES[answer.reason], answer.message), chat: null };
     return { ok: true, message: "Confirmed.", chat: { id: chat.id, name: chat.name } };
   }
 

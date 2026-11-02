@@ -4,7 +4,7 @@
 // reaches the panel in English, as it is.
 
 /** Every one has a translation in src/app/errors.ts; a test holds them in step. */
-export const PANEL_CODES = ["sign-in", "unreachable", "no-browser", "busy", "not-confirmed", "not-in-directory"] as const;
+export const PANEL_CODES = ["sign-in", "unreachable", "no-browser", "busy", "not-confirmed", "window-timeout", "window-unavailable", "window-busy", "not-in-directory"] as const;
 export type PanelCode = (typeof PANEL_CODES)[number];
 
 const TAG = /^\[express:([a-z-]+)\]\s*/;
