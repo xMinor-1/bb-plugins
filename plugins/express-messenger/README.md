@@ -124,6 +124,16 @@ otherwise it closes after a few idle minutes.
   diminutives, keyboard layouts and mixed Latin/Cyrillic chat names.
 - `server.ts` gates the tools, marks threads, keeps the watch rules and starts
   digest threads.
+- **Setup status for other plugins.** `setupStatus` is the one RPC method other
+  plugins may call (a build's onboarding page, such as Fleet Kit's, asks it).
+  Input `{ lang?: "en" | "ru", hostId?: string }`; without `hostId` it asks the
+  machine the Messenger page used last, else bb's own machine. Output
+  `{ state: "done" | "todo" | "problem", summary, path }`: `done` once the client
+  loaded signed in, `todo` before that and when the session has ended, `summary`
+  is one line in `lang` with no chat and no person, `path` is the Messenger page.
+  It reads what the host remembers: no browser starts and the messenger is not
+  asked. A machine's answer serves for 5 seconds, and a change on the panel takes
+  effect at once.
 
 ## Develop
 

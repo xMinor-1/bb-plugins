@@ -17,13 +17,18 @@
 //      is going on. Counters only: the server never reads messages itself.
 import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { hostContract, langSchema, matchesSchema, statusSchema, webClientUrlSchema, type ToolCall } from "./contract";
+import { hostContract, langSchema, matchesSchema, statusSchema, webClientUrlSchema, type Lang, type Status, type ToolCall } from "./contract";
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
+import { setupFromStatus, setupStatusContract, setupStep } from "./src/shared/setup";
 
 const SKILL = "express-messenger";
 const TOOL_TIMEOUT_MS = 7 * 60_000;
 const MAX_FORK_DEPTH = 64;
 const MAX_RULES = 50;
+/** The setup page waits on this answer; the host reads only its own files. */
+const SETUP_TIMEOUT_MS = 10_000;
+/** How long a host's answer serves the setup page, which asks every few seconds. */
+const SETUP_FRESH_MS = 5_000;
 /** Realtime channel: the watch rules or their state changed. */
 export const RULES_CHANGED = "rules-changed";
 
@@ -629,6 +634,11 @@ export default async function plugin(bb: BbPluginApi) {
       ]),
     ) as unknown as RpcHandlers;
 
+  /** Recent host answers for setupStatus, by machine. */
+  const setupAnswers = new Map<string, { at: number; status: Promise<Status> }>();
+  /** A change of the sign-in: the setup page should see it at once, not after the cache expires. */
+  const signInChanged = <T>(answer: Promise<T>): Promise<T> => answer.finally(() => setupAnswers.clear());
+
   const handlers: RpcHandlers = {
     overview: async () => {
       const hosts = await bb.sdk.hosts.list();
@@ -648,10 +658,10 @@ export default async function plugin(bb: BbPluginApi) {
       await kv.set("ui:lastHost", machine);
       return host.call("status", { url: await webClientUrl() }, { hostId: machine, timeoutMs: 30_000 });
     },
-    signIn: async ({ hostId: machine }) => host.call("signIn", { url: await webClientUrl() }, { hostId: machine, timeoutMs: 12 * 60_000 }),
-    sync: async ({ hostId: machine }) => host.call("sync", { url: await webClientUrl() }, { hostId: machine, timeoutMs: 8 * 60_000 }),
+    signIn: async ({ hostId: machine }) => signInChanged(host.call("signIn", { url: await webClientUrl() }, { hostId: machine, timeoutMs: 12 * 60_000 })),
+    sync: async ({ hostId: machine }) => signInChanged(host.call("sync", { url: await webClientUrl() }, { hostId: machine, timeoutMs: 8 * 60_000 })),
     findChats: async ({ hostId: machine, query }) => host.call("findChats", { url: await webClientUrl(), query, limit: 8 }, { hostId: machine, timeoutMs: TOOL_TIMEOUT_MS }),
-    forget: ({ hostId: machine }) => host.call("forget", {}, { hostId: machine, timeoutMs: 60_000 }),
+    forget: ({ hostId: machine }) => signInChanged(host.call("forget", {}, { hostId: machine, timeoutMs: 60_000 })),
     rules: async () => ({ rules: await loadRules() }),
     addRule: async ({ hostId: machine, chatId, ...rest }) => {
       const chat = await host.call("chat", { url: await webClientUrl(), id: chatId }, { hostId: machine, timeoutMs: 30_000 });
@@ -676,6 +686,51 @@ export default async function plugin(bb: BbPluginApi) {
     },
   };
   bb.rpc.register(rpcContract, ownCallers(handlers));
+
+  // ---------- The onboarding step (src/shared/setup.ts) ----------
+
+  /** The machine the person signed in on: named by the caller, else the panel's last machine, else bb's own machine. */
+  async function setupMachine(requested: string | undefined): Promise<string | null> {
+    if (requested) return requested;
+    const hosts = (await bb.sdk.hosts.list()).filter((candidate) => candidate.lifecycle.phase !== "destroyed");
+    const last = await kv.get<string>("ui:lastHost");
+    if (last && hosts.some((candidate) => candidate.id === last)) return last;
+    const { primaryHostId } = await bb.sdk.system.config();
+    return primaryHostId ?? hosts[0]?.id ?? null;
+  }
+
+  /** The step on a machine; a host's answer serves for SETUP_FRESH_MS. */
+  async function setupOn(machine: string, url: string, lang: Lang) {
+    const found = (await bb.sdk.hosts.list()).find((candidate) => candidate.id === machine);
+    if (!found || found.lifecycle.phase === "destroyed" || found.status !== "connected") return setupStep("problem", "offline", lang);
+    let cached = setupAnswers.get(machine);
+    if (!cached || Date.now() - cached.at > SETUP_FRESH_MS) {
+      const status = host.call("status", { url }, { hostId: machine, timeoutMs: SETUP_TIMEOUT_MS });
+      cached = { at: Date.now(), status };
+      setupAnswers.set(machine, cached);
+      status.catch(() => setupAnswers.delete(machine));
+    }
+    try {
+      return setupFromStatus(await cached.status, lang);
+    } catch (error) {
+      bb.log.info(`setupStatus: ${machine} could not read its state: ${messageOf(error)}`);
+      return setupStep("problem", "unreadable", lang);
+    }
+  }
+
+  // Open to other plugins, unlike the panel's methods: the answer holds no chat and no person.
+  bb.rpc.register(
+    setupStatusContract,
+    {
+      setupStatus: async ({ lang = "en", hostId: requested }) => {
+        const url = (await settings.get()).webClientUrl.trim();
+        if (!url) return setupStep("problem", "notConfigured", lang);
+        const machine = await setupMachine(requested);
+        return machine ? setupOn(machine, url, lang) : setupStep("problem", "noMachine", lang);
+      },
+    },
+    { experimental_discoverable: true, experimental_description: "Messenger sign-in state for a bb build's onboarding page." },
+  );
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));

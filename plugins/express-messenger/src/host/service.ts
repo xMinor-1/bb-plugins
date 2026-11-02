@@ -1,7 +1,7 @@
 // The messenger on this machine: one browser without a window on the plugin's own profile, one
 // tab with the web client, one operation at a time. The browser closes after a few idle minutes;
 // the watcher's checks keep it open while there are watch rules.
-import { rmSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Chat, Lang, Matches, Snapshot, Status, ToolCall, ToolOutput } from "../../contract.js";
 import { lookKey, score } from "../shared/match.js";
@@ -45,12 +45,12 @@ export class MessengerService {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private chain: Promise<unknown> = Promise.resolve();
   private signingIn = false;
-  private signedIn: boolean | null = null;
   private lastError: string | null = null;
   private lastSent: { chatId: string; text: string; at: number } | null = null;
   private readonly confirmer: SendConfirmer;
   private readonly profileDir: string;
   private readonly directoryFile: string;
+  private readonly signInFile: string;
   private readonly idleMs: number;
   private readonly freshMs: number;
 
@@ -58,6 +58,7 @@ export class MessengerService {
     this.confirmer = options.confirmer ?? oneAtATime(systemConfirmer());
     this.profileDir = join(options.dataDir, "browser-profile");
     this.directoryFile = join(options.dataDir, "directory.json");
+    this.signInFile = join(options.dataDir, "sign-in.json");
     this.idleMs = options.idleMs ?? 4 * 60_000;
     this.freshMs = options.directoryFreshMs ?? 12 * 3600_000;
   }
@@ -66,6 +67,27 @@ export class MessengerService {
     const path = this.options.browserPath === undefined ? findBrowser() : this.options.browserPath;
     if (!path) throw new BrowserError("no-browser", "No Chromium-based browser on this machine: install Google Chrome, Microsoft Edge or Chromium.");
     return path;
+  }
+
+  // ---------- What the last load of the client showed ----------
+
+  /** True signed in, false asked to sign in, null never tried for this address. Survives a restart of the worker. */
+  private signedInFor(url: string): boolean | null {
+    try {
+      const saved = JSON.parse(readFileSync(this.signInFile, "utf8")) as { url?: unknown; signedIn?: unknown };
+      return saved.url === url && typeof saved.signedIn === "boolean" ? saved.signedIn : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private recordSignIn(url: string, signedIn: boolean): void {
+    if (this.signedInFor(url) === signedIn) return;
+    mkdirSync(this.options.dataDir, { recursive: true, mode: 0o700 });
+    const temp = `${this.signInFile}.tmp`;
+    writeFileSync(temp, JSON.stringify({ url, signedIn, at: Date.now() }), { mode: 0o600 });
+    chmodSync(temp, 0o600);
+    renameSync(temp, this.signInFile);
   }
 
   // ---------- The browser ----------
@@ -96,16 +118,16 @@ export class MessengerService {
     await lease?.dispose().catch(() => undefined);
   }
 
-  private async waitReady(page: Page, timeoutMs: number, signInAfterMs = this.options.signInGraceMs ?? 15_000): Promise<Ready> {
+  private async waitReady(page: Page, url: string, timeoutMs: number, signInAfterMs = this.options.signInGraceMs ?? 15_000): Promise<Ready> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const ready = await page.evaluate<Ready>(READY, 10_000).catch(() => null);
       if (ready?.store && ready.chats > 0 && !ready.auth) {
-        this.signedIn = true;
+        this.recordSignIn(url, true);
         return ready;
       }
       if (ready?.auth && Date.now() - start > signInAfterMs) {
-        this.signedIn = false;
+        this.recordSignIn(url, false);
         throw new SignInNeeded();
       }
       if (page.isClosed) throw new BrowserError("closed", "The browser closed.");
@@ -123,7 +145,7 @@ export class MessengerService {
     this.pageUrl = url;
     this.lease ??= this.options.retain?.() ?? null;
     try {
-      await this.waitReady(page, READY_TIMEOUT_MS);
+      await this.waitReady(page, url, READY_TIMEOUT_MS);
     } catch (error) {
       await this.closePage();
       throw error;
@@ -176,7 +198,7 @@ export class MessengerService {
       platform: process.platform,
       browser,
       open: !!this.page && !this.page.isClosed,
-      signedIn: this.signedIn,
+      signedIn: this.signedInFor(url),
       directory: saved ? { at: saved.at, ...counts(saved) } : null,
       lastError: this.lastError,
     };
@@ -194,7 +216,7 @@ export class MessengerService {
       try {
         const closed = page.exited().then(() => "closed" as const);
         // A failure is kept as a value: once the window is closed, nobody waits for this promise.
-        const loaded = this.waitReady(page, SIGN_IN_WAIT_MS, SIGN_IN_WAIT_MS).then(
+        const loaded = this.waitReady(page, url, SIGN_IN_WAIT_MS, SIGN_IN_WAIT_MS).then(
           () => "ready" as const,
           (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
         );
@@ -255,7 +277,7 @@ export class MessengerService {
     await this.exclusive(() => this.closePage());
     rmSync(this.profileDir, { recursive: true, force: true });
     rmSync(this.directoryFile, { force: true });
-    this.signedIn = null;
+    rmSync(this.signInFile, { force: true });
     this.lastError = null;
     return { ok: true, message: "The sign-in and the directory on this machine are removed." };
   }

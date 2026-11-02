@@ -53,7 +53,7 @@ export const statusSchema = z
     browser: z.string().nullable(),
     /** The browser is running now (signed-in session kept for the watcher and recent calls). */
     open: z.boolean(),
-    /** Known from the last time the client loaded: true signed in, false asks to sign in, null never tried. */
+    /** What the last load of the client showed, kept on disk: true signed in, false asks to sign in, null never tried. */
     signedIn: z.boolean().nullable(),
     directory: z.object({ at: z.number(), chats: z.number().int(), people: z.number().int() }).strict().nullable(),
     lastError: z.string().nullable(),

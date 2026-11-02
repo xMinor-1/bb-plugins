@@ -166,7 +166,7 @@ export function MessengerPage() {
         {status ? (
           <div className="space-y-1.5">
             <Row label={t.browser}>{status.browser ?? <span className="text-destructive">{t.noBrowser}</span>}</Row>
-            <Row label={t.signedIn}>{status.signedIn === null ? t.unknown : status.signedIn ? t.signedIn : <span className="text-destructive">{t.signedOut}</span>}</Row>
+            <Row label={t.signInLabel}>{status.signedIn === null ? t.unknown : status.signedIn ? t.signedIn : <span className="text-destructive">{t.signedOut}</span>}</Row>
             <Row label={t.directory}>
               {status.directory ? t.directoryLine(String(status.directory.chats), String(status.directory.people), when(status.directory.at)) : t.noDirectory}
             </Row>

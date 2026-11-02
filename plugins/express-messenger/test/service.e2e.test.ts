@@ -119,4 +119,14 @@ describe.skipIf(!browser)("host service on a mock web client", () => {
     expect(result.text).toContain("asks to sign in");
     expect((await service.status(signin)).signedIn).toBe(false);
   });
+
+  it("remembers the sign-in across a restart of the worker, until the person forgets it", async () => {
+    await service.sync(url);
+    expect((await service.status(url)).signedIn).toBe(true);
+    const restarted = new MessengerService({ dataDir, confirmer });
+    expect(await restarted.status(url)).toMatchObject({ signedIn: true, open: false });
+    expect((await restarted.status("https://other.example.com/")).signedIn).toBeNull();
+    await service.forget();
+    expect(await restarted.status(url)).toMatchObject({ signedIn: null, directory: null });
+  });
 });
