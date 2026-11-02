@@ -257,7 +257,7 @@ public static class HttpDataServiceCredential {
 $target = $env:HTTP_DATA_SERVICE_SECRET_TARGET
 switch ($env:HTTP_DATA_SERVICE_SECRET_ACTION) {
   'write' { [HttpDataServiceCredential]::Write($target, $secretValue); exit 0 }
-  'read' { $v = [HttpDataServiceCredential]::Read($target); if ($null -eq $v) { exit 3 }; [Console]::Out.Write($v); exit 0 }
+  'read' { $v = [HttpDataServiceCredential]::Read($target); if ($null -eq $v) { exit 3 }; $b = [Text.Encoding]::UTF8.GetBytes($v); $o = [Console]::OpenStandardOutput(); $o.Write($b, 0, $b.Length); $o.Flush(); exit 0 }
   'exists' { $v = [HttpDataServiceCredential]::Read($target); if ($null -eq $v) { exit 3 }; exit 0 }
   'delete' { if ([HttpDataServiceCredential]::Delete($target)) { exit 0 } else { exit 3 } }
   default { exit 2 }

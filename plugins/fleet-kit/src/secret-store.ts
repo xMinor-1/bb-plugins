@@ -252,7 +252,7 @@ public static class FleetKitCredential {
 $target = $env:FLEET_KIT_SECRET_TARGET
 switch ($env:FLEET_KIT_SECRET_ACTION) {
   'write' { [FleetKitCredential]::Write($target, $secretValue); exit 0 }
-  'read' { $v = [FleetKitCredential]::Read($target); if ($null -eq $v) { exit 3 }; [Console]::Out.Write($v); exit 0 }
+  'read' { $v = [FleetKitCredential]::Read($target); if ($null -eq $v) { exit 3 }; $b = [Text.Encoding]::UTF8.GetBytes($v); $o = [Console]::OpenStandardOutput(); $o.Write($b, 0, $b.Length); $o.Flush(); exit 0 }
   'exists' { $v = [FleetKitCredential]::Read($target); if ($null -eq $v) { exit 3 }; exit 0 }
   'delete' { if ([FleetKitCredential]::Delete($target)) { exit 0 } else { exit 3 } }
   default { exit 2 }

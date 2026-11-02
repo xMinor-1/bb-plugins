@@ -259,7 +259,7 @@ public static class McpCatalogCredential {
 $target = $env:MCP_CATALOG_SECRET_TARGET
 switch ($env:MCP_CATALOG_SECRET_ACTION) {
   'write' { [McpCatalogCredential]::Write($target, $secretValue); exit 0 }
-  'read' { $v = [McpCatalogCredential]::Read($target); if ($null -eq $v) { exit 3 }; [Console]::Out.Write($v); exit 0 }
+  'read' { $v = [McpCatalogCredential]::Read($target); if ($null -eq $v) { exit 3 }; $b = [Text.Encoding]::UTF8.GetBytes($v); $o = [Console]::OpenStandardOutput(); $o.Write($b, 0, $b.Length); $o.Flush(); exit 0 }
   'exists' { $v = [McpCatalogCredential]::Read($target); if ($null -eq $v) { exit 3 }; exit 0 }
   'delete' { if ([McpCatalogCredential]::Delete($target)) { exit 0 } else { exit 3 } }
   default { exit 2 }
