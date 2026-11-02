@@ -32,6 +32,10 @@
       "source": "./plugins/fleet-kit"
     },
     {
+      "name": "http-data-service",
+      "source": "./plugins/http-data-service"
+    },
+    {
       "name": "mcp-catalog",
       "source": "./plugins/mcp-catalog"
     },

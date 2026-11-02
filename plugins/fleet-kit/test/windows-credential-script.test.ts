@@ -1,0 +1,21 @@
+// The Windows store script goes to `powershell -Command -` on stdin, which reads line by
+// line and runs a multi-line statement only after a blank line. Without the empty last
+// line the script does not run, so nothing is saved or read.
+import { describe, expect, it } from "vitest";
+import { WINDOWS_CREDENTIAL_SCRIPT } from "../src/secret-store";
+import { resolverSource } from "../src/host/opencode-resolver";
+
+const RESOLVER = { providers: {}, store: { kind: "credential-manager", label: "Windows Credential Manager", directory: null } } as never;
+describe("the Windows credential script", () => {
+  it("ends with an empty line", () => {
+    expect(WINDOWS_CREDENTIAL_SCRIPT.endsWith("}\n\n")).toBe(true);
+  });
+
+  it("has the switch that does the work as its last statement", () => {
+    expect(WINDOWS_CREDENTIAL_SCRIPT.trimEnd().endsWith("default { exit 2 }\n}")).toBe(true);
+  });
+
+  it("the generated resolver carries the same script", () => {
+    expect(resolverSource(RESOLVER)).toContain(JSON.stringify(WINDOWS_CREDENTIAL_SCRIPT));
+  });
+});
