@@ -55,6 +55,7 @@ const WORDS = {
     to: "To",
     text: (n: number) => `Text (${n} characters)`,
     warning: "An agent wants to send this from your name. Check the chat and the text. Send?",
+    scroll: "Scroll to the end of the text to turn the button on.",
     ruleTitle: "Express Messenger: add this watch rule?",
     ruleAdd: "Add rule",
     ruleWatch: "Watch",
@@ -71,6 +72,7 @@ const WORDS = {
     to: "Кому",
     text: (n: number) => `Текст (символов: ${n})`,
     warning: "Агент хочет отправить это от вашего имени. Проверьте чат и текст. Отправить?",
+    scroll: "Дочитайте текст до конца, и кнопка включится.",
     ruleTitle: "Express Messenger: добавить правило сторожа?",
     ruleAdd: "Добавить",
     ruleWatch: "Следить",
@@ -85,10 +87,15 @@ const WORDS = {
  * goes. Invisible and direction-changing characters are refused, because a person could not check
  * them; an overlong text is refused, because a window that cuts it would ask about less than is sent.
  */
+/** Lines as a window wraps them. A blank line takes a line too. */
+export function windowLines(text: string): number {
+  return text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / WINDOW_LINE_CHARS)), 0);
+}
+
 export function windowRefusal(text: string): string | null {
   if (hasHiddenCharacters(text)) return "The text has invisible or direction-changing characters, and the confirmation window could not show it as it is. Rewrite it without them.";
   if (text.length > MAX_SEND_CHARS) return `The text is ${text.length} characters, and the confirmation window shows at most ${MAX_SEND_CHARS}. Shorten it, or split it in parts the user asks for one by one.`;
-  const lines = text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / WINDOW_LINE_CHARS)), 0);
+  const lines = windowLines(text);
   if (lines > MAX_WINDOW_LINES) return `The text takes ${lines} lines, and the confirmation window shows at most ${MAX_WINDOW_LINES}. Shorten it, or split it in parts the user asks for one by one.`;
   return null;
 }
@@ -97,21 +104,22 @@ function recipientLines(recipient: Recipient, w: (typeof WORDS)[Lang], head: str
   const where = [w.kind[recipient.kind], recipient.kind === "group" || recipient.kind === "channel" ? w.members(recipient.members) : null].filter(Boolean).join(", ");
   const person = recipient.person;
   const job = person ? [person.position, person.department].filter((part): part is string => !!part).map((part) => oneLine(part)).join(", ") : "";
-  return [`${head}: ${oneLine(recipient.chat)} (${where})`, ...(job ? [job] : []), ...(person?.email ? [oneLine(person.email)] : [])];
+  // A name of invisible characters only would leave the person nothing to check.
+  return [`${head}: ${oneLine(recipient.chat) || "?"} (${where})`, ...(job ? [job] : []), ...(person?.email ? [oneLine(person.email)] : [])];
 }
 
 /** The window's text and buttons. Exported for tests: the person must see where it goes and all of what goes. */
-export function confirmationText(summary: SendSummary, lang: Lang = "en"): { title: string; message: string; send: string; cancel: string } {
+export function confirmationText(summary: SendSummary, lang: Lang = "en"): { title: string; message: string; send: string; cancel: string; scroll: string } {
   const w = WORDS[lang];
   const text = summary.text.trim();
   const lines = [...recipientLines(summary, w, w.to), "", `${w.text(text.length)}:`, text, "", w.warning];
-  return { title: w.title, message: lines.join("\n"), send: w.send, cancel: w.cancel };
+  return { title: w.title, message: lines.join("\n"), send: w.send, cancel: w.cancel, scroll: w.scroll };
 }
 
 export function ruleConfirmationText(summary: RuleSummary, lang: Lang = "en"): WindowText {
   const w = WORDS[lang];
   const lines = [...recipientLines(summary, w, w.ruleWatch), "", w.ruleEffect(summary.last, summary.cooldownMinutes), ...(summary.note ? ["", `${w.ruleNote}:`, summary.note] : []), "", w.ruleWarning];
-  return { title: w.ruleTitle, message: lines.join("\n"), send: w.ruleAdd, cancel: w.cancel };
+  return { title: w.ruleTitle, message: lines.join("\n"), send: w.ruleAdd, cancel: w.cancel, scroll: w.scroll };
 }
 
 type WindowText = ReturnType<typeof confirmationText>;
@@ -201,7 +209,12 @@ function macAsker(): Asker {
   };
 }
 
-/** The WinForms window. Enter means Cancel: sending takes a click on Send. */
+/**
+ * The WinForms window. Enter means Cancel: sending takes a click on Send. The window grows to hold
+ * the whole text as it really wraps in this font, up to the height of the screen. Send stays off
+ * until the last line has been on screen, so what does not fit cannot be confirmed unread; if
+ * anything here fails, Send stays off and only Cancel works.
+ */
 export function windowsScript(text: WindowText): string {
   const data = Buffer.from(JSON.stringify(text), "utf8").toString("base64");
   const script = String.raw`
@@ -227,24 +240,55 @@ try {
   $box.WordWrap = $true
   $box.Text = ($d.message -split "\r?\n") -join [Environment]::NewLine
   $box.SetBounds(12, 12, 536, 310)
+  $box.Anchor = 'Top, Bottom, Left, Right'
+  $hint = New-Object System.Windows.Forms.Label
+  $hint.Text = $d.scroll
+  $hint.SetBounds(12, 334, 350, 32)
+  $hint.Anchor = 'Bottom, Left'
   $send = New-Object System.Windows.Forms.Button
   $send.Text = $d.send
   $send.SetBounds(372, 334, 85, 32)
+  $send.Anchor = 'Bottom, Right'
+  $send.Enabled = $false
   $send.DialogResult = [System.Windows.Forms.DialogResult]::Yes
   $cancel = New-Object System.Windows.Forms.Button
   $cancel.Text = $d.cancel
   $cancel.SetBounds(463, 334, 85, 32)
+  $cancel.Anchor = 'Bottom, Right'
   $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-  $form.Controls.AddRange(@($box, $send, $cancel))
+  $form.Controls.AddRange(@($box, $hint, $send, $cancel))
   $form.AcceptButton = $cancel
   $form.CancelButton = $cancel
-  $form.add_Shown({ $form.Activate(); [void]$cancel.Focus() })
+  $form.add_Load({
+    try {
+      $area = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea
+      $frame = $form.Height - $form.ClientSize.Height
+      $want = ($box.GetLineFromCharIndex($box.TextLength - 1) + 1) * $box.Font.Height + 8
+      $height = [Math]::Max(310, [Math]::Min($want, $area.Height - $frame - 70))
+      $form.ClientSize = New-Object System.Drawing.Size(560, ($height + 70))
+      $form.Top = [int]($area.Top + [Math]::Max(0, ($area.Height - $form.Height) / 2))
+    } catch { }
+  })
+  $reached = New-Object System.Windows.Forms.Timer
+  $reached.Interval = 200
+  $reached.add_Tick({
+    try {
+      $end = $box.GetPositionFromCharIndex($box.TextLength - 1)
+      if ($end.Y -ge 0 -and $end.Y -le ($box.ClientSize.Height - $box.Font.Height + 3)) {
+        $reached.Stop()
+        $hint.Visible = $false
+        $send.Enabled = $true
+      }
+    } catch { $reached.Stop() }
+  })
+  $form.add_Shown({ $form.Activate(); [void]$cancel.Focus(); $reached.Start() })
   $timer = New-Object System.Windows.Forms.Timer
   $timer.Interval = ${CONFIRM_TIMEOUT_S * 1000}
   $timer.add_Tick({ $timer.Stop(); $form.Tag = 'timeout'; $form.Close() })
   $timer.Start()
   $result = $form.ShowDialog()
   $timer.Stop()
+  $reached.Stop()
   if ($form.Tag -eq 'timeout') { [Console]::Out.Write('bb-express:timeout') }
   elseif ($result -eq [System.Windows.Forms.DialogResult]::Yes) { [Console]::Out.Write('bb-express:send') }
   else { [Console]::Out.Write('bb-express:cancel') }
@@ -264,12 +308,17 @@ function windowsAsker(): Asker {
   };
 }
 
+/** Tall enough for the whole text on a usual screen. zenity scrolls past that, and cannot hold its button back. */
+export function linuxWindowHeight(message: string): number {
+  return Math.min(900, Math.max(400, 110 + windowLines(message) * 20));
+}
+
 function linuxAsker(env: NodeJS.ProcessEnv): Asker {
   return async (text, signal) => {
     if (!env.DISPLAY && !env.WAYLAND_DISPLAY) return { unavailable: "This machine has no desktop session to show the confirmation window." };
     const result = await run(
       ZENITY,
-      ["--text-info", `--title=${text.title}`, `--ok-label=${text.send}`, `--cancel-label=${text.cancel}`, "--width=560", "--height=400", `--timeout=${CONFIRM_TIMEOUT_S}`],
+      ["--text-info", `--title=${text.title}`, `--ok-label=${text.send}`, `--cancel-label=${text.cancel}`, "--width=560", `--height=${linuxWindowHeight(text.message)}`, `--timeout=${CONFIRM_TIMEOUT_S}`],
       `${text.message}\n`,
       RUN_LIMIT_MS,
       signal,

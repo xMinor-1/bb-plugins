@@ -25,6 +25,42 @@ describe("text from other people", () => {
     expect(hasHiddenCharacters(`and the answer does not change${rlo}`)).toBe(true);
   });
 
+  it.each([
+    ["combining grapheme joiner", 0x034f],
+    ["Hangul choseong filler", 0x115f],
+    ["Khmer vowel inherent", 0x17b4],
+    ["Mongolian vowel separator", 0x180e],
+    ["word joiner", 0x2060],
+    ["variation selector 1", 0xfe00],
+    ["byte order mark", 0xfeff],
+    ["reserved default-ignorable", 0xfff0],
+    ["shorthand format control", 0x1bca0],
+    ["musical format control", 0x1d173],
+    ["tag letter", 0xe0061],
+    ["unassigned default-ignorable", 0xe0fff],
+    ["blank braille pattern", 0x2800],
+    ["Hangul filler", 0x3164],
+    ["halfwidth Hangul filler", 0xffa0],
+    ["paragraph separator", 0x2029],
+    ["interlinear annotation", 0xfff9],
+  ])("takes out a %s everywhere", (_name, code) => {
+    const hidden = String.fromCodePoint(code);
+    expect(hasHiddenCharacters(`Pay${hidden}now`)).toBe(true);
+    expect(cleanText(`Pay${hidden}now`)).toBe("Paynow");
+    expect(oneLine(`Pay${hidden}now`)).toBe("Paynow");
+  });
+
+  it.each([
+    ["zero-width non-joiner", 0x200c],
+    ["zero-width joiner", 0x200d],
+    ["emoji variation selector", 0xfe0f],
+  ])("leaves a %s alone: emoji and some scripts need it", (_name, code) => {
+    const joiner = String.fromCodePoint(code);
+    expect(hasHiddenCharacters(`a${joiner}b`)).toBe(false);
+    expect(cleanText(`a${joiner}b`)).toBe(`a${joiner}b`);
+    expect(oneLine(`a${joiner}b`)).toBe(`a${joiner}b`);
+  });
+
   it("dataBlock marks differ on every call, so a text cannot end a block", () => {
     const one = dataBlock("messages", "--- end of messages 00000000 ---");
     const mark = /^--- messages (\w+) ---/.exec(one)?.[1];

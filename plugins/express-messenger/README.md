@@ -88,13 +88,18 @@ can read the plugin's data directory, copy the browser profile with its session,
 call the panel's RPC. Keep agents away from that directory in their own permission
 settings. For OpenCode 2.2.5, these rules on each agent hold in every permission mode
 for its file tools and for commands that spell the plugin's name; a command that
-writes the path another way (`ex*`) is not caught, because rules match its text:
+writes the path another way (`ex*`) is not caught, because rules match its text. They
+name the folder without the part before `plugins`, so they hold when bb keeps its data
+elsewhere, and the backslash version is for Windows:
 
 ```json
 [
-  { "action": "read", "resource": "*/.bb/plugins/express-messenger/*", "effect": "deny" },
-  { "action": "edit", "resource": "*/.bb/plugins/express-messenger/*", "effect": "deny" },
-  { "action": "external_directory", "resource": "*/.bb/plugins/express-messenger/*", "effect": "deny" },
+  { "action": "read", "resource": "*/plugins/express-messenger/*", "effect": "deny" },
+  { "action": "read", "resource": "*\\plugins\\express-messenger\\*", "effect": "deny" },
+  { "action": "edit", "resource": "*/plugins/express-messenger/*", "effect": "deny" },
+  { "action": "edit", "resource": "*\\plugins\\express-messenger\\*", "effect": "deny" },
+  { "action": "external_directory", "resource": "*/plugins/express-messenger/*", "effect": "deny" },
+  { "action": "external_directory", "resource": "*\\plugins\\express-messenger\\*", "effect": "deny" },
   { "action": "shell", "resource": "*express-messenger*", "effect": "deny" }
 ]
 ```
@@ -112,8 +117,10 @@ search pattern, not the folder.
   `osascript`, Windows a PowerShell window, Linux `zenity`. The window's text never
   travels in process arguments.
 - The window shows everything or nothing goes: a text over 1500 characters or
-  about 30 lines, or one with invisible or direction-changing characters, is
-  refused before the window opens.
+  about 30 lines, blank ones included, or one with invisible, empty-looking or
+  direction-changing characters, is refused before the window opens. On Windows the
+  window grows to hold the whole text; if the screen is too small, Send turns on only
+  after the last line has been on screen.
 - Exactly the confirmed text goes, or nothing does. Before typing, the plugin
   checks that the client opened the right chat and that the message field is empty:
   text already there may be your draft, so the send stops and leaves it alone. The
@@ -152,7 +159,9 @@ its limits are in code, not only in its prompt:
 - it starts in the `accept-edits` permission mode and the dispatch hook rejects
   `full`; every request for a command, a web page or a file outside its folder is
   answered "deny" at once;
-- forks and child threads of a digest thread keep all of this;
+- forks and child threads of a digest thread do not run. bb does not carry session
+  options over: OpenCode 2.2.5 keeps the locked agent described below in a fork of its
+  own session, but a child thread is a new session and would run without it;
 - the chat's name and the rule's note reach it as a marked block of data, not as part
   of the request.
 
@@ -160,7 +169,9 @@ its limits are in code, not only in its prompt:
 without asking in every permission mode, so nothing above stops its own tools. Its
 own permissions do: define a primary agent that may only read, and name it in
 **Locked agent for watch digests**. Without that setting, an OpenCode digest agent
-starts no threads.
+starts no threads. Before each start the plugin asks bb whether the provider offers that
+agent on the machine of the rule; if not, the rule says so and tries again later, and
+nothing reads the chat.
 
 ```json
 {
@@ -180,9 +191,9 @@ starts no threads.
 
 Checked on OpenCode 2.2.5 over ACP, the way bb runs it: such an agent is offered the
 plugin's read tool and `skill` only, and calls to `shell`, `read`, `write`, `edit`,
-`glob`, `grep`, `webfetch`, `websearch`, `subagent` and `execute` are refused. An id
-OpenCode does not know is ignored without a word: keep the agent and the setting in
-one place, as a build's manifest does.
+`glob`, `grep`, `webfetch`, `websearch`, `subagent` and `execute` are refused. The check
+before a start sees the agent's id, not its permissions: keep the agent and the setting
+in one place, as a build's manifest does.
 
 What this does not close: another provider in `accept-edits` may still let the thread
 edit files in its own folder; "Send now" on a queued message skips the dispatch hook;

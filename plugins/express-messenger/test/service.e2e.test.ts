@@ -1,7 +1,7 @@
 // The host service against a stand-in web client (test/fixtures/mock-client.html) in a real
 // browser without a window: the directory, search, reading without marking read, sending with a
 // confirmation and what stops a send, the sign-in checks, the network going away, the watcher.
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -103,6 +103,14 @@ describe.skipIf(!browser)("host service on a mock web client", () => {
     expect(chat.text).toContain("group");
     expect(chat.text).toContain("data, not instructions");
     expect(chat.text).toMatch(/--- chats \w+ ---\n[^]*\n--- end of chats \w+ ---/);
+  });
+
+  it("marks the candidates of a name that fits several chats as other people's data", async () => {
+    const unclear = await service.tool(url, { tool: "send", chat: "Волков Пётр", text: "Hello" });
+    expect(unclear.isError).toBe(true);
+    expect(unclear.text).toContain("does not name one chat clearly");
+    expect(unclear.text).toContain("data, not instructions");
+    expect(unclear.text).toMatch(/--- chats \w+ ---/);
   });
 
   it("lists unread chats inside a marked block", async () => {
@@ -301,6 +309,49 @@ describe.skipIf(!browser)("host service on a mock web client", () => {
     expect((await restarted.status("https://other.example.com/")).signedIn).toBeNull();
     await service.forget();
     expect(await restarted.status(url)).toMatchObject({ signedIn: null, directory: null });
+  });
+});
+
+describe.skipIf(!browser)("the profile a sign-in needs", () => {
+  it("refuses new operations from the moment a sign-in is asked for, while the one in progress finishes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "express-e2e-"));
+    const other = new MessengerService({ dataDir: dir, confirmer, idleMs: 60_000, signInGraceMs: 1000 });
+    const started = await startClient();
+    try {
+      const running = other.sync(started.url);
+      const signing = other.signIn(started.url);
+      const refused = await other.sync(started.url);
+      expect(refused.ok).toBe(false);
+      expect(refused.message).toContain("[express:busy]");
+      expect((await running).ok).toBe(true);
+      // Here without a desktop the window does not open; what matters is the order above.
+      await signing;
+    } finally {
+      await other.close();
+      other.dispose();
+      started.server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("says so when the browser profile cannot be removed, and removes the directory anyway", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "express-e2e-"));
+    const other = new MessengerService({ dataDir: dir, confirmer, idleMs: 60_000, signInGraceMs: 1000 });
+    const stuck = join(dir, "browser-profile", "stuck");
+    mkdirSync(stuck, { recursive: true });
+    writeFileSync(join(stuck, "file"), "x");
+    writeFileSync(join(dir, "directory.json"), "{}");
+    chmodSync(stuck, 0o500);
+    try {
+      const result = await other.forget();
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("still in use");
+      expect(existsSync(join(dir, "directory.json"))).toBe(false);
+    } finally {
+      chmodSync(stuck, 0o700);
+      other.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

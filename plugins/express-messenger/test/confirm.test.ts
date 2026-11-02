@@ -1,6 +1,6 @@
 // What the system window says: the whole text or a refusal, and who the message goes to.
 import { describe, expect, it } from "vitest";
-import { confirmationText, oneAtATime, ruleConfirmationText, windowRefusal, type SendConfirmer } from "../src/host/confirm";
+import { confirmationText, linuxWindowHeight, MAX_WINDOW_LINES, oneAtATime, ruleConfirmationText, windowLines, windowRefusal, windowsScript, type SendConfirmer } from "../src/host/confirm";
 
 const recipient = { chat: "Alexander Volkov", kind: "personal" as const, members: 2, person: { position: "Analyst", department: "Logistics", email: "a.volkov@example.com" } };
 
@@ -27,6 +27,11 @@ describe("confirmationText", () => {
     const { message } = confirmationText({ ...recipient, chat: `Team${rlo}\nAccountant`, person: null, text: "Hello" });
     expect(message).toContain("To: Team Accountant (Personal chat)");
     expect(message).not.toContain(rlo);
+  });
+
+  it("does not leave the name empty when it holds only characters nobody can see", () => {
+    const { message } = confirmationText({ ...recipient, chat: String.fromCodePoint(0x3164, 0x2800), person: null, text: "Hello" });
+    expect(message).toContain("To: ? (Personal chat)");
   });
 
   it("counts members for a group", () => {
@@ -63,6 +68,9 @@ describe("windowRefusal", () => {
     ["soft hyphen", 0xad],
     ["bell", 0x07],
     ["return", 0x0d],
+    ["Hangul filler", 0x3164],
+    ["blank braille pattern", 0x2800],
+    ["tag letter", 0xe0061],
   ])("refuses a %s", (_name, code) => {
     expect(windowRefusal(`Pay ${String.fromCodePoint(code)}now`)).toContain("invisible or direction-changing");
   });
@@ -71,6 +79,53 @@ describe("windowRefusal", () => {
     expect(windowRefusal("x".repeat(1501))).toContain("at most 1500");
     expect(windowRefusal(Array.from({ length: 31 }, () => "line").join("\n"))).toContain("at most 30");
     expect(windowRefusal(Array.from({ length: 16 }, () => "y".repeat(90)).join("\n"))).toContain("at most 30");
+  });
+});
+
+describe("how tall the window is", () => {
+  it("counts blank lines", () => {
+    expect(windowLines("a\n\n\nb")).toBe(4);
+    expect(windowRefusal(`a${"\n".repeat(MAX_WINDOW_LINES - 1)}b`)).toBeNull();
+    expect(windowRefusal(`a${"\n".repeat(MAX_WINDOW_LINES)}b`)).toContain(`at most ${MAX_WINDOW_LINES}`);
+  });
+
+  it("zenity grows with the text, within a usual screen", () => {
+    expect(linuxWindowHeight("short")).toBe(400);
+    const { message } = confirmationText({ ...recipient, text: Array.from({ length: 30 }, () => "line").join("\n") });
+    expect(linuxWindowHeight(message)).toBeGreaterThan(110 + 30 * 20);
+    expect(linuxWindowHeight("\n".repeat(500))).toBe(900);
+  });
+});
+
+describe("the Windows window", () => {
+  const script = (text = "Hello") => {
+    const outer = windowsScript(confirmationText({ ...recipient, text }, "ru"));
+    return Buffer.from(/FromBase64String\('([^']+)'\)/.exec(outer)![1]!, "base64").toString("utf8");
+  };
+
+  it("carries the whole window text in UTF-8, with the hint in the person's language", () => {
+    const data = JSON.parse(Buffer.from(/FromBase64String\('([^']+)'\)/.exec(script("Привет"))![1]!, "base64").toString("utf8"));
+    expect(data.message).toContain("Привет");
+    expect(data.scroll).toContain("Дочитайте");
+  });
+
+  it("holds Send back until the last line has been on screen, and never turns it on elsewhere", () => {
+    const body = script();
+    expect(body).toContain("$send.Enabled = $false");
+    expect(body.match(/\$send\.Enabled = \$true/g)).toHaveLength(1);
+    const gate = body.indexOf("GetPositionFromCharIndex($box.TextLength - 1)");
+    expect(gate).toBeGreaterThan(-1);
+    expect(body.indexOf("$send.Enabled = $true")).toBeGreaterThan(gate);
+    // Enter and Escape stay on Cancel.
+    expect(body).toContain("$form.AcceptButton = $cancel");
+    expect(body).toContain("$form.CancelButton = $cancel");
+  });
+
+  it("sizes itself by the lines as they really wrap, blank ones included, within the screen", () => {
+    const body = script();
+    expect(body).toContain("$box.GetLineFromCharIndex($box.TextLength - 1) + 1");
+    expect(body).toContain("WorkingArea");
+    expect(body).not.toContain("SetBounds(12, 12, 536, 310)\n  $send");
   });
 });
 

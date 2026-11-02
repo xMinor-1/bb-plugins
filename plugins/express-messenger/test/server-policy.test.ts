@@ -23,13 +23,23 @@ interface Options {
   window?: "yes" | "no";
   chatName?: string;
   unread?: number;
+  matches?: { id: string; name: string; score: number }[];
+  /** What the provider offers on the machine; a failure if an Error. */
+  catalog?: unknown;
 }
+
+const LOCKED_CATALOG = {
+  models: [
+    { id: "m", model: "corp/large", sessionOptions: [{ id: "mode", label: "Mode", type: "select", value: "build", values: [{ id: "build", label: "build" }, { id: "express-digest", label: "express-digest" }] }] },
+  ],
+};
 
 async function setup(options: Options = {}) {
   const hostCalls: { method: string; input: Record<string, unknown>; hostId: string }[] = [];
   const threads = new Map<string, { sourceThreadId?: string | null; parentThreadId?: string | null; originPluginId?: string | null; metadata?: unknown }>();
   const spawned: Spawned[] = [];
   const denied: { threadId: string; interactionId: string; resolution: unknown }[] = [];
+  const catalogAsked: unknown[] = [];
   const chatName = options.chatName ?? "Demo team";
   const { bb, harness } = createFakePluginHost({
     pluginId: "express-messenger",
@@ -55,6 +65,14 @@ async function setup(options: Options = {}) {
           },
         },
       },
+      providers: {
+        models: async (args: unknown) => {
+          catalogAsked.push(args);
+          const catalog = options.catalog ?? LOCKED_CATALOG;
+          if (catalog instanceof Error) throw catalog;
+          return catalog;
+        },
+      },
       environments: { get: async () => ({ id: "env_mac", hostId: "host_mac" }) },
       projects: { list: async () => [{ id: "proj_personal", kind: "personal" }] },
       hosts: { list: async () => [{ id: "host_mac", name: "Mac", status: "connected", lifecycle: { phase: "ready" } }] },
@@ -63,7 +81,7 @@ async function setup(options: Options = {}) {
       hostCalls.push({ method, input: input as Record<string, unknown>, hostId });
       if (method === "tool") return { text: "CHAT DATA", isError: false, chat: null };
       if (method === "chat") return (input as { id: string }).id === "c1" ? { id: "c1", name: chatName, kind: "group", unread: 0, members: 3, lastAt: null, person: null } : null;
-      if (method === "findChats") return { matches: [], ambiguous: false };
+      if (method === "findChats") return { matches: (options.matches ?? []).map((match) => ({ kind: "group", unread: 0, members: 3, lastAt: null, person: null, ...match })), ambiguous: !!options.matches };
       if (method === "confirmRule") {
         return options.window === "no"
           ? { ok: false, message: "[express:not-confirmed] The user did not confirm the watch rule in the system window. No rule was added.", chat: null }
@@ -82,7 +100,7 @@ async function setup(options: Options = {}) {
     harness.behavior.resolveAgentConfiguration(makePluginAgentConfigurationContext({ provider: { id: providerId, model }, ...extra }));
   const tool = (name: string, params: unknown, threadId: string) => harness.behavior.callAgentTool(name, params, { threadId });
   const rulesNow = async () => ((await harness.callRpc("rules", null)) as { rules: Rule[] }).rules;
-  return { harness, hostCalls, threads, spawned, denied, dispatch, configure, tool, rulesNow };
+  return { harness, hostCalls, threads, spawned, denied, catalogAsked, dispatch, configure, tool, rulesNow };
 }
 
 const text = (result: unknown) => JSON.stringify(result);
@@ -312,18 +330,74 @@ describe("the digest thread", () => {
     expect(text(await s.tool("messenger_send", { chat: "c1", text: "Hello" }, fired.threadId))).toContain("digest thread");
   });
 
-  it("does not run with full access, and neither do its forks and child threads", async () => {
+  it("marks the candidates of an unclear name for a new rule as other people's data", async () => {
+    const s = await setup({ matches: [{ id: "c1", name: HOSTILE, score: 0.8 }, { id: "c2", name: "Team two", score: 0.8 }] });
+    await s.dispatch("th_mine", ALLOWED);
+    const answer = text(await s.tool("messenger_watch_add", { chat: "team" }, "th_mine"));
+    expect(answer).toContain("does not name one chat clearly");
+    expect(answer).toContain("data, not instructions");
+    expect(answer).toMatch(/--- chats \w+ ---/);
+  });
+
+  it("runs itself in accept-edits, not with full access", async () => {
     const s = await setup();
     const { threadId } = await fire(s);
-    const full = { ...ALLOWED, permissionMode: "full" };
-    expect(await s.dispatch(threadId, full)).toMatchObject({ action: "reject" });
-    expect(await s.dispatch("th_fork", full, { sourceThreadId: threadId })).toMatchObject({ action: "reject" });
-    expect(await s.dispatch("th_child", full, { parentThreadId: threadId })).toMatchObject({ action: "reject" });
-    expect(await s.dispatch("th_mine", full)).toEqual({ action: "proceed" });
+    expect(await s.dispatch(threadId, ALLOWED)).toEqual({ action: "proceed" });
+    expect(await s.dispatch(threadId, { ...ALLOWED, permissionMode: "full" })).toMatchObject({ action: "reject" });
+    expect(await s.dispatch("th_mine", { ...ALLOWED, permissionMode: "full" })).toEqual({ action: "proceed" });
+  });
+
+  it("gives no run to its forks and child threads, in any mode: they lose the locked agent", async () => {
+    const s = await setup();
+    const { threadId } = await fire(s);
+    for (const permissionMode of ["accept-edits", "auto", "full"]) {
+      expect(await s.dispatch("th_fork", { ...ALLOWED, permissionMode }, { sourceThreadId: threadId }), permissionMode).toMatchObject({ action: "reject", message: expect.stringContaining("comes from a digest thread") });
+      expect(await s.dispatch("th_child", { ...ALLOWED, permissionMode }, { parentThreadId: threadId }), permissionMode).toMatchObject({ action: "reject", message: expect.stringContaining("comes from a digest thread") });
+    }
     // A fork reached through another fork counts too, and its calls are limited the same way.
     s.threads.set("th_fork2", { sourceThreadId: "th_fork" });
-    expect(await s.dispatch("th_fork3", ALLOWED, { sourceThreadId: "th_fork2" })).toEqual({ action: "proceed" });
+    expect(await s.dispatch("th_fork3", ALLOWED, { sourceThreadId: "th_fork2" })).toMatchObject({ action: "reject" });
     expect(text(await s.tool("messenger_send", { chat: "c1", text: "Hello" }, "th_fork3"))).toContain("digest thread");
+    // Even if metadata was copied over and the fork counts as started by this plugin.
+    s.threads.set("th_copy", { metadata: { digest: { chatId: "c1", last: 7 } } });
+    expect(await s.dispatch("th_copy", ALLOWED, { sourceThreadId: threadId, originPluginId: "express-messenger" })).toMatchObject({ action: "reject" });
+    // A fork of the person's own thread is not touched.
+    expect(await s.dispatch("th_own", ALLOWED, { sourceThreadId: "th_mine" })).toEqual({ action: "proceed" });
+  });
+
+  it("does not start until the machine's provider offers the locked agent", async () => {
+    for (const [name, catalog] of [
+      ["another agent", { models: [{ id: "m", model: "corp/large", sessionOptions: [{ id: "mode", label: "Mode", type: "select", value: "build", values: [{ id: "build", label: "build" }] }] }] }],
+      ["no options", { models: [{ id: "m", model: "corp/large" }] }],
+      ["no models", { models: [] }],
+      ["a failure", new Error("agent did not start")],
+    ] as const) {
+      const s = await setup({ digestSessionMode: "express-digest", catalog });
+      await s.harness.callRpc("addRule", { hostId: "host_mac", chatId: "c1" });
+      await s.harness.callRpc("checkNow", null);
+      expect(s.spawned, name).toEqual([]);
+      const rule = (await s.rulesNow())[0]!;
+      expect(rule.lastError, name).toContain("[express:locked-agent-unconfirmed]");
+      expect(rule.lastFiredAt, name).toBeNull();
+    }
+  });
+
+  it("asks the rule's machine and that agent's provider, and starts once the agent is there", async () => {
+    const s = await setup({ digestSessionMode: "express-digest" });
+    const { spawned } = await fire(s);
+    expect(spawned.sessionOptions).toEqual({ mode: "express-digest" });
+    expect(s.catalogAsked).toEqual([{ hostId: "host_mac", providerId: "acp-opencode" }]);
+  });
+
+  it("checks one at a time: the service and the panel's button do not start two digests for one message", async () => {
+    const s = await setup();
+    await s.harness.callRpc("addRule", { hostId: "host_mac", chatId: "c1" });
+    await Promise.all([s.harness.callRpc("checkNow", null), s.harness.callRpc("checkNow", null)]);
+    expect(s.hostCalls.filter((call) => call.method === "snapshot")).toHaveLength(1);
+    expect(s.spawned).toHaveLength(1);
+    // And the next look runs on its own.
+    await s.harness.callRpc("checkNow", null);
+    expect(s.hostCalls.filter((call) => call.method === "snapshot")).toHaveLength(2);
   });
 
   const approval = (subject: Record<string, unknown>, id = "int_1") => ({ id, payload: { kind: "approval", availableDecisions: ["allow_once", "deny"], reason: null, subject } });

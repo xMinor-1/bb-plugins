@@ -15,6 +15,7 @@ export const hostErrors = defineMessages(
     "window-unavailable": "The confirmation window did not open on that machine (no desktop session, or the window was blocked), so the rule was not added.",
     "window-busy": "Another request is waiting in a window on that machine. Answer it first; this rule was not added.",
     "not-in-directory": "This chat is not in the directory on that machine. Update the directory and try again.",
+    "locked-agent-unconfirmed": "The digest thread was not started: bb does not see the locked agent for watch digests on that machine. The rule tries again by itself.",
   } satisfies Record<PanelCode, string>,
   {
     "sign-in": "Мессенджер просит войти. Нажмите «Войти» для этой машины.",
@@ -26,6 +27,7 @@ export const hostErrors = defineMessages(
     "window-unavailable": "Окно подтверждения не открылось на той машине (нет рабочего стола или окно заблокировано), поэтому правило не добавлено.",
     "window-busy": "На той машине другой запрос ждёт ответа в окне. Сначала ответьте на него; это правило не добавлено.",
     "not-in-directory": "Этого чата нет в справочнике на той машине. Обновите справочник и попробуйте снова.",
+    "locked-agent-unconfirmed": "Тред пересказа не запущен: bb не видит на той машине запертого агента для пересказов. Правило попробует снова само.",
   },
 );
 

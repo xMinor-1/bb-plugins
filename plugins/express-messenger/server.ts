@@ -18,16 +18,18 @@
 //   6. A digest thread reads text a stranger may have written while nobody watches, so its limits
 //      are in code, not only in its prompt: it reads its own chat and nothing else, it cannot
 //      send or change rules, it does not run in full access, and every request it makes for a
-//      command or a file outside its folder is refused. Forks and child threads stay inside. A
-//      provider that does not ask (OpenCode runs commands without asking in every permission
-//      mode) needs a locked agent besides (`digestSessionMode`), or no digest thread starts.
+//      command or a file outside its folder is refused. A provider that does not ask (OpenCode
+//      runs commands without asking in every permission mode) needs a locked agent besides
+//      (`digestSessionMode`), confirmed on the machine before each start, or no digest thread
+//      starts. Forks and child threads do not run at all: bb does not carry session options
+//      over, so nothing holds the locked agent in place for them.
 import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { hostContract, langSchema, matchesSchema, MAX_SEND_CHARS, statusSchema, webClientUrlSchema, type Lang, type Status, type ToolCall } from "./contract";
-import { untagged } from "./src/shared/errors";
+import { tagged, untagged } from "./src/shared/errors";
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
 import { setupFromStatus, setupStatusContract, setupStep } from "./src/shared/setup";
-import { dataBlock, oneLine, quoted } from "./src/shared/untrusted";
+import { dataBlock, oneLine, quoted, UNTRUSTED_NOTE } from "./src/shared/untrusted";
 
 const SKILL = "express-messenger";
 const TOOL_TIMEOUT_MS = 7 * 60_000;
@@ -289,7 +291,12 @@ export default async function plugin(bb: BbPluginApi) {
     const { providerId, model, permissionMode } = ctx.requestedExecution;
     const thread = ctx.thread;
     await rememberSource(thread);
-    if ((await digestScope(thread)) && permissionMode === "full") {
+    const scope = await digestScope(thread);
+    // bb does not carry session options over: a child is a new session without the locked agent, and a fork keeps it only if the provider does.
+    if (scope && (thread.sourceThreadId || thread.parentThreadId)) {
+      return { action: "reject", message: "This thread comes from a digest thread of a watch rule, which reads messages other people wrote, so it does not run. Open the chat from a thread of your own to go further." };
+    }
+    if (scope && permissionMode === "full") {
       return { action: "reject", message: "This thread reads messages other people wrote, so it does not run with full access. Open the chat from a thread of your own to go further." };
     }
     const tainted = await holdsChats(thread);
@@ -504,6 +511,7 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       ok: false,
       message: [
+        UNTRUSTED_NOTE,
         `${quoted(query)} does not name one chat clearly. Ask the user which one, then pass its id:`,
         dataBlock("chats", found.matches.map((m) => `[${m.id}] ${m.kind} ${oneLine(m.name)}  match ${m.score.toFixed(2)}`).join("\n")),
       ].join("\n"),
@@ -632,6 +640,21 @@ export default async function plugin(bb: BbPluginApi) {
     ].join("\n");
   }
 
+  /**
+   * Whether the provider offers the locked agent on this machine. bb skips a session option the
+   * provider does not offer without a word, and the thread would then read the chat with the
+   * provider's default agent. This confirms the agent's id; its permissions are the build's to set.
+   */
+  async function lockedAgentOffered(machine: string, providerId: string, mode: string): Promise<boolean> {
+    try {
+      const { models } = await bb.sdk.providers.models({ hostId: machine, providerId });
+      return models.some((model) => model.sessionOptions?.some((option) => option.id === "mode" && option.type === "select" && option.values.some((value) => value.id === mode)));
+    } catch (error) {
+      bb.log.info(`watch: the agents of ${providerId} on ${machine} are unknown: ${messageOf(error)}`);
+      return false;
+    }
+  }
+
   async function startDigest(rule: Rule, unread: number): Promise<string> {
     const values = await settings.get();
     const problem = digestProblem(values);
@@ -639,6 +662,9 @@ export default async function plugin(bb: BbPluginApi) {
     const agent = parseAgent(values.digestAgent)!;
     const scope: DigestScope = { chatId: rule.chatId, last: rule.last };
     const mode = values.digestSessionMode.trim();
+    if (mode && !(await lockedAgentOffered(rule.hostId, agent.providerId, mode))) {
+      throw new Error(tagged("locked-agent-unconfirmed", `The digest thread was not started: ${agent.providerId} does not offer the locked agent ${JSON.stringify(mode)} on this machine.`));
+    }
     const thread = await bb.sdk.threads.spawn({
       projectId: await personalProject(),
       environment: { type: "host", hostId: rule.hostId, workspace: { type: "personal" } },
@@ -660,8 +686,19 @@ export default async function plugin(bb: BbPluginApi) {
     return thread.id;
   }
 
+  type CheckResult = { checked: number; fired: number; problems: number };
+  let checking: Promise<CheckResult> | null = null;
+
+  /** One run at a time: the service and the panel's button would otherwise start two digests for one message. */
+  function checkRules(): Promise<CheckResult> {
+    checking ??= checkAllRules().finally(() => {
+      checking = null;
+    });
+    return checking;
+  }
+
   /** One look at every enabled rule. Counters only; a digest thread reads the messages itself. */
-  async function checkRules(): Promise<{ checked: number; fired: number; problems: number }> {
+  async function checkAllRules(): Promise<CheckResult> {
     const rules = (await loadRules()).filter((rule) => rule.enabled);
     if (!rules.length) return { checked: 0, fired: 0, problems: 0 };
     const now = () => Date.now();
