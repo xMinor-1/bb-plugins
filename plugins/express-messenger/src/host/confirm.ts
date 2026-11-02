@@ -11,23 +11,38 @@
 // goes into process arguments, which endpoint security tools log: scripts read it from stdin.
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import type { ChatKind, Lang } from "../../contract.js";
+import { MAX_SEND_CHARS, type ChatKind, type Lang } from "../../contract.js";
+import { hasHiddenCharacters, oneLine } from "../shared/untrusted.js";
 
-export interface SendSummary {
+/** Who the window names: the directory's words, so two people with one name differ. */
+export interface Recipient {
   readonly chat: string;
   readonly kind: ChatKind;
   readonly members: number;
+  readonly person: { readonly position: string | null; readonly department: string | null; readonly email: string | null } | null;
+}
+
+export interface SendSummary extends Recipient {
   readonly text: string;
+}
+
+export interface RuleSummary extends Recipient {
+  readonly last: number;
+  readonly cooldownMinutes: number;
+  readonly note: string | null;
 }
 
 export type ConfirmOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: "cancelled" | "timeout" | "unavailable" | "busy"; readonly message: string };
 
 export interface SendConfirmer {
   confirm(summary: SendSummary, signal?: AbortSignal, lang?: Lang): Promise<ConfirmOutcome>;
+  confirmRule(summary: RuleSummary, signal?: AbortSignal, lang?: Lang): Promise<ConfirmOutcome>;
 }
 
 export const CONFIRM_TIMEOUT_S = 180;
-export const TEXT_PREVIEW = 1500;
+/** What fits a window on a small laptop screen: lines as they wrap at about this many characters. */
+export const WINDOW_LINE_CHARS = 60;
+export const MAX_WINDOW_LINES = 30;
 const ZENITY = "/usr/bin/zenity";
 
 const WORDS = {
@@ -39,8 +54,13 @@ const WORDS = {
     members: (n: number) => `${n} members`,
     to: "To",
     text: (n: number) => `Text (${n} characters)`,
-    onlyStart: (shown: number, n: number) => `[Only the start is shown: ${shown} of ${n} characters.]`,
     warning: "An agent wants to send this from your name. Check the chat and the text. Send?",
+    ruleTitle: "Express Messenger: add this watch rule?",
+    ruleAdd: "Add rule",
+    ruleWatch: "Watch",
+    ruleEffect: (last: number, minutes: number) => `When this chat gets unread messages, bb starts a thread that reads the last ${last} messages and tells you what is going on, at most once in ${minutes} min.`,
+    ruleNote: "Note for the digest",
+    ruleWarning: "Check the chat and the note. Add the rule?",
   },
   ru: {
     title: "Express Messenger: отправить сообщение?",
@@ -50,20 +70,48 @@ const WORDS = {
     members: (n: number) => `участников: ${n}`,
     to: "Кому",
     text: (n: number) => `Текст (символов: ${n})`,
-    onlyStart: (shown: number, n: number) => `[Здесь только начало: ${shown} из ${n} символов.]`,
     warning: "Агент хочет отправить это от вашего имени. Проверьте чат и текст. Отправить?",
+    ruleTitle: "Express Messenger: добавить правило сторожа?",
+    ruleAdd: "Добавить",
+    ruleWatch: "Следить",
+    ruleEffect: (last: number, minutes: number) => `Когда в этом чате появится непрочитанное, bb заведёт тред: он прочитает последние сообщения (${last}) и расскажет, что там происходит, не чаще раза в ${minutes} мин.`,
+    ruleNote: "Заметка к пересказу",
+    ruleWarning: "Проверьте чат и заметку. Добавить правило?",
   },
 };
 
-/** The window's text and buttons. Exported for tests: the person must see where it goes and what. */
+/**
+ * Why a text cannot go through the window, or null: the window shows every character or nothing
+ * goes. Invisible and direction-changing characters are refused, because a person could not check
+ * them; an overlong text is refused, because a window that cuts it would ask about less than is sent.
+ */
+export function windowRefusal(text: string): string | null {
+  if (hasHiddenCharacters(text)) return "The text has invisible or direction-changing characters, and the confirmation window could not show it as it is. Rewrite it without them.";
+  if (text.length > MAX_SEND_CHARS) return `The text is ${text.length} characters, and the confirmation window shows at most ${MAX_SEND_CHARS}. Shorten it, or split it in parts the user asks for one by one.`;
+  const lines = text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / WINDOW_LINE_CHARS)), 0);
+  if (lines > MAX_WINDOW_LINES) return `The text takes ${lines} lines, and the confirmation window shows at most ${MAX_WINDOW_LINES}. Shorten it, or split it in parts the user asks for one by one.`;
+  return null;
+}
+
+function recipientLines(recipient: Recipient, w: (typeof WORDS)[Lang], head: string): string[] {
+  const where = [w.kind[recipient.kind], recipient.kind === "group" || recipient.kind === "channel" ? w.members(recipient.members) : null].filter(Boolean).join(", ");
+  const person = recipient.person;
+  const job = person ? [person.position, person.department].filter((part): part is string => !!part).map((part) => oneLine(part)).join(", ") : "";
+  return [`${head}: ${oneLine(recipient.chat)} (${where})`, ...(job ? [job] : []), ...(person?.email ? [oneLine(person.email)] : [])];
+}
+
+/** The window's text and buttons. Exported for tests: the person must see where it goes and all of what goes. */
 export function confirmationText(summary: SendSummary, lang: Lang = "en"): { title: string; message: string; send: string; cancel: string } {
   const w = WORDS[lang];
   const text = summary.text.trim();
-  const cut = text.length > TEXT_PREVIEW;
-  const start = cut ? text.slice(0, TEXT_PREVIEW).trimEnd() : text;
-  const where = [w.kind[summary.kind], summary.kind === "group" || summary.kind === "channel" ? w.members(summary.members) : null].filter(Boolean).join(", ");
-  const lines = [`${w.to}: ${summary.chat} (${where})`, "", `${w.text(text.length)}:`, cut ? `${start}…` : start, cut ? w.onlyStart(start.length, text.length) : null, "", w.warning];
-  return { title: w.title, message: lines.filter((line): line is string => line !== null).join("\n"), send: w.send, cancel: w.cancel };
+  const lines = [...recipientLines(summary, w, w.to), "", `${w.text(text.length)}:`, text, "", w.warning];
+  return { title: w.title, message: lines.join("\n"), send: w.send, cancel: w.cancel };
+}
+
+export function ruleConfirmationText(summary: RuleSummary, lang: Lang = "en"): WindowText {
+  const w = WORDS[lang];
+  const lines = [...recipientLines(summary, w, w.ruleWatch), "", w.ruleEffect(summary.last, summary.cooldownMinutes), ...(summary.note ? ["", `${w.ruleNote}:`, summary.note] : []), "", w.ruleWarning];
+  return { title: w.ruleTitle, message: lines.join("\n"), send: w.ruleAdd, cancel: w.cancel };
 }
 
 type WindowText = ReturnType<typeof confirmationText>;
@@ -120,9 +168,9 @@ export function answerOf(stdout: string): "send" | "cancel" | "timeout" | null {
   return found === "send" || found === "cancel" || found === "timeout" ? found : null;
 }
 
-const unavailable = (message: string): ConfirmOutcome => ({ ok: false, reason: "unavailable", message });
-const cancelled: ConfirmOutcome = { ok: false, reason: "cancelled", message: "The user did not confirm sending in the system window. Nothing was sent." };
-const timedOut: ConfirmOutcome = { ok: false, reason: "timeout", message: "Nobody answered the system window in time. Nothing was sent." };
+/** What a window answered. `unavailable` says why it did not open. */
+type Asked = "send" | "cancel" | "timeout" | { readonly unavailable: string };
+type Asker = (text: WindowText, signal?: AbortSignal) => Promise<Asked>;
 const RUN_LIMIT_MS = (CONFIRM_TIMEOUT_S + 30) * 1000;
 
 /** JXA `display dialog`: Cancel is the default and the Escape button. */
@@ -144,16 +192,12 @@ export function macScript(text: WindowText): string {
   ].join("\n");
 }
 
-function macConfirmer(): SendConfirmer {
-  return {
-    async confirm(summary, signal, lang) {
-      const result = await run("/usr/bin/osascript", ["-l", "JavaScript", "-"], macScript(confirmationText(summary, lang)), RUN_LIMIT_MS, signal);
-      const answer = answerOf(result.stdout);
-      if (answer === "send" && result.code === 0) return { ok: true };
-      if (answer === "cancel") return cancelled;
-      if (answer === "timeout") return timedOut;
-      return unavailable("bb could not show the confirmation window on this Mac (no desktop session, or the window was blocked), so nothing was sent.");
-    },
+function macAsker(): Asker {
+  return async (text, signal) => {
+    const result = await run("/usr/bin/osascript", ["-l", "JavaScript", "-"], macScript(text), RUN_LIMIT_MS, signal);
+    const answer = answerOf(result.stdout);
+    if (answer === "send" && result.code !== 0) return { unavailable: "bb could not show the confirmation window on this Mac." };
+    return answer ?? { unavailable: "bb could not show the confirmation window on this Mac (no desktop session, or the window was blocked)." };
   };
 }
 
@@ -212,59 +256,61 @@ try {
   return `& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))))\n`;
 }
 
-function windowsConfirmer(): SendConfirmer {
+function windowsAsker(): Asker {
   const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  return {
-    async confirm(summary, signal, lang) {
-      const result = await run(powershell, ["-NoProfile", "-NonInteractive", "-STA", "-Command", "-"], windowsScript(confirmationText(summary, lang)), RUN_LIMIT_MS, signal);
-      const answer = answerOf(result.stdout);
-      if (answer === "send") return { ok: true };
-      if (answer === "cancel") return cancelled;
-      if (answer === "timeout") return timedOut;
-      return unavailable("bb could not show the confirmation window on this computer (no desktop session, or PowerShell is blocked by a policy), so nothing was sent.");
-    },
+  return async (text, signal) => {
+    const result = await run(powershell, ["-NoProfile", "-NonInteractive", "-STA", "-Command", "-"], windowsScript(text), RUN_LIMIT_MS, signal);
+    return answerOf(result.stdout) ?? { unavailable: "bb could not show the confirmation window on this computer (no desktop session, or PowerShell is blocked by a policy)." };
   };
 }
 
-function linuxConfirmer(env: NodeJS.ProcessEnv): SendConfirmer {
-  return {
-    async confirm(summary, signal, lang) {
-      if (!env.DISPLAY && !env.WAYLAND_DISPLAY) return unavailable("This machine has no desktop session to show the confirmation window, so nothing was sent.");
-      const text = confirmationText(summary, lang);
-      const result = await run(
-        ZENITY,
-        ["--text-info", `--title=${text.title}`, `--ok-label=${text.send}`, `--cancel-label=${text.cancel}`, "--width=560", "--height=400", `--timeout=${CONFIRM_TIMEOUT_S}`],
-        `${text.message}\n`,
-        RUN_LIMIT_MS,
-        signal,
-      );
-      if (result.error) return unavailable(`${ZENITY} is not installed, so bb cannot ask in a system window and nothing was sent.`);
-      if (result.code === 0) return { ok: true };
-      if (result.code === 1) return cancelled;
-      if (result.code === 5) return timedOut;
-      return unavailable("The confirmation window did not open, so nothing was sent.");
-    },
+function linuxAsker(env: NodeJS.ProcessEnv): Asker {
+  return async (text, signal) => {
+    if (!env.DISPLAY && !env.WAYLAND_DISPLAY) return { unavailable: "This machine has no desktop session to show the confirmation window." };
+    const result = await run(
+      ZENITY,
+      ["--text-info", `--title=${text.title}`, `--ok-label=${text.send}`, `--cancel-label=${text.cancel}`, "--width=560", "--height=400", `--timeout=${CONFIRM_TIMEOUT_S}`],
+      `${text.message}\n`,
+      RUN_LIMIT_MS,
+      signal,
+    );
+    if (result.error) return { unavailable: `${ZENITY} is not installed, so bb cannot ask in a system window.` };
+    if (result.code === 0) return "send";
+    if (result.code === 1) return "cancel";
+    if (result.code === 5) return "timeout";
+    return { unavailable: "The confirmation window did not open." };
   };
+}
+
+function outcomeOf(asked: Asked, notConfirmed: string, nothing: string): ConfirmOutcome {
+  if (asked === "send") return { ok: true };
+  if (asked === "cancel") return { ok: false, reason: "cancelled", message: `${notConfirmed} ${nothing}` };
+  if (asked === "timeout") return { ok: false, reason: "timeout", message: `Nobody answered the system window in time. ${nothing}` };
+  return { ok: false, reason: "unavailable", message: `${asked.unavailable} ${nothing}` };
 }
 
 export function systemConfirmer(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): SendConfirmer {
-  if (platform === "darwin") return macConfirmer();
-  if (platform === "win32") return windowsConfirmer();
-  return linuxConfirmer(env);
+  const ask = platform === "darwin" ? macAsker() : platform === "win32" ? windowsAsker() : linuxAsker(env);
+  return {
+    confirm: async (summary, signal, lang) => outcomeOf(await ask(confirmationText(summary, lang), signal), "The user did not confirm sending in the system window.", "Nothing was sent."),
+    confirmRule: async (summary, signal, lang) => outcomeOf(await ask(ruleConfirmationText(summary, lang), signal), "The user did not confirm the watch rule in the system window.", "No rule was added."),
+  };
 }
 
-/** One window at a time: a burst of sends cannot stack windows for the person to click through. */
+/** One window at a time: a burst of requests cannot stack windows for the person to click through. */
 export function oneAtATime(inner: SendConfirmer): SendConfirmer {
   let open = false;
+  const guarded = async (work: () => Promise<ConfirmOutcome>): Promise<ConfirmOutcome> => {
+    if (open) return { ok: false, reason: "busy", message: "Another request is waiting for confirmation in a system window. Answer it first." };
+    open = true;
+    try {
+      return await work();
+    } finally {
+      open = false;
+    }
+  };
   return {
-    async confirm(summary, signal, lang) {
-      if (open) return { ok: false, reason: "busy", message: "Another send is waiting for confirmation in a system window. Answer it first." };
-      open = true;
-      try {
-        return await inner.confirm(summary, signal, lang);
-      } finally {
-        open = false;
-      }
-    },
+    confirm: (summary, signal, lang) => guarded(() => inner.confirm(summary, signal, lang)),
+    confirmRule: (summary, signal, lang) => guarded(() => inner.confirmRule(summary, signal, lang)),
   };
 }

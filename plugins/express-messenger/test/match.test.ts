@@ -9,7 +9,7 @@ const DIR = [
   { name: "Dmitry Ivanov" },
   { name: "Yuriy Petrov" },
   { name: "Team CP" },
-  { name: "Т2 ЦП" },
+  { name: "Демо ЦР" },
   { name: "Transport news" },
   { name: "Volkov team chat" },
 ];
@@ -19,7 +19,7 @@ describe("match", () => {
   it("brings spellings of one name together", () => {
     expect(phonetic("Юрий")).toBe(phonetic("Yuriy"));
     expect(phonetic("Iurii")).toBe(phonetic("Yuri"));
-    expect(lookKey("Т2 ЦП")).toBe("t2cp");
+    expect(lookKey("Демо ЦР")).toBe(lookKey("demo cp"));
   });
 
   it("finds a Latin name from Cyrillic words in any order", () => {
@@ -35,7 +35,7 @@ describe("match", () => {
   });
 
   it("finds a chat named with mixed alphabets", () => {
-    for (const q of ["t2cp", "т2цп", "Т2 ЦП", "t2 cp"]) expect(top(q)).toBe("Т2 ЦП");
+    for (const q of ["democp", "демоцр", "Демо ЦР", "demo cp"]) expect(top(q)).toBe("Демо ЦР");
   });
 
   it("returns several for a word start and nothing for noise", () => {

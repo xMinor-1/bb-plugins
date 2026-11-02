@@ -7,9 +7,10 @@ names in Cyrillic or Latin, in any order, diminutives, chat names with mixed
 alphabets — reads the last messages without marking them read, and sends a
 message on your behalf after you confirm it in a system window.
 
-**Watch rules.** When a watched chat gets unread messages, bb starts a thread
-that reads them and sums up who writes what and what is expected from you, at
-most once per pause you set.
+**Watch rules.** After you confirm a rule in a system window, bb starts a thread
+when the watched chat gets unread messages. It reads them and sums up who writes
+what and what is expected from you, at most once per pause you set. That thread
+can only read its own chat: it cannot send, change rules or run commands.
 
 **No bot, no admin access.** The plugin drives the official eXpress web client
 in a browser without a window on your own machine, signed in as you. Messages

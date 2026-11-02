@@ -59,10 +59,10 @@ export function setupStep(state: SetupState, text: SetupText, lang: Lang = "en")
   return { state, summary: TEXT[lang][text], path: SETUP_PATH };
 }
 
-/** The step from the host's status. A directory left from before counts as a sign-in that worked. */
+/** The step from the host's status: done only once the client has loaded signed in, whatever files are left from before. */
 export function setupFromStatus(status: Status, lang: Lang = "en"): SetupStep {
   if (!status.browser) return setupStep("problem", "noBrowser", lang);
   if (status.signedIn === false) return setupStep("todo", "signedOut", lang);
-  if (status.signedIn === true || status.directory) return setupStep("done", "done", lang);
+  if (status.signedIn === true) return setupStep("done", "done", lang);
   return setupStep("todo", "notSignedIn", lang);
 }

@@ -1,10 +1,12 @@
-// A Chromium-based browser on this machine, driven over the DevTools protocol with Node's own
-// WebSocket (no dependencies). The browser keeps its own profile in the plugin's data directory, so
-// the sign-in survives restarts and the person's everyday browser profile is never touched.
-// The DevTools port is chosen by the browser (port 0) and listens on 127.0.0.1 only.
+// A Chromium-based browser on this machine, driven over the DevTools protocol through a pipe
+// (--remote-debugging-pipe, no dependencies). Nothing listens on a port and no file names one, so
+// only the process that started the browser can drive it, and the browser ends when that process
+// does. The browser keeps its own profile in the plugin's data directory, so the sign-in survives
+// restarts and the person's everyday browser profile is never touched.
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { Readable, Writable } from "node:stream";
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -42,52 +44,78 @@ export function authAllowlist(webClientUrl: string): string {
 
 export class BrowserError extends Error {
   constructor(
-    readonly code: "no-browser" | "no-websocket" | "launch" | "page" | "closed",
+    readonly code: "no-browser" | "launch" | "page" | "closed" | "unreachable",
     message: string,
   ) {
     super(message);
   }
 }
 
+/** The messenger's address did not open: a matter of the network, not of the sign-in. */
+export function unreachableError(detail?: string): BrowserError {
+  return new BrowserError("unreachable", `The messenger does not open from this machine${detail ? ` (${detail})` : ""}. Check the network or VPN and try again.`);
+}
+
+const START_TIMEOUT_MS = 30_000;
+const NAVIGATE_TIMEOUT_MS = 45_000;
+/** A browser that just ended may still hold the profile for a moment: a new one would hand over to it and exit. */
+const START_ATTEMPTS = 4;
+const START_RETRY_MS = 1500;
+
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 }
 
-/** One DevTools connection to the browser; page commands go through a flattened session. */
+/** One DevTools connection over the browser's pipe: JSON messages, each ended by a NUL byte. */
 class Connection {
   private seq = 0;
   private readonly pending = new Map<number, Pending>();
   private closed = false;
+  private partial: Buffer[] = [];
 
-  private constructor(private readonly ws: WebSocket) {
-    ws.addEventListener("message", (event) => {
-      let message: { id?: number; result?: unknown; error?: { message?: string } };
-      try {
-        message = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
-      const waiting = message.id !== undefined ? this.pending.get(message.id) : undefined;
-      if (!waiting) return;
-      this.pending.delete(message.id!);
-      if (message.error) waiting.reject(new BrowserError("page", message.error.message ?? "DevTools error"));
-      else waiting.resolve(message.result);
-    });
-    ws.addEventListener("close", () => {
-      this.closed = true;
-      for (const waiting of this.pending.values()) waiting.reject(new BrowserError("closed", "The browser closed."));
-      this.pending.clear();
-    });
+  constructor(
+    private readonly input: Writable,
+    private readonly output: Readable,
+  ) {
+    output.on("data", (chunk: Buffer) => this.receive(chunk));
+    output.on("close", () => this.shut());
+    output.on("error", () => this.shut());
+    input.on("error", () => this.shut());
   }
 
-  static open(url: string): Promise<Connection> {
-    if (typeof WebSocket === "undefined") throw new BrowserError("no-websocket", "This bb runs on a Node.js without WebSocket (Node 22 or newer is needed).");
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(url);
-      ws.addEventListener("open", () => resolve(new Connection(ws)), { once: true });
-      ws.addEventListener("error", () => reject(new BrowserError("launch", "Could not connect to the browser over DevTools.")), { once: true });
-    });
+  /** A long message arrives in many chunks: joined once, when its end comes. */
+  private receive(chunk: Buffer): void {
+    let start = 0;
+    for (let end = chunk.indexOf(0); end !== -1; end = chunk.indexOf(0, start)) {
+      this.partial.push(chunk.subarray(start, end));
+      const text = Buffer.concat(this.partial).toString("utf8");
+      this.partial = [];
+      start = end + 1;
+      this.deliver(text);
+    }
+    if (start < chunk.length) this.partial.push(chunk.subarray(start));
+  }
+
+  private deliver(text: string): void {
+    let message: { id?: number; result?: unknown; error?: { message?: string } };
+    try {
+      message = JSON.parse(text);
+    } catch {
+      return;
+    }
+    const waiting = message.id !== undefined ? this.pending.get(message.id) : undefined;
+    if (!waiting) return;
+    this.pending.delete(message.id!);
+    if (message.error) waiting.reject(new BrowserError("page", message.error.message ?? "DevTools error"));
+    else waiting.resolve(message.result);
+  }
+
+  private shut(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const waiting of this.pending.values()) waiting.reject(new BrowserError("closed", "The browser closed."));
+    this.pending.clear();
   }
 
   get isClosed(): boolean {
@@ -112,35 +140,14 @@ class Connection {
           reject(error);
         },
       });
-      this.ws.send(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }));
+      this.input.write(`${JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params })}\0`);
     });
   }
 
   close(): void {
-    try {
-      this.ws.close();
-    } catch {
-      // already closed
-    }
-  }
-}
-
-async function devtoolsVersion(port: number): Promise<{ webSocketDebuggerUrl: string } | null> {
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) });
-    return response.ok ? ((await response.json()) as { webSocketDebuggerUrl: string }) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The port a browser on this profile listens on, from the file Chromium writes into the profile. */
-function activePort(profileDir: string): number | null {
-  try {
-    const port = Number(readFileSync(join(profileDir, "DevToolsActivePort"), "utf8").split("\n")[0]);
-    return Number.isInteger(port) && port > 0 ? port : null;
-  } catch {
-    return null;
+    this.shut();
+    this.input.destroy();
+    this.output.destroy();
   }
 }
 
@@ -151,88 +158,91 @@ export interface LaunchOptions {
   readonly headless: boolean;
 }
 
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await Promise.race([new Promise((resolve) => child.once("exit", resolve)), sleep(3000)]);
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+}
+
+/** Starts the browser and waits until it answers; a browser that exits at once is reported as such. */
+function startBrowser({ browserPath, profileDir, url, headless }: LaunchOptions): Promise<{ child: ChildProcess; connection: Connection }> {
+  const args = [
+    "--remote-debugging-pipe",
+    `--user-data-dir=${profileDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-networking",
+    `--auth-server-allowlist=${authAllowlist(url)}`,
+    ...(headless ? ["--headless=new", "--window-size=1280,900"] : ["--new-window"]),
+    "about:blank",
+  ];
+  // Descriptor 3 is what the browser reads, 4 is what it writes.
+  const child = spawn(browserPath, args, { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"], shell: false, windowsHide: headless });
+  const connection = new Connection(child.stdio[3] as Writable, child.stdio[4] as Readable);
+  return new Promise((resolve, reject) => {
+    const fail = (error: BrowserError) => {
+      connection.close();
+      child.kill();
+      reject(error);
+    };
+    child.once("error", (error) => fail(new BrowserError("launch", `The browser did not start: ${error.message}`)));
+    child.once("exit", (code) => fail(new BrowserError("launch", `The browser exited at start (code ${code}). Is its profile open in another browser window?`)));
+    connection.send("Browser.getVersion", {}, undefined, START_TIMEOUT_MS).then(
+      () => {
+        child.removeAllListeners("exit");
+        child.removeAllListeners("error");
+        // A failure after the start shows on the connection.
+        child.on("error", () => undefined);
+        child.on("exit", () => connection.close());
+        resolve({ child, connection });
+      },
+      (error: unknown) => {
+        if (error instanceof BrowserError && error.code === "closed") return; // the exit handler reports it
+        fail(new BrowserError("launch", `The browser did not start in ${START_TIMEOUT_MS / 1000} s. Is its profile open in another browser window?`));
+      },
+    );
+  });
+}
+
 /** The web client in one browser tab. */
 export class Page {
   private constructor(
     private readonly connection: Connection,
     private readonly sessionId: string,
-    private readonly child: ChildProcess | null,
+    private readonly child: ChildProcess,
     readonly headless: boolean,
   ) {}
 
-  /**
-   * Starts the browser on the profile, or attaches to one already running on it (a browser left by
-   * a worker that stopped), and opens the web client.
-   */
-  static async open({ browserPath, profileDir, url, headless }: LaunchOptions): Promise<Page> {
-    mkdirSync(profileDir, { recursive: true, mode: 0o700 });
-    let child: ChildProcess | null = null;
-    const leftPort = activePort(profileDir);
-    let version = leftPort ? await devtoolsVersion(leftPort) : null;
-    if (version && !headless) {
-      // A window is wanted, the browser left behind has none: close it first.
-      await closeBrowserAt(version.webSocketDebuggerUrl);
-      version = null;
+  /** Starts the browser on the profile and opens the web client. */
+  static async open(options: LaunchOptions): Promise<Page> {
+    mkdirSync(options.profileDir, { recursive: true, mode: 0o700 });
+    let started: Awaited<ReturnType<typeof startBrowser>> | null = null;
+    for (let attempt = 1; !started; attempt++) {
+      try {
+        started = await startBrowser(options);
+      } catch (error) {
+        if (attempt >= START_ATTEMPTS) throw error;
+        await sleep(START_RETRY_MS);
+      }
     }
-    if (!version) {
-      const args = [
-        "--remote-debugging-port=0",
-        `--user-data-dir=${profileDir}`,
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-background-networking",
-        `--auth-server-allowlist=${authAllowlist(url)}`,
-        ...(headless ? ["--headless=new", "--window-size=1280,900"] : ["--new-window"]),
-        "about:blank",
-      ];
-      child = spawn(browserPath, args, { stdio: ["ignore", "ignore", "pipe"], shell: false, windowsHide: headless });
-      const port = await new Promise<number>((resolve, reject) => {
-        let buffered = "";
-        const timer = setTimeout(() => reject(new BrowserError("launch", "The browser did not start in 30 s (is its profile open in another browser window?).")), 30_000);
-        child!.stderr!.on("data", (chunk: Buffer) => {
-          buffered = (buffered + chunk.toString("utf8")).slice(-4000);
-          const found = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//.exec(buffered);
-          if (found) {
-            clearTimeout(timer);
-            resolve(Number(found[1]));
-          }
-        });
-        child!.once("exit", (code) => {
-          clearTimeout(timer);
-          reject(new BrowserError("launch", `The browser exited at start (code ${code}).`));
-        });
-        child!.once("error", (error) => {
-          clearTimeout(timer);
-          reject(new BrowserError("launch", `The browser did not start: ${error.message}`));
-        });
-      }).catch((error: unknown) => {
-        child?.kill();
+    const { child, connection } = started;
+    try {
+      const { targetInfos } = await connection.send<{ targetInfos: { targetId: string; type: string; url: string }[] }>("Target.getTargets");
+      const blank = targetInfos.find((info) => info.type === "page");
+      const targetId = blank?.targetId ?? (await connection.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" })).targetId;
+      const { sessionId } = await connection.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
+      const navigated = await connection.send<{ errorText?: string }>("Page.navigate", { url: options.url }, sessionId, NAVIGATE_TIMEOUT_MS).catch((error: unknown) => {
+        // No answer to a navigation: the address neither opens nor refuses.
+        if (error instanceof BrowserError && error.code === "page") throw unreachableError("no answer");
         throw error;
       });
-      child.stderr!.resume();
-      for (let i = 0; i < 20 && !version; i++) {
-        version = await devtoolsVersion(port);
-        if (!version) await sleep(250);
-      }
-      if (!version) {
-        child.kill();
-        throw new BrowserError("launch", "The browser started but does not answer over DevTools.");
-      }
-    }
-    const connection = await Connection.open(version.webSocketDebuggerUrl);
-    try {
-      const origin = new URL(url).origin;
-      const { targetInfos } = await connection.send<{ targetInfos: { targetId: string; type: string; url: string }[] }>("Target.getTargets");
-      let target = targetInfos.find((info) => info.type === "page" && info.url.startsWith(origin));
-      const navigate = !target;
-      target ??= targetInfos.find((info) => info.type === "page");
-      const targetId = target?.targetId ?? (await connection.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" })).targetId;
-      const { sessionId } = await connection.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
-      if (navigate) await connection.send("Page.navigate", { url }, sessionId);
-      return new Page(connection, sessionId, child, headless);
+      // ERR_ABORTED is a navigation replaced by the next one, such as a redirect.
+      if (navigated.errorText && navigated.errorText !== "net::ERR_ABORTED") throw unreachableError(navigated.errorText);
+      return new Page(connection, sessionId, child, options.headless);
     } catch (error) {
       connection.close();
-      child?.kill();
+      child.kill();
+      await stopChild(child);
       throw error;
     }
   }
@@ -286,28 +296,13 @@ export class Page {
 
   /** Waits for the browser to exit by itself: the person closed the window. */
   exited(): Promise<void> {
-    if (!this.child || this.child.exitCode !== null) return Promise.resolve();
-    return new Promise((resolve) => this.child!.once("exit", () => resolve()));
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return Promise.resolve();
+    return new Promise((resolve) => this.child.once("exit", () => resolve()));
   }
 
   async close(): Promise<void> {
     await this.connection.send("Browser.close", {}, undefined, 5000).catch(() => undefined);
     this.connection.close();
-    const child = this.child;
-    if (child && child.exitCode === null) {
-      await Promise.race([new Promise((resolve) => child.once("exit", resolve)), sleep(3000)]);
-      if (child.exitCode === null) child.kill("SIGKILL");
-    }
-  }
-}
-
-async function closeBrowserAt(webSocketDebuggerUrl: string): Promise<void> {
-  try {
-    const connection = await Connection.open(webSocketDebuggerUrl);
-    await connection.send("Browser.close", {}, undefined, 5000).catch(() => undefined);
-    connection.close();
-    await sleep(1500);
-  } catch {
-    // gone already
+    await stopChild(this.child);
   }
 }

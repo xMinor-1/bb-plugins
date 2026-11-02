@@ -61,6 +61,9 @@ export const statusSchema = z
   .strict();
 export type Status = z.infer<typeof statusSchema>;
 
+/** The longest message the confirmation window shows in full; a longer one is refused, not cut. */
+export const MAX_SEND_CHARS = 1500;
+
 /** What an agent may ask for. Sending is checked again on the host: an exact chat, then the system window. */
 export const toolCallSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("find"), query: z.string().min(1).max(200), limit: z.number().int().min(1).max(10).optional() }).strict(),
@@ -70,9 +73,7 @@ export const toolCallSchema = z.discriminatedUnion("tool", [
     .object({
       tool: z.literal("send"),
       chat: z.string().min(1).max(200),
-      text: z.string().min(1).max(4000),
-      /** Ask the person in a system window first (the `confirmSend` setting). */
-      confirm: z.boolean(),
+      text: z.string().min(1).max(MAX_SEND_CHARS),
       lang: langSchema.optional(),
     })
     .strict(),
@@ -105,6 +106,18 @@ export type Snapshot = z.infer<typeof snapshotSchema>;
 
 const outcome = z.object({ ok: z.boolean(), message: z.string() }).strict();
 
+/** A watch rule as the person is asked to confirm it in the system window. */
+export const ruleDraftSchema = z
+  .object({
+    chatId: z.string().min(1).max(200),
+    last: z.number().int().min(1).max(50),
+    cooldownMinutes: z.number().int().min(1).max(24 * 60),
+    note: z.string().max(1000).nullable(),
+    lang: langSchema.optional(),
+  })
+  .strict();
+export type RuleDraft = z.infer<typeof ruleDraftSchema>;
+
 export const hostContract = defineRpcContract({
   status: { input: withUrl, output: statusSchema, experimental_retryable: true },
   /** Opens a browser window to sign in; answers once the client has loaded the chats, or the window closed. */
@@ -115,6 +128,11 @@ export const hostContract = defineRpcContract({
   chat: { input: withUrl.extend({ id: z.string().min(1).max(200) }).strict(), output: chatSchema.nullable() },
   tool: { input: withUrl.extend({ call: toolCallSchema }).strict(), output: toolOutputSchema },
   snapshot: { input: withUrl.extend({ ids: z.array(z.string().min(1).max(200)).max(200) }).strict(), output: snapshotSchema },
+  /** Shows a new watch rule in a system window on this machine; `chat` is set once the person confirmed. */
+  confirmRule: {
+    input: withUrl.extend({ draft: ruleDraftSchema }).strict(),
+    output: outcome.extend({ chat: z.object({ id: z.string(), name: z.string() }).strict().nullable() }).strict(),
+  },
   /** Closes the browser now. */
   close: { input: z.object({}).strict(), output: outcome },
   /** Forgets the sign-in and the directory on this machine. */

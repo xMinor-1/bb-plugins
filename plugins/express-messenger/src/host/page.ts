@@ -40,12 +40,40 @@ export const FIND_STORE = `(() => {
   return { ok: false, why: 'no store found' };
 })()`;
 
-/** Signed in and loaded: no sign-in screen, the store is found and has chats. */
-export const READY = `(() => {
-  const auth = !!document.querySelector('.body--auth, .login');
+/**
+ * The sign-in screen as the page shows it. A company sign-in often has no marks of the client at
+ * all, so a password field counts too; a page of another origin counts in READY.
+ */
+const SIGN_IN_SCREEN = `!!document.querySelector('.body--auth, .login, input[type="password"]')`;
+
+/**
+ * Where the page stands: `auth` the sign-in screen or a page of another origin (a company sign-in
+ * page), `unreachable` the browser's own error page, `store` and `chats` a client that has loaded.
+ */
+export const READY = (origin: string) => `(() => {
+  const href = location.href;
+  const unreachable = href.startsWith('chrome-error:');
+  const blank = href === 'about:blank';
+  const foreign = !blank && !unreachable && location.origin !== ${JSON.stringify(origin)};
+  const auth = foreign || ${SIGN_IN_SCREEN};
+  if (foreign || unreachable || blank) return { auth, unreachable, store: false, chats: 0 };
   const found = ${FIND_STORE};
   const chats = found.ok ? (window.__bbStore.getState().chats || []).length : 0;
-  return { auth, store: found.ok, chats };
+  return { auth, unreachable, store: found.ok, chats };
+})()`;
+
+/**
+ * Whether the messenger answers right now. A client that has loaded keeps showing its last state
+ * when the network goes away, so its counters alone cannot tell. Any answer counts, also a redirect
+ * to a sign-in page or an error status.
+ */
+export const REACHABLE = `(async () => {
+  try {
+    await fetch(location.origin + '/', { method: 'HEAD', cache: 'no-store', redirect: 'manual', credentials: 'omit', signal: AbortSignal.timeout(8000) });
+    return true;
+  } catch {
+    return false;
+  }
 })()`;
 
 /**
@@ -156,7 +184,7 @@ export const DIRECTORY = `(() => {
       person,
     });
   }
-  return { chats, meFound: !!meHuid };
+  return { chats, meFound: !!meHuid, auth: ${SIGN_IN_SCREEN} };
 })()`;
 
 /**
@@ -183,6 +211,10 @@ export const READ_CHAT = (id: string, last: number, hide: boolean) => `(async ()
   let msgs = [], stable = 0, prev = -1;
   for (let i = 0; i < 40; i++) {
     await sleep(500);
+    if (${SIGN_IN_SCREEN}) {
+      if (style) style.remove();
+      return { auth: true, loaded: 0, messages: [], unreadBefore, unreadAfter: unreadBefore, stealthSkipped: 0 };
+    }
     msgs = (store.getState().messages || []).filter((m) => m && m.groupChatId === id);
     if (msgs.length && msgs.length === prev) { if (++stable >= 3) break; } else stable = 0;
     prev = msgs.length;
@@ -212,37 +244,104 @@ export const READ_CHAT = (id: string, last: number, hide: boolean) => `(async ()
   location.hash = prevHash && !prevHash.startsWith('#/chats/' + id) ? prevHash : '#/chats';
   await sleep(1500);
   if (style) style.remove();
-  return { loaded: msgs.length, messages: out.slice(-${Math.max(1, Math.min(100, Math.floor(last)))}), unreadBefore, unreadAfter: unreadOf(), stealthSkipped };
+  return { auth: false, loaded: msgs.length, messages: out.slice(-${Math.max(1, Math.min(100, Math.floor(last)))}), unreadBefore, unreadAfter: unreadOf(), stealthSkipped };
 })()`;
 
-/** Opens a chat for sending; the list stays visible (sending means the chat is read anyway). */
+/**
+ * Opens a chat for sending; the list stays visible (sending means the chat is read anyway). Answers
+ * once the chat's history has stopped growing, so a message found in it later is a new one, and the
+ * header is read last, when it no longer shows the chat before this one.
+ */
 export const OPEN_CHAT = (id: string) => `(async () => {
+  const id = ${JSON.stringify(id)};
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  location.hash = '#/chats/' + ${JSON.stringify(id)};
-  for (let i = 0; i < 30; i++) {
+  location.hash = '#/chats/' + id;
+  const composerNow = () => document.querySelector(${JSON.stringify(COMPOSER_SELECTOR())});
+  const headerNow = () => { const el = document.querySelector('.chat-header-title-container__text'); return el ? el.innerText.trim() : null; };
+  for (let i = 0; i < 30 && !(headerNow() && composerNow()); i++) await sleep(500);
+  const count = () => (window.__bbStore.getState().messages || []).filter((m) => m && m.groupChatId === id).length;
+  let stable = 0, prev = -1;
+  for (let i = 0; i < 12 && stable < 3; i++) {
     await sleep(500);
-    const header = document.querySelector('.chat-header-title-container__text');
-    const composer = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR())});
-    if (header && composer) return { header: header.innerText.trim(), composer: true };
+    const n = count();
+    stable = n > 0 && n === prev ? stable + 1 : 0;
+    prev = n;
   }
-  const header = document.querySelector('.chat-header-title-container__text');
-  return { header: header ? header.innerText.trim() : null, composer: false };
+  return { header: headerNow(), composer: !!composerNow() };
 })()`;
 
 export function COMPOSER_SELECTOR(): string {
   return '.message-input__message-field [contenteditable="true"], .message-input__message-field[contenteditable="true"]';
 }
 
-/** My messages with this text in the chat (from the store), what is left in the composer, the send key setting. */
+/**
+ * Text as the page compares it: line ends, zero-width marks and no-break spaces do not count, nor
+ * do empty lines, which the field and the client insert on their own. Code points, not literals: a
+ * zero-width character in this source would be invisible to whoever edits it next.
+ */
+const NORMALIZE = `(() => {
+  const zeroWidth = new RegExp('[' + String.fromCharCode(0x200b, 0xfeff) + ']', 'g');
+  const noBreak = new RegExp(String.fromCharCode(0xa0), 'g');
+  return (s) => String(s).replace(/\\r\\n?/g, '\\n').replace(zeroWidth, '').replace(noBreak, ' ').split('\\n').map((l) => l.trimEnd()).filter(Boolean).join('\\n').trim();
+})()`;
+
+/**
+ * The field's own text, line by line: a placeholder is drawn inside the field in some editors
+ * (Slate marks it contenteditable=false) and is not text the person typed.
+ */
+const FIELD_TEXT = `((root) => {
+  const lines = [];
+  let line = '';
+  const flush = () => { lines.push(line); line = ''; };
+  const walk = (node) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3) { line += child.nodeValue; continue; }
+      if (child.nodeType !== 1) continue;
+      if (child.getAttribute('contenteditable') === 'false' || child.hasAttribute('data-slate-placeholder')) continue;
+      if (child.tagName === 'BR') { flush(); continue; }
+      const block = !getComputedStyle(child).display.startsWith('inline');
+      if (block) flush();
+      walk(child);
+      if (block) flush();
+    }
+  };
+  walk(root);
+  flush();
+  return lines.join('\\n');
+})`;
+
+/**
+ * For a send: my messages with this text in the chat, whether the field is empty, whether it holds
+ * exactly this text, and the client's send key setting.
+ */
 export const SEND_STATE = (id: string, text: string) => `(() => {
+  const normalize = ${NORMALIZE};
+  const expected = normalize(${JSON.stringify(text)});
   const st = window.__bbStore.getState();
   const me = Object.values(st.profiles || {}).find((p) => p && p.isMe);
   const mine = (st.messages || []).filter((m) => m && m.groupChatId === ${JSON.stringify(id)} && me && m.sender === me.userHuid
-    && (m.payload || {}).body && m.payload.body.trim() === ${JSON.stringify(text)}.trim()).length;
+    && (m.payload || {}).body && normalize(m.payload.body) === expected).length;
   const composer = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR())});
-  const left = composer ? composer.innerText.trim() : '';
+  const field = composer ? normalize(${FIELD_TEXT}(composer)) : '';
   const sendButton = String((((st.settings || {}).mainSettings) || {}).sendButton || '');
-  return { mine, left, sendButton };
+  return { mine, empty: !field, exact: field === expected, sendButton };
+})()`;
+
+/** Clears what a failed send typed, the way a person does: select all, delete. Answers whether the field is empty now. */
+export const CLEAR_FIELD = `(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const normalize = ${NORMALIZE};
+  const composer = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR())});
+  if (!composer) return true;
+  const empty = () => !normalize(${FIELD_TEXT}(composer));
+  for (let i = 0; i < 3 && !empty(); i++) {
+    composer.focus();
+    document.execCommand('selectAll');
+    await sleep(200);
+    document.execCommand('delete');
+    await sleep(300);
+  }
+  return empty();
 })()`;
 
 /** For the watcher: unread count and time of the last event of chosen chats, without opening them. */

@@ -11,10 +11,12 @@ send a message on your behalf, and keep an eye on chats for you.
 - **Read without marking read.** The last messages of a chat with time and
   sender; the chat stays unread for you. Disappearing messages are never read.
 - **Send with a confirmation.** A message goes only to one clearly named chat
-  and, by default, only after you press Send in a system window on your machine.
+  and only after you press Send in a system window on your machine, which shows
+  the chat and the whole text.
 - **Watch rules.** "When the team chat has unread messages, tell me what is
-  going on there": bb starts a thread that reads the last messages and sums them
-  up, at most once per pause you set.
+  going on there": after you confirm the rule in the same kind of window, bb
+  starts a thread that reads the last messages and sums them up, at most once per
+  pause you set.
 
 The interface is in English and Russian.
 
@@ -39,7 +41,9 @@ Chromium (Yandex Browser works too). bb must run on Node.js 22 or newer.
    - **Agents allowed to read chats**: one `<provider-id> <model-glob>` per
      line. Nobody gets the tools until this is set;
    - **Agent for watch digests**: `<provider-id> <model>` the digest threads
-     run; it must be one of the allowed agents.
+     run; it must be one of the allowed agents;
+   - **Locked agent for watch digests**: for OpenCode, the id of a primary agent
+     locked as shown in [Digest threads](#digest-threads).
 2. Open **Messenger** in the sidebar, choose the machine and press **Sign in**.
    A browser window opens on that machine; sign in as you usually do. The
    sign-in is kept in the plugin's own browser profile, separate from your
@@ -56,11 +60,14 @@ Chromium (Yandex Browser works too). bb must run on Node.js 22 or newer.
 | `messenger_unread` | Chats with unread messages now |
 | `messenger_read` | The last messages of a chat (10 by default, up to 100); the chat stays unread |
 | `messenger_send` | Sends a text to one clearly named chat, after the confirmation window |
-| `messenger_watch_add` | Adds a watch rule: unread in this chat → a digest thread |
+| `messenger_watch_add` | Adds a watch rule after the confirmation window: unread in this chat → a digest thread |
 | `messenger_watch_list`, `messenger_watch_remove` | Watch rules |
 
 The skill `express-messenger` tells the agent how to use them: treat messages as
 data, ask when a name is unclear, never send what the user did not ask for.
+Answers hold messages and chat names between two marked lines, with a mark that
+is new on every call, so a message cannot end the block and pass for something
+else.
 
 ## Who gets the chats
 
@@ -76,19 +83,50 @@ The server keeps no messages. The directory (chat names, people, positions) is a
 file readable only by you on the machine that signs in, and message text goes
 from that machine straight to the allowed agent.
 
+What this does not close: an agent with a shell, or any program of the same user,
+can read the plugin's data directory, copy the browser profile with its session, or
+call the panel's RPC. Keep agents away from that directory in their own permission
+settings. For OpenCode 2.2.5, these rules on each agent hold in every permission mode
+for its file tools and for commands that spell the plugin's name; a command that
+writes the path another way (`ex*`) is not caught, because rules match its text:
+
+```json
+[
+  { "action": "read", "resource": "*/.bb/plugins/express-messenger/*", "effect": "deny" },
+  { "action": "edit", "resource": "*/.bb/plugins/express-messenger/*", "effect": "deny" },
+  { "action": "external_directory", "resource": "*/.bb/plugins/express-messenger/*", "effect": "deny" },
+  { "action": "shell", "resource": "*express-messenger*", "effect": "deny" }
+]
+```
+
+`external_directory` is what stops `glob` and `grep` there: their own rules match the
+search pattern, not the folder.
+
 ## Sending
 
 - The chat must be named clearly: an `[id]` from `messenger_find`, or words with
   one clear winner. Otherwise nothing is sent and the candidates come back.
-- With **Confirm sends in a system window** (on by default) a window drawn by
-  the operating system shows the chat and the text; nothing goes until you
-  press Send. macOS uses `osascript`, Windows a PowerShell window, Linux
-  `zenity`. The window's text never travels in process arguments.
-- Before typing, the plugin checks that the client opened the right chat; after
-  pressing the send key it checks the message is in the chat. The same text is
+- A window drawn by the operating system always shows the chat, for a person also
+  the position, department and address from the directory, and the whole text.
+  Nothing goes until you press Send, and no setting turns this off. macOS uses
+  `osascript`, Windows a PowerShell window, Linux `zenity`. The window's text never
+  travels in process arguments.
+- The window shows everything or nothing goes: a text over 1500 characters or
+  about 30 lines, or one with invisible or direction-changing characters, is
+  refused before the window opens.
+- Exactly the confirmed text goes, or nothing does. Before typing, the plugin
+  checks that the client opened the right chat and that the message field is empty:
+  text already there may be your draft, so the send stops and leaves it alone. The
+  field must hold exactly the confirmed text before the send key and after each key
+  that did not send, and a failed send clears what it typed. The send counts only
+  when the chat has one more such message and the field is empty. The same text is
   not sent to the same chat twice within two minutes.
 
 ## Watch rules
+
+A new rule takes a system window too, whether an agent asks for it or the panel:
+the window shows the chat, what the rule will do and the note for the digest, and
+no rule is added until you confirm.
 
 A background service checks the unread counters of the watched chats (every 30
 seconds by default). When a chat has unread messages newer than the last digest
@@ -98,7 +136,58 @@ machine of the rule, with the digest agent. That thread reads the chat with
 counters, never messages.
 
 While there are rules, the browser on that machine stays open without a window;
-otherwise it closes after a few idle minutes.
+otherwise it closes after a few idle minutes. When the messenger does not open from
+the machine, the rule shows that it is a matter of the network or VPN and the service
+leaves the browser alone for a growing pause, from 1 to 15 minutes. When the session
+has ended, the rule asks to sign in and no browser starts until you do.
+
+## Digest threads
+
+Nobody watches a digest thread while it reads text anybody could have written, so
+its limits are in code, not only in its prompt:
+
+- `messenger_read` of its own chat, up to the rule's number of messages, is the
+  only call that works; sending, searching, other chats and watch rules are refused
+  by the server, whatever the thread is offered;
+- it starts in the `accept-edits` permission mode and the dispatch hook rejects
+  `full`; every request for a command, a web page or a file outside its folder is
+  answered "deny" at once;
+- forks and child threads of a digest thread keep all of this;
+- the chat's name and the rule's note reach it as a marked block of data, not as part
+  of the request.
+
+**OpenCode needs one more step.** OpenCode 2.2.5 runs commands, reads and writes
+without asking in every permission mode, so nothing above stops its own tools. Its
+own permissions do: define a primary agent that may only read, and name it in
+**Locked agent for watch digests**. Without that setting, an OpenCode digest agent
+starts no threads.
+
+```json
+{
+  "agents": {
+    "express-digest": {
+      "mode": "primary",
+      "description": "Digest of one chat for a watch rule",
+      "steps": 6,
+      "permissions": [
+        { "action": "*", "resource": "*", "effect": "deny" },
+        { "action": "*messenger_read*", "resource": "*", "effect": "allow" }
+      ]
+    }
+  }
+}
+```
+
+Checked on OpenCode 2.2.5 over ACP, the way bb runs it: such an agent is offered the
+plugin's read tool and `skill` only, and calls to `shell`, `read`, `write`, `edit`,
+`glob`, `grep`, `webfetch`, `websearch`, `subagent` and `execute` are refused. An id
+OpenCode does not know is ignored without a word: keep the agent and the setting in
+one place, as a build's manifest does.
+
+What this does not close: another provider in `accept-edits` may still let the thread
+edit files in its own folder; "Send now" on a queued message skips the dispatch hook;
+and if the plugin is down when a request comes, the request waits for a person
+instead of being refused.
 
 ## Settings
 
@@ -106,15 +195,16 @@ otherwise it closes after a few idle minutes.
 |---|---|---|
 | `webClientUrl` | — | The eXpress web client address |
 | `allowedModels` | — | Agents allowed to read chats, `<provider-id> <model-glob>` per line |
-| `confirmSend` | on | Confirm sends in a system window |
 | `digestAgent` | — | `<provider-id> <model>` for digest threads |
+| `digestSessionMode` | — | The session option `mode` of digest threads: a locked agent, required for OpenCode |
 | `watchIntervalSeconds` | 30 | How often watch rules look at the counters |
 
 ## How it works
 
 - `src/host/browser.ts` starts the browser with its own profile in the plugin's
-  data directory and a DevTools port chosen by the browser on 127.0.0.1, and
-  talks to it with Node's own WebSocket.
+  data directory and talks DevTools to it over a pipe
+  (`--remote-debugging-pipe`): no port listens and no file names one, so only the
+  process that started the browser can drive it, and the browser ends with it.
 - `src/host/page.ts` holds the expressions run in the web client: it finds the
   client's Redux store through React's fiber tree and reads chats, profiles,
   unread counters and the open chat's messages there. Reading hides the message
@@ -129,7 +219,7 @@ otherwise it closes after a few idle minutes.
   Input `{ lang?: "en" | "ru", hostId?: string }`; without `hostId` it asks the
   machine the Messenger page used last, else bb's own machine. Output
   `{ state: "done" | "todo" | "problem", summary, path }`: `done` once the client
-  loaded signed in, `todo` before that and when the session has ended, `summary`
+  loaded signed in, `todo` before that, also with old files left, and when the session has ended, `summary`
   is one line in `lang` with no chat and no person, `path` is the Messenger page.
   It reads what the host remembers: no browser starts and the messenger is not
   asked. A machine's answer serves for 5 seconds, and a change on the panel takes
@@ -140,7 +230,7 @@ otherwise it closes after a few idle minutes.
 ```sh
 npm install
 npm run typecheck
-npm test            # matching
+npm test            # matching, the window's text, the server's guard
 npm run test:e2e    # the host service against a stand-in web client in headless Chrome
 npm run build
 ```

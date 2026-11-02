@@ -22,7 +22,8 @@ describe("setupFromStatus", () => {
     ["never signed in", { signedIn: null, directory: null }, "todo", "Sign in to the messenger"],
     ["session ended", { signedIn: false }, "todo", "The messenger asks to sign in again"],
     ["signed in, no directory yet", { directory: null }, "done", "Signed in to the messenger"],
-    ["a directory from an earlier sign-in", { signedIn: null }, "done", "Signed in to the messenger"],
+    ["files left from before, with no load that showed the client", { signedIn: null }, "todo", "Sign in to the messenger"],
+    ["a session that ended, with a directory left", { signedIn: false }, "todo", "The messenger asks to sign in again"],
     ["signed in", {}, "done", "Signed in to the messenger"],
   ] as const)("%s", (_name, patch, state, summary) => {
     expect(setupFromStatus(status(patch as Partial<Status>))).toEqual({ state, summary, path: SETUP_PATH });

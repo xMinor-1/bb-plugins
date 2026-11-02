@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { intlLocale, LanguageSwitch, useLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { useHostError } from "./errors";
 import { messages } from "./messages";
 
 /** The server's realtime channel, RULES_CHANGED in server.ts (the panel may import only types from there). */
@@ -58,6 +59,7 @@ export function MessengerPage() {
   const lang = useLang();
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
+  const hostError = useHostError();
   const [overview, setOverview] = useState<Overview | null>(null);
   const [hostId, setHostId] = useState<string | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
@@ -108,7 +110,7 @@ export function MessengerPage() {
     setNote(null);
     try {
       const result = await work();
-      setNote({ tone: result.ok ? "ok" : "error", text: result.message });
+      setNote({ tone: result.ok ? "ok" : "error", text: hostError(result.message) });
     } catch (cause) {
       setNote({ tone: "error", text: errorText(cause) });
     } finally {
@@ -170,7 +172,7 @@ export function MessengerPage() {
             <Row label={t.directory}>
               {status.directory ? t.directoryLine(String(status.directory.chats), String(status.directory.people), when(status.directory.at)) : t.noDirectory}
             </Row>
-            {status.lastError ? <Row label={t.lastProblem}>{status.lastError}</Row> : null}
+            {status.lastError ? <Row label={t.lastProblem}>{hostError(status.lastError)}</Row> : null}
           </div>
         ) : ready ? (
           <p className="text-sm text-muted-foreground">{t.loading}</p>
@@ -207,10 +209,10 @@ export function MessengerPage() {
         <Row label={t.digestAgent}>
           {overview.digestAgent.text ? <span className="font-mono text-xs">{overview.digestAgent.text}</span> : "—"}
           {overview.digestAgent.problem ? (
-            <span className="block text-xs text-destructive">{overview.digestAgent.problem === "unset" ? t.digestUnset : t.digestNotAllowed}</span>
+            <span className="block text-xs text-destructive">{overview.digestAgent.problem === "unset" ? t.digestUnset : overview.digestAgent.problem === "no-lock" ? t.digestNoLock : t.digestNotAllowed}</span>
           ) : null}
         </Row>
-        <p className="text-sm text-muted-foreground">{overview.confirmSend ? t.confirmOn : t.confirmOff}</p>
+        <p className="text-sm text-muted-foreground">{t.confirmNote}</p>
       </Section>
 
       <Section
@@ -236,7 +238,7 @@ export function MessengerPage() {
                     {[where?.name, t.ruleLine(rule.last, rule.cooldownMinutes), rule.lastFiredAt ? t.firedAt(when(rule.lastFiredAt)) : t.notFired].filter(Boolean).join(" · ")}
                   </div>
                   {rule.instructions ? <div className="text-xs text-muted-foreground">“{rule.instructions}”</div> : null}
-                  {rule.lastError ? <div className="text-xs text-destructive">{rule.lastError}</div> : null}
+                  {rule.lastError ? <div className="text-xs text-destructive">{hostError(rule.lastError)}</div> : null}
                 </div>
                 {rule.lastThreadId ? (
                   <Button size="sm" variant="ghost" onClick={() => navigate.toThread(rule.lastThreadId!, { split: true })}>
@@ -266,6 +268,8 @@ export function MessengerPage() {
 
 function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) => void }) {
   const t = useMessages(messages);
+  const lang = useLang();
+  const hostError = useHostError();
   const rpc = useRpc<typeof rpcContract>();
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<Matches | null>(null);
@@ -273,6 +277,7 @@ function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) 
   const [last, setLast] = useState("10");
   const [cooldown, setCooldown] = useState("15");
   const [instructions, setInstructions] = useState("");
+  const [asking, setAsking] = useState(false);
   const request = useRef(0);
 
   const search = (event: FormEvent) => {
@@ -286,7 +291,7 @@ function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) 
         (value) => {
           if (mine === request.current) setFound(value);
         },
-        (cause) => onError(errorText(cause)),
+        (cause) => onError(hostError(errorText(cause))),
       )
       .finally(() => {
         if (mine === request.current) setSearching(false);
@@ -296,16 +301,22 @@ function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) 
   const watch = (chatId: string) => {
     const lastN = Math.min(50, Math.max(1, Number(last) || 10));
     const minutes = Math.min(1440, Math.max(1, Number(cooldown) || 15));
+    setAsking(true);
     rpc
-      .call("addRule", { hostId, chatId, last: lastN, cooldownMinutes: minutes, ...(instructions.trim() ? { instructions: instructions.trim() } : {}) })
+      .call("addRule", { hostId, chatId, last: lastN, cooldownMinutes: minutes, lang, ...(instructions.trim() ? { instructions: instructions.trim() } : {}) })
       .then(
-        () => {
+        (result) => {
+          if (!result.ok) {
+            onError(hostError(result.message));
+            return;
+          }
           setFound(null);
           setQuery("");
           setInstructions("");
         },
-        (cause) => onError(errorText(cause)),
-      );
+        (cause) => onError(hostError(errorText(cause))),
+      )
+      .finally(() => setAsking(false));
   };
 
   return (
@@ -342,8 +353,8 @@ function AddRule({ hostId, onError }: { hostId: string; onError: (text: string) 
                   {[t.kind(chat.kind), chat.person?.position, chat.unread ? t.unread(chat.unread) : null].filter(Boolean).join(" · ")}
                 </div>
               </div>
-              <Button size="sm" onClick={() => watch(chat.id)}>
-                {t.watch}
+              <Button size="sm" disabled={asking} onClick={() => watch(chat.id)}>
+                {asking ? t.confirmInWindow : t.watch}
               </Button>
             </li>
           ))}

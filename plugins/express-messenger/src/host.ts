@@ -33,6 +33,7 @@ export default experimental_defineHostEntry({
     chat: ({ url, id }, ctx) => serviceFor(ctx).chat(url, id),
     tool: ({ url, call }, ctx) => serviceFor(ctx).tool(url, call, ctx.signal),
     snapshot: ({ url, ids }, ctx) => serviceFor(ctx).snapshot(url, ids),
+    confirmRule: ({ url, draft }, ctx) => serviceFor(ctx).confirmRule(url, draft, ctx.signal),
     close: (_input, ctx) => serviceFor(ctx).close(),
     forget: (_input, ctx) => serviceFor(ctx).forget(),
   },
