@@ -195,6 +195,8 @@ function keychainStore(): SecretStore {
 // ---------------------------------------------- Windows Credential Manager
 
 /** Reads EXCHANGE_MAIL_SECRET_ACTION / _TARGET / _VALUE from its environment. */
+// Ends with an empty line: `powershell -Command -` reads stdin line by line and runs a
+// multi-line statement only after a blank line. Without it the script does not run at all.
 export const WINDOWS_CREDENTIAL_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
 # Take the value out of the environment before Add-Type starts the C# compiler,
@@ -262,6 +264,7 @@ switch ($env:EXCHANGE_MAIL_SECRET_ACTION) {
   'delete' { if ([ExchangeMailCredential]::Delete($target)) { exit 0 } else { exit 3 } }
   default { exit 2 }
 }
+
 `;
 
 function credentialManagerStore(): SecretStore {
