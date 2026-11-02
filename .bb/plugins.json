@@ -4,6 +4,10 @@
   "name": "xminor-bb-plugins",
   "plugins": [
     {
+      "name": "app-branding",
+      "source": "./plugins/app-branding"
+    },
+    {
       "name": "claude-design",
       "source": "./plugins/claude-design"
     },

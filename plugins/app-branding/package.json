@@ -1,0 +1,46 @@
+{
+  "name": "bb-plugin-app-branding",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.48",
+    "bbPluginSdk": ">=0.6.104"
+  },
+  "bb": {
+    "name": "App Branding",
+    "description": "Shows your own name and logo in place of bb's: logo, favicon and page title, from plugin settings, without a fork.",
+    "branding": {
+      "icon": "./icon.svg"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.104",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^12.0.0",
+    "hono": "^4.11.9",
+    "typescript": "^5.7.0",
+    "@pierre/diffs": "^1.2.9",
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.12"
+  },
+  "license": "MIT",
+  "author": "Foma",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xMinor-1/bb-plugins.git",
+    "directory": "plugins/app-branding"
+  },
+  "scripts": {
+    "build": "env -u BB_CLI bb plugin build .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  }
+}
