@@ -7,7 +7,9 @@ service in its own private configuration and this plugin names no service.
 
 ## What people see
 
-- A **Data Service** page in the sidebar, titled with the configured service name:
+- A page in the sidebar under the configured service name (bb reads a panel's title when the
+  plugin's frontend loads, so the first session shows **Data Service** there and the name in
+  the page header, later ones show the name everywhere):
   login, password, **Save and check**, and plain-language errors in English or Russian.
 - The address is shown read-only: it comes from settings and nobody types it.
 - An onboarding step for a build's setup page: the `setupStatus` RPC answers
