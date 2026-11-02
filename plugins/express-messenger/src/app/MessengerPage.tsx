@@ -126,148 +126,151 @@ export function MessengerPage() {
   };
 
   if (!overview) {
-    return <div className="p-6 text-sm text-muted-foreground">{note ? note.text : t.loading}</div>;
+    return <div className="h-full min-h-0 flex-1 overflow-y-auto p-6 text-sm text-muted-foreground">{note ? note.text : t.loading}</div>;
   }
 
   const machine = overview.machines.find((candidate) => candidate.id === hostId) ?? null;
   const ready = !!overview.url && !!machine?.connected;
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-4 p-4 sm:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold">{t.title}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t.intro}</p>
-        </div>
-        <LanguageSwitch />
-      </header>
+    // bb's frame around a page does not scroll: the page does it itself.
+    <div className="h-full min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl space-y-4 p-4 sm:p-6">
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-lg font-semibold">{t.title}</h1>
+            <p className="mt-1 text-sm text-muted-foreground">{t.intro}</p>
+          </div>
+          <LanguageSwitch />
+        </header>
 
-      {!overview.url ? <Notice tone="error">{t.noUrl}</Notice> : null}
-      <div ref={noteRef}>{note ? <Notice tone={note.tone}>{note.text}</Notice> : null}</div>
+        {!overview.url ? <Notice tone="error">{t.noUrl}</Notice> : null}
+        <div ref={noteRef}>{note ? <Notice tone={note.tone}>{note.text}</Notice> : null}</div>
 
-      <Section title={t.machine}>
-        {overview.machines.length === 0 ? (
-          <Notice tone="info">{t.noMachines}</Notice>
-        ) : (
-          <label className="block space-y-1 text-sm">
-            <select
-              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-              value={hostId ?? ""}
-              onChange={(event) => {
-                setHostId(event.target.value);
-                setStatus(null);
+        <Section title={t.machine}>
+          {overview.machines.length === 0 ? (
+            <Notice tone="info">{t.noMachines}</Notice>
+          ) : (
+            <label className="block space-y-1 text-sm">
+              <select
+                className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+                value={hostId ?? ""}
+                onChange={(event) => {
+                  setHostId(event.target.value);
+                  setStatus(null);
+                }}
+              >
+                {overview.machines.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                    {candidate.connected ? "" : ` (${t.offline})`}
+                  </option>
+                ))}
+              </select>
+              <span className="block text-xs text-muted-foreground">{t.machineHint}</span>
+            </label>
+          )}
+        </Section>
+
+        <Section title={t.signInTitle}>
+          {status ? (
+            <div className="space-y-1.5">
+              <Row label={t.browser}>{status.browser ?? <span className="text-destructive">{t.noBrowser}</span>}</Row>
+              <Row label={t.signInLabel}>{status.signedIn === null ? t.unknown : status.signedIn ? t.signedIn : <span className="text-destructive">{t.signedOut}</span>}</Row>
+              <Row label={t.directory}>
+                {status.directory ? t.directoryLine(String(status.directory.chats), String(status.directory.people), when(status.directory.at)) : t.noDirectory}
+              </Row>
+              {status.lastError ? <Row label={t.lastProblem}>{hostError(status.lastError)}</Row> : null}
+            </div>
+          ) : ready ? (
+            <p className="text-sm text-muted-foreground">{t.loading}</p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("signIn", () => rpc.call("signIn", { hostId: hostId! }))}>
+              {busy === "signIn" ? t.signingIn : t.signIn}
+            </Button>
+            <Button size="sm" variant="outline" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("sync", () => rpc.call("sync", { hostId: hostId! }))}>
+              {busy === "sync" ? t.syncing : t.sync}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!machine?.connected || busy !== null}
+              onClick={() => {
+                if (window.confirm(t.forgetConfirm)) void act("forget", () => rpc.call("forget", { hostId: hostId! }));
               }}
             >
-              {overview.machines.map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>
-                  {candidate.name}
-                  {candidate.connected ? "" : ` (${t.offline})`}
-                </option>
-              ))}
-            </select>
-            <span className="block text-xs text-muted-foreground">{t.machineHint}</span>
-          </label>
-        )}
-      </Section>
-
-      <Section title={t.signInTitle}>
-        {status ? (
-          <div className="space-y-1.5">
-            <Row label={t.browser}>{status.browser ?? <span className="text-destructive">{t.noBrowser}</span>}</Row>
-            <Row label={t.signInLabel}>{status.signedIn === null ? t.unknown : status.signedIn ? t.signedIn : <span className="text-destructive">{t.signedOut}</span>}</Row>
-            <Row label={t.directory}>
-              {status.directory ? t.directoryLine(String(status.directory.chats), String(status.directory.people), when(status.directory.at)) : t.noDirectory}
-            </Row>
-            {status.lastError ? <Row label={t.lastProblem}>{hostError(status.lastError)}</Row> : null}
-          </div>
-        ) : ready ? (
-          <p className="text-sm text-muted-foreground">{t.loading}</p>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("signIn", () => rpc.call("signIn", { hostId: hostId! }))}>
-            {busy === "signIn" ? t.signingIn : t.signIn}
-          </Button>
-          <Button size="sm" variant="outline" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("sync", () => rpc.call("sync", { hostId: hostId! }))}>
-            {busy === "sync" ? t.syncing : t.sync}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!machine?.connected || busy !== null}
-            onClick={() => {
-              if (window.confirm(t.forgetConfirm)) void act("forget", () => rpc.call("forget", { hostId: hostId! }));
-            }}
-          >
-            {t.forget}
-          </Button>
-        </div>
-      </Section>
-
-      <Section title={t.agentsTitle}>
-        {overview.policy.error ? <Notice tone="error">{overview.policy.error}</Notice> : null}
-        <Row label={t.allowed}>
-          {overview.policy.rules.length ? (
-            <span className="font-mono text-xs">{overview.policy.rules.map((rule) => `${rule.provider} ${rule.model}`).join(", ")}</span>
-          ) : (
-            <span className="text-destructive">{t.noneAllowed}</span>
-          )}
-        </Row>
-        <Row label={t.digestAgent}>
-          {overview.digestAgent.text ? <span className="font-mono text-xs">{overview.digestAgent.text}</span> : "—"}
-          {overview.digestAgent.problem ? (
-            <span className="block text-xs text-destructive">{overview.digestAgent.problem === "unset" ? t.digestUnset : overview.digestAgent.problem === "no-lock" ? t.digestNoLock : t.digestNotAllowed}</span>
-          ) : null}
-        </Row>
-        <p className="text-sm text-muted-foreground">{t.confirmNote}</p>
-      </Section>
-
-      <Section
-        title={t.rulesTitle}
-        aside={
-          rules.length ? (
-            <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => act("check", () => rpc.call("checkNow", null))}>
-              {t.checkNow}
+              {t.forget}
             </Button>
-          ) : null
-        }
-      >
-        <p className="text-sm text-muted-foreground">{t.rulesIntro}</p>
-        {rules.length === 0 ? <Notice tone="info">{t.noRules}</Notice> : null}
-        <ul className="divide-y divide-border">
-          {rules.map((rule) => {
-            const where = overview.machines.find((candidate) => candidate.id === rule.hostId);
-            return (
-              <li key={rule.id} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
-                <div className="min-w-0 flex-1">
-                  <div className={cn("truncate font-medium", !rule.enabled && "text-muted-foreground line-through")}>{rule.chatName}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {[where?.name, t.ruleLine(rule.last, rule.cooldownMinutes), rule.lastFiredAt ? t.firedAt(when(rule.lastFiredAt)) : t.notFired].filter(Boolean).join(" · ")}
+          </div>
+        </Section>
+
+        <Section title={t.agentsTitle}>
+          {overview.policy.error ? <Notice tone="error">{overview.policy.error}</Notice> : null}
+          <Row label={t.allowed}>
+            {overview.policy.rules.length ? (
+              <span className="font-mono text-xs">{overview.policy.rules.map((rule) => `${rule.provider} ${rule.model}`).join(", ")}</span>
+            ) : (
+              <span className="text-destructive">{t.noneAllowed}</span>
+            )}
+          </Row>
+          <Row label={t.digestAgent}>
+            {overview.digestAgent.text ? <span className="font-mono text-xs">{overview.digestAgent.text}</span> : "—"}
+            {overview.digestAgent.problem ? (
+              <span className="block text-xs text-destructive">{overview.digestAgent.problem === "unset" ? t.digestUnset : overview.digestAgent.problem === "no-lock" ? t.digestNoLock : t.digestNotAllowed}</span>
+            ) : null}
+          </Row>
+          <p className="text-sm text-muted-foreground">{t.confirmNote}</p>
+        </Section>
+
+        <Section
+          title={t.rulesTitle}
+          aside={
+            rules.length ? (
+              <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => act("check", () => rpc.call("checkNow", null))}>
+                {t.checkNow}
+              </Button>
+            ) : null
+          }
+        >
+          <p className="text-sm text-muted-foreground">{t.rulesIntro}</p>
+          {rules.length === 0 ? <Notice tone="info">{t.noRules}</Notice> : null}
+          <ul className="divide-y divide-border">
+            {rules.map((rule) => {
+              const where = overview.machines.find((candidate) => candidate.id === rule.hostId);
+              return (
+                <li key={rule.id} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <div className={cn("truncate font-medium", !rule.enabled && "text-muted-foreground line-through")}>{rule.chatName}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {[where?.name, t.ruleLine(rule.last, rule.cooldownMinutes), rule.lastFiredAt ? t.firedAt(when(rule.lastFiredAt)) : t.notFired].filter(Boolean).join(" · ")}
+                    </div>
+                    {rule.instructions ? <div className="text-xs text-muted-foreground">“{rule.instructions}”</div> : null}
+                    {rule.lastError ? <div className="text-xs text-destructive">{hostError(rule.lastError)}</div> : null}
                   </div>
-                  {rule.instructions ? <div className="text-xs text-muted-foreground">“{rule.instructions}”</div> : null}
-                  {rule.lastError ? <div className="text-xs text-destructive">{hostError(rule.lastError)}</div> : null}
-                </div>
-                {rule.lastThreadId ? (
-                  <Button size="sm" variant="ghost" onClick={() => navigate.toThread(rule.lastThreadId!, { split: true })}>
-                    {t.openThread}
+                  {rule.lastThreadId ? (
+                    <Button size="sm" variant="ghost" onClick={() => navigate.toThread(rule.lastThreadId!, { split: true })}>
+                      {t.openThread}
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    aria-pressed={rule.enabled}
+                    onClick={() => rpc.call("setRuleEnabled", { id: rule.id, enabled: !rule.enabled }).catch((cause) => setNote({ tone: "error", text: errorText(cause) }))}
+                  >
+                    {rule.enabled ? t.on : t.off}
                   </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  aria-pressed={rule.enabled}
-                  onClick={() => rpc.call("setRuleEnabled", { id: rule.id, enabled: !rule.enabled }).catch((cause) => setNote({ tone: "error", text: errorText(cause) }))}
-                >
-                  {rule.enabled ? t.on : t.off}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => rpc.call("removeRule", { id: rule.id }).catch((cause) => setNote({ tone: "error", text: errorText(cause) }))}>
-                  {t.remove}
-                </Button>
-              </li>
-            );
-          })}
-        </ul>
-        {ready && hostId ? <AddRule hostId={hostId} /> : null}
-      </Section>
+                  <Button size="sm" variant="ghost" onClick={() => rpc.call("removeRule", { id: rule.id }).catch((cause) => setNote({ tone: "error", text: errorText(cause) }))}>
+                    {t.remove}
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+          {ready && hostId ? <AddRule hostId={hostId} /> : null}
+        </Section>
+      </div>
     </div>
   );
 }
@@ -286,7 +289,13 @@ function AddRule({ hostId }: { hostId: string }) {
   const [asking, setAsking] = useState(false);
   // Next to the buttons that caused it: the page's own note is a long way up.
   const [problem, setProblem] = useState<string | null>(null);
+  const problemRef = useRef<HTMLDivElement>(null);
   const request = useRef(0);
+
+  // It makes the page longer after the click: without this it can stay below the edge.
+  useEffect(() => {
+    if (problem) problemRef.current?.scrollIntoView({ block: "nearest" });
+  }, [problem]);
 
   const search = (event: FormEvent) => {
     event.preventDefault();
@@ -370,7 +379,7 @@ function AddRule({ hostId }: { hostId: string }) {
           ))}
         </ul>
       ) : null}
-      {problem ? <Notice tone="error">{hostError(problem)}</Notice> : null}
+      <div ref={problemRef}>{problem ? <Notice tone="error">{hostError(problem)}</Notice> : null}</div>
     </div>
   );
 }
