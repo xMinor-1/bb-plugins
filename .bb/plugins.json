@@ -8,6 +8,10 @@
       "source": "./plugins/app-branding"
     },
     {
+      "name": "bug-report-button",
+      "source": "./plugins/bug-report-button"
+    },
+    {
       "name": "claude-design",
       "source": "./plugins/claude-design"
     },
