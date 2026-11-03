@@ -10,6 +10,7 @@ import { z } from "zod";
 import { rpcContract, STATUS_CHANNEL, type Notice, type OpenCodeStatus, type Setup, type SetupMark, type Status, type SyncReport } from "./contract.js";
 import { checkSecretValue, openSecretStore, SECRET_NAME, type SecretStore, type SecretStorePreference } from "./src/secret-store.js";
 import { emptyManaged, runSync, SELF_ID, type FleetKitSettings, type ManagedState } from "./src/sync.js";
+import type { Manifest } from "./src/manifest.js";
 import { maskManifestUrl, parseManifestLocation } from "./src/fetch-manifest.js";
 import { opencodeConfigDirSchema, opencodeInstallDirSchema } from "./src/shared/settings.js";
 import { resolveOpenCodeLocation } from "./src/host/opencode-location.js";
@@ -212,21 +213,17 @@ export default async function plugin(bb: BbPluginApi) {
           await kv.set("opencode", value);
           publish();
         },
+        onManifest: async (manifest) => {
+          await saveFromManifest(manifest);
+          publish();
+        },
       },
       trigger,
     );
     await kv.set("managed", outcome.managed);
     await kv.set("lastSync", outcome.report);
     if (outcome.opencode !== null || outcome.manifest !== null) await kv.set("opencode", outcome.opencode);
-    if (outcome.manifest !== null) {
-      await kv.set("secrets", {
-        list: outcome.manifest.secrets.map((secret) => ({ name: secret.name, title: secret.title, hint: secret.hint ?? null })),
-      } satisfies StoredSecrets);
-      await kv.set("onboarding", {
-        steps: outcome.manifest.onboarding ?? [],
-        planned: outcome.manifest.plugins.filter((entry) => entry.status === "planned").map((entry) => entry.id),
-      } satisfies StoredOnboarding);
-    }
+    if (outcome.manifest !== null) await saveFromManifest(outcome.manifest);
     if (outcome.notices.length > 0) {
       const notices = (await kv.get<Notice[]>("notices")) ?? [];
       // One notice per id: an agent turned on by hand again does not pile up notices.
@@ -338,6 +335,16 @@ export default async function plugin(bb: BbPluginApi) {
     if (opencodeConfigDir === "") return [];
     return [{ name: "OPENCODE_CONFIG_DIR", value: opencodeConfigDir, reason: "Fleet Kit keeps this bb's OpenCode configuration in its own directory" }];
   });
+
+  async function saveFromManifest(manifest: Manifest) {
+    await kv.set("secrets", {
+      list: manifest.secrets.map((secret) => ({ name: secret.name, title: secret.title, hint: secret.hint ?? null })),
+    } satisfies StoredSecrets);
+    await kv.set("onboarding", {
+      steps: manifest.onboarding ?? [],
+      planned: manifest.plugins.filter((entry) => entry.status === "planned").map((entry) => entry.id),
+    } satisfies StoredOnboarding);
+  }
 
   async function setSecret(name: string, value: string) {
     const known = ((await kv.get<StoredSecrets>("secrets")) ?? { list: [] }).list.some((secret) => secret.name === name);

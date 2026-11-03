@@ -723,6 +723,8 @@ describe("OpenCode installed by Fleet Kit", () => {
     const run = await prepare((directory) => ({ state: "failed", reason: "download", path: join(directory, "opencode"), detail: "offline" }));
     const seen: Array<string | undefined> = [];
     run.deps.onOpenCode = async (status) => void seen.push(status.install?.state);
+    let callsWhenManifestRead = -1;
+    run.deps.onManifest = async () => void (callsWhenManifestRead = pluginCalls(run.calls).filter((call) => call.includes("notes")).length);
     const outcome = await runSync(run.deps, "start");
     expect(JSON.parse(run.config()).enabled_providers).toEqual(["corp"]);
     expect(run.order[0]).not.toContain("notes");
@@ -730,6 +732,7 @@ describe("OpenCode installed by Fleet Kit", () => {
     expect(agent).toMatchObject({ id: "opencode", command: "/app", env: { ELECTRON_RUN_AS_NODE: "1", ACP_SHIM_NOT_READY: "wait please" } });
     expect(agent.args).toEqual([join(run.installDir, "bb-acp-shim.cjs"), join(run.installDir, "opencode"), "acp"]);
     expect(seen).toEqual(["installing", "failed"]);
+    expect(callsWhenManifestRead).toBe(0);
     expect(pluginCalls(run.calls).some((call) => call.includes("notes"))).toBe(true);
     expect(outcome.retrySoon).toBe(true);
     expect(outcome.report.steps.find((step) => step.code === "opencodeInstallFailed")).toMatchObject({ outcome: "error" });

@@ -146,6 +146,8 @@ export interface SyncDeps {
   selfUpdateStartedAt?: number | undefined;
   /** Called as soon as the state of the OpenCode install changes: an install takes minutes and the panel shows it. */
   onOpenCode?: ((status: OpenCodeStatus) => Promise<void>) | undefined;
+  /** The manifest has been read. A first sync installs plugins for many minutes; the person can enter a key meanwhile. */
+  onManifest?: ((manifest: Manifest) => Promise<void>) | undefined;
   /** For tests. */
   now?: () => number;
   /** For tests. */
@@ -296,6 +298,7 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
   }
   const manifest = check.manifest;
   steps.add("manifest", display, "ok", say("manifestRead", { name: manifest.name, version: manifest.version }));
+  await deps.onManifest?.(manifest);
 
   const version = (await within(deps.sdk.system.version(), CALL_MS, "Reading the bb version")).currentVersion;
   if (version !== "0.0.0" && compareVersions(version, manifest.bb.minVersion) < 0) {
