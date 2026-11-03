@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ensureOpenCode, extractEntry, runProgram, type OpenCodeFile, type RunOutcome } from "../src/host/install-opencode.js";
+import { ensureOpenCode, extractEntry, PROGRAM_STATE_FILE, runProgram, setProgramMessage, type OpenCodeFile, type RunOutcome } from "../src/host/install-opencode.js";
 
 const dirs: string[] = [];
 function temp(): string {
@@ -65,7 +65,7 @@ describe("ensureOpenCode", () => {
     const dir = temp();
     const outcome = await ensureOpenCode(deps(dir, { url: archive, integrity, entry: "package/bin/opencode" }));
     expect(outcome).toMatchObject({ state: "installed", version: "2.2.5", path: join(dir, "opencode") });
-    expect(readdirSync(dir)).toEqual(["opencode"]);
+    expect(readdirSync(dir).sort()).toEqual([PROGRAM_STATE_FILE, "opencode"]);
   });
 
   it("does nothing when that version is in place", async () => {
@@ -87,7 +87,7 @@ describe("ensureOpenCode", () => {
     const outcome = await ensureOpenCode(deps(dir, { url: fresh.archive, integrity: fresh.integrity, entry: "package/bin/opencode" }));
     expect(outcome.state).toBe("installed");
     expect(readFileSync(join(dir, "opencode"), "utf8")).toContain("2.2.5");
-    expect(readdirSync(dir)).toEqual(["opencode"]);
+    expect(readdirSync(dir).sort()).toEqual([PROGRAM_STATE_FILE, "opencode"]);
   });
 
   it("refuses a file that does not match the hash and leaves nothing to run", async () => {
@@ -97,6 +97,103 @@ describe("ensureOpenCode", () => {
     expect(outcome).toMatchObject({ state: "failed", reason: "integrity" });
     expect(existsSync(join(dir, "opencode"))).toBe(false);
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  describe("an update that fails keeps the previous program", () => {
+    async function installed() {
+      const old = makePackage(versionScript("2.2.4"));
+      const dir = temp();
+      await ensureOpenCode(deps(dir, { url: old.archive, integrity: old.integrity, entry: "package/bin/opencode" }, { version: "2.2.4" }));
+      const fresh = makePackage(versionScript("2.2.5"));
+      return { dir, file: { url: fresh.archive, integrity: fresh.integrity, entry: "package/bin/opencode" }, state: readFileSync(join(dir, PROGRAM_STATE_FILE), "utf8") };
+    }
+    const cases: [string, RunOutcome, string][] = [
+      ["refused", { kind: "denied", detail: "EPERM" }, "denied"],
+      ["broken", { kind: "broken", detail: "code 3" }, "broken"],
+      ["another version", { kind: "ok", version: "9.9.9" }, "broken"],
+    ];
+    for (const [name, answer, reason] of cases) {
+      it(name, async () => {
+        const { dir, file, state } = await installed();
+        const seen: string[] = [];
+        const run = async (path: string): Promise<RunOutcome> => {
+          seen.push(readFileSync(path, "utf8"));
+          return seen.length === 1 ? { kind: "ok", version: "2.2.4" } : answer;
+        };
+        const outcome = await ensureOpenCode(deps(dir, file, { run }));
+        expect(outcome).toMatchObject({ state: "failed", reason });
+        expect(seen[1]).toContain("2.2.5");
+        expect(readFileSync(join(dir, "opencode"), "utf8")).toContain("2.2.4");
+        // Its record is still the program's: same file, same size and time, so the wrapper goes on starting it.
+        expect(readFileSync(join(dir, PROGRAM_STATE_FILE), "utf8")).toBe(state);
+        expect(readdirSync(dir).filter((one) => one.includes(".old-") || one.startsWith(".install-"))).toEqual([]);
+      });
+    }
+
+    it("when the new program cannot be moved into place", async () => {
+      const { dir, file, state } = await installed();
+      const outcome = await ensureOpenCode(deps(dir, file, { run: async () => ({ kind: "ok", version: "2.2.4" }), move: async () => { throw new Error("EBUSY"); } }));
+      expect(outcome).toMatchObject({ state: "failed", reason: "disk", detail: "EBUSY" });
+      expect(readFileSync(join(dir, "opencode"), "utf8")).toContain("2.2.4");
+      expect(readFileSync(join(dir, PROGRAM_STATE_FILE), "utf8")).toBe(state);
+    });
+  });
+
+  it("a first install that fails leaves nothing the wrapper would start", async () => {
+    const { archive, integrity } = makePackage(versionScript("2.2.5"));
+    const file = { url: archive, integrity, entry: "package/bin/opencode" };
+    const broken = temp();
+    expect(await ensureOpenCode(deps(broken, file, { run: async () => ({ kind: "broken", detail: "x" }) }))).toMatchObject({ state: "failed", reason: "broken" });
+    expect(existsSync(join(broken, "opencode"))).toBe(false);
+    // A refused one stays where the IT request names it, without a record, and is not fetched again.
+    const refused = temp();
+    expect(await ensureOpenCode(deps(refused, file, { run: async () => ({ kind: "denied", detail: "EPERM" }) }))).toMatchObject({ state: "failed", reason: "denied" });
+    expect(existsSync(join(refused, "opencode"))).toBe(true);
+    expect(existsSync(join(refused, PROGRAM_STATE_FILE))).toBe(false);
+    let downloads = 0;
+    await ensureOpenCode(deps(refused, file, { run: async () => ({ kind: "denied", detail: "EPERM" }), download: async () => void (downloads += 1) }));
+    expect(downloads).toBe(0);
+  });
+
+  it("brings back the previous program after an update stopped between its renames", async () => {
+    const dir = temp();
+    writeFileSync(join(dir, "opencode.old-abc"), versionScript("2.2.5"));
+    chmodSync(join(dir, "opencode.old-abc"), 0o755);
+    let downloads = 0;
+    const outcome = await ensureOpenCode(deps(dir, { url: "x", integrity: "x", entry: "x" }, { download: async () => void (downloads += 1) }));
+    expect(outcome.state).toBe("current");
+    expect(downloads).toBe(0);
+  });
+
+  it("a disk that refuses is a failure, not an exception", async () => {
+    const parent = temp();
+    writeFileSync(join(parent, "taken"), "a file where the folder should go");
+    const outcome = await ensureOpenCode(deps(join(parent, "taken"), { url: "x", integrity: "x", entry: "x" }));
+    expect(outcome).toMatchObject({ state: "failed", reason: "disk" });
+    expect((outcome as { detail: string }).detail).not.toBe("");
+  });
+
+  it("downloads nothing when told not to, and still accepts the program in place", async () => {
+    const { archive, integrity } = makePackage(versionScript("2.2.5"));
+    const file = { url: archive, integrity, entry: "package/bin/opencode" };
+    const dir = temp();
+    let downloads = 0;
+    const paused = { mayDownload: false, download: async () => void (downloads += 1) };
+    expect(await ensureOpenCode(deps(dir, file, paused))).toMatchObject({ state: "failed", reason: "paused" });
+    expect(downloads).toBe(0);
+    await ensureOpenCode(deps(dir, file));
+    expect((await ensureOpenCode(deps(dir, file, paused))).state).toBe("current");
+  });
+
+  it("records the program it checked, and a message does not lose the record", async () => {
+    const { archive, integrity } = makePackage(versionScript("2.2.5"));
+    const dir = temp();
+    await ensureOpenCode(deps(dir, { url: archive, integrity, entry: "package/bin/opencode" }));
+    await setProgramMessage(dir, "stop");
+    const saved = JSON.parse(readFileSync(join(dir, PROGRAM_STATE_FILE), "utf8"));
+    expect(saved.verified.version).toBe("2.2.5");
+    expect(saved.verified.size).toBe(statSync(join(dir, "opencode")).size);
+    expect(saved.message).toBe("stop");
   });
 
   it("tries a failed download again, then reports it", async () => {

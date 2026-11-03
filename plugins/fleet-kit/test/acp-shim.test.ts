@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ACP_SHIM_SOURCE } from "../src/host/acp-shim-source.js";
 import { agentEntry, mergeAgents } from "../src/host/acp-agent.js";
@@ -13,6 +13,12 @@ afterEach(() => {
   for (const child of children.splice(0)) child.kill("SIGKILL");
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+/** What Fleet Kit writes after the program answers with the right version. */
+function record(program: string) {
+  const file = statSync(program);
+  writeFileSync(join(dirname(program), "bb-acp-state.json"), JSON.stringify({ verified: { version: "2.2.5", size: file.size, mtimeMs: file.mtimeMs }, message: null }));
+}
 
 function start(program: string, env: Record<string, string> = {}) {
   const home = mkdtempSync(join(tmpdir(), "fk-shim-"));
@@ -73,9 +79,69 @@ describe("while OpenCode is not there yet", () => {
     shim.send({ id: 1, method: "initialize", params: {} });
     await shim.until((l) => l.id === 1);
     writeFileSync(program, "#!/bin/sh\n");
+    record(program);
     shim.send({ id: 2, method: "session/prompt", params: { sessionId: "s" } });
     await shim.until((l) => l.id === 2);
     expect(await shim.exited).toBe(0);
+  });
+
+  it("does not start a program Fleet Kit has not checked", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fk-shim-"));
+    dirs.push(dir);
+    const program = join(dir, "opencode");
+    writeFileSync(program, `#!/bin/sh\ntouch "${dir}/started"\n`);
+    chmodSync(program, 0o755);
+    const shim = start(program, { ACP_SHIM_NOT_READY: "still installing" });
+    shim.send({ id: 1, method: "initialize", params: {} });
+    await shim.until((l) => l.id === 1);
+    shim.send({ id: 2, method: "session/prompt", params: { sessionId: "s" } });
+    const chunk = await shim.until((l) => l.method === "session/update");
+    expect(chunk.params.update.content.text).toBe("still installing");
+    expect(existsSync(join(dir, "started"))).toBe(false);
+  });
+
+  it("does not start a file that differs from the one checked", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fk-shim-"));
+    dirs.push(dir);
+    const program = join(dir, "opencode");
+    writeFileSync(program, "#!/bin/sh\n");
+    record(program);
+    writeFileSync(program, `#!/bin/sh\ntouch "${dir}/started"\n`);
+    chmodSync(program, 0o755);
+    const shim = start(program, { ACP_SHIM_NOT_READY: "still installing" });
+    shim.send({ id: 1, method: "initialize", params: {} });
+    await shim.until((l) => l.id === 1);
+    expect(existsSync(join(dir, "started"))).toBe(false);
+  });
+
+  it("says what Fleet Kit has found out: a refusal, or that it stopped trying", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fk-shim-"));
+    dirs.push(dir);
+    const program = join(dir, "opencode");
+    const shim = start(program, { ACP_SHIM_NOT_READY: "still installing" });
+    shim.send({ id: 1, method: "initialize", params: {} });
+    await shim.until((l) => l.id === 1);
+    writeFileSync(join(dir, "bb-acp-state.json"), JSON.stringify({ verified: null, message: "ask IT" }));
+    shim.send({ id: 2, method: "session/prompt", params: { sessionId: "s" } });
+    const chunk = await shim.until((l) => l.method === "session/update");
+    expect(chunk.params.update.content.text).toBe("ask IT");
+  });
+
+  it("answers in the chat when the checked program is refused at start", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fk-shim-"));
+    dirs.push(dir);
+    const program = join(dir, "opencode");
+    writeFileSync(program, "#!/bin/sh\n");
+    chmodSync(program, 0o644); // EACCES, an "error" event
+    record(program);
+    const shim = start(program, { ACP_SHIM_NOT_READY: "still installing", ACP_SHIM_DENIED: "the system refused it, ask IT" });
+    shim.send({ id: 1, method: "initialize", params: {} });
+    await shim.until((l) => l.id === 1);
+    shim.send({ id: 2, method: "session/new", params: { cwd: dir } });
+    await shim.until((l) => l.id === 2);
+    shim.send({ id: 3, method: "session/prompt", params: { sessionId: "s" } });
+    const chunk = await shim.until((l) => l.method === "session/update");
+    expect(chunk.params.update.content.text).toBe("the system refused it, ask IT");
   });
 
   it("without the text it fails as before", async () => {
@@ -102,9 +168,9 @@ describe("with OpenCode there", () => {
 
 describe("agent entry", () => {
   it("runs under the program that runs bb, switching the app to Node mode", () => {
-    const app = agentEntry({ execPath: "C:\\ADE\\app.exe", electron: true }, "s.cjs", "oc.exe", { notReady: "wait" });
+    const app = agentEntry({ execPath: "C:\\ADE\\app.exe", electron: true }, "s.cjs", "oc.exe", { notReady: "wait", denied: "no" });
     expect(app).toMatchObject({ id: "opencode", command: "C:\\ADE\\app.exe", args: ["s.cjs", "oc.exe", "acp"], env: { ELECTRON_RUN_AS_NODE: "1", ACP_SHIM_NOT_READY: "wait" } });
-    expect(agentEntry({ execPath: "/usr/bin/node", electron: false }, "s", "o", { notReady: "w" }).env).toEqual({ ACP_SHIM_NOT_READY: "w" });
+    expect(agentEntry({ execPath: "/usr/bin/node", electron: false }, "s", "o", { notReady: "w", denied: "d" }).env).toEqual({ ACP_SHIM_NOT_READY: "w", ACP_SHIM_DENIED: "d" });
   });
 
   it("keeps the person's other agents and gives way only to an unreadable value", () => {

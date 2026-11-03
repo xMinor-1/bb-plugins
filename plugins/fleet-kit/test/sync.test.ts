@@ -719,6 +719,79 @@ describe("OpenCode installed by Fleet Kit", () => {
     return { ...first, installDir, order, config: () => configAtInstall, agent: () => agentAtInstall };
   }
 
+  it("stops fetching after three failures in a row, until later or until the person asks", async () => {
+    const run = await prepare((directory) => ({ state: "failed", reason: "download", path: join(directory, "opencode"), detail: "offline" }));
+    const allowed: boolean[] = [];
+    const inner = run.deps.ensureOpenCode!;
+    run.deps.ensureOpenCode = async (files, directory, version, mayDownload) => {
+      allowed.push(mayDownload);
+      return mayDownload ? inner(files, directory, version, mayDownload) : { state: "failed", reason: "paused", path: join(directory, "opencode"), detail: "" };
+    };
+    let now = 1_000_000;
+    run.deps.now = () => now;
+    const once = async (trigger: "schedule" | "manual") => {
+      const outcome = await runSync(run.deps, trigger);
+      run.deps.managed = outcome.managed;
+      return outcome;
+    };
+    expect((await once("schedule")).retrySoon).toBe(true);
+    expect((await once("schedule")).retrySoon).toBe(true);
+    expect((await once("schedule")).retrySoon).toBe(false);
+    const paused = await once("schedule");
+    expect(paused.retrySoon).toBe(false);
+    expect(paused.report.steps.some((step) => step.code === "opencodeInstallPaused")).toBe(true);
+    expect(allowed).toEqual([true, true, true, false]);
+    await once("manual");
+    expect(allowed[4]).toBe(true);
+    now += 7 * 60 * 60_000;
+    await once("schedule");
+    expect(allowed[5]).toBe(true);
+  });
+
+  it("does not retry soon what a retry cannot help", async () => {
+    for (const reason of ["no-file", "broken", "denied"] as const) {
+      const run = await prepare((directory) => ({ state: "failed", reason, path: join(directory, "opencode"), detail: "x" }));
+      expect((await runSync(run.deps, "schedule")).retrySoon).toBe(false);
+    }
+  });
+
+  it("tells the wrapper what to say when installing has stopped or is refused", async () => {
+    const stopped = await prepare((directory) => ({ state: "failed", reason: "no-file", path: join(directory, "opencode"), detail: "x" }));
+    await runSync(stopped.deps, "schedule");
+    expect(JSON.parse(await readFile(join(stopped.installDir, "bb-acp-state.json"), "utf8")).message).not.toBe(null);
+    const passing = await prepare((directory) => ({ state: "failed", reason: "download", path: join(directory, "opencode"), detail: "x" }));
+    await runSync(passing.deps, "schedule");
+    expect(JSON.parse(await readFile(join(passing.installDir, "bb-acp-state.json"), "utf8").catch(() => '{"message":null}')).message).toBe(null);
+  });
+
+  it("an exception on the way is a failed install with a retry, and the plugins still go on", async () => {
+    const run = await prepare(() => {
+      throw new Error("disk gone");
+    });
+    const outcome = await runSync(run.deps, "schedule");
+    expect(outcome.opencode?.install?.state).toBe("failed");
+    expect(outcome.opencode?.install?.message).toContain("disk gone");
+    expect(outcome.retrySoon).toBe(true);
+    expect(pluginCalls(run.calls).some((call) => call.includes("notes"))).toBe(true);
+  });
+
+  it("settings that cannot be written leave a failed install and no OpenCode", async () => {
+    const run = await prepare((directory) => ({ state: "current", path: join(directory, "opencode"), version: "2.2.5" }));
+    let installs = 0;
+    run.deps.ensureOpenCode = async (_files, directory) => {
+      installs += 1;
+      return { state: "current", path: join(directory, "opencode"), version: "2.2.5" };
+    };
+    const blocked = join(run.deps.environment.HOME!, ".config");
+    await rm(blocked, { recursive: true, force: true });
+    await writeFile(blocked, "a file where the folder should go");
+    const outcome = await runSync(run.deps, "schedule");
+    expect(installs).toBe(0);
+    expect(outcome.opencode?.install?.state).toBe("failed");
+    expect(outcome.report.steps.some((step) => step.area === "opencode" && step.outcome === "error")).toBe(true);
+    expect(outcome.retrySoon).toBe(true);
+  });
+
   it("writes the provider limit and the agent before OpenCode exists, and only then plugins", async () => {
     const run = await prepare((directory) => ({ state: "failed", reason: "download", path: join(directory, "opencode"), detail: "offline" }));
     const seen: Array<string | undefined> = [];

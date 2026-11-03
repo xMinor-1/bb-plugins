@@ -6,8 +6,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
@@ -31,7 +31,17 @@ export type RunOutcome =
 
 export type InstallOutcome =
   | { state: "current" | "installed"; path: string; version: string }
-  | { state: "failed"; reason: "download" | "integrity" | "unpack" | "broken" | "denied" | "no-file"; path: string; detail: string };
+  | { state: "failed"; reason: InstallFailure; path: string; detail: string };
+
+export type InstallFailure = "download" | "integrity" | "unpack" | "disk" | "broken" | "denied" | "no-file" | "paused";
+
+/** Next to the program. The ACP wrapper starts only the file recorded here, and shows `message` while there is none. */
+export const PROGRAM_STATE_FILE = "bb-acp-state.json";
+
+interface ProgramState {
+  verified: { version: string; size: number; mtimeMs: number } | null;
+  message: string | null;
+}
 
 export interface InstallDeps {
   directory: string;
@@ -44,6 +54,9 @@ export interface InstallDeps {
   download?: (url: string, file: string, signal: AbortSignal) => Promise<void>;
   run?: (path: string) => Promise<RunOutcome>;
   delays?: number[];
+  move?: (from: string, to: string) => Promise<void>;
+  /** False: too many failed downloads lately. The program on disk is still checked; nothing is fetched. */
+  mayDownload?: boolean;
 }
 
 const DOWNLOAD_MS = 20 * 60_000;
@@ -190,13 +203,57 @@ async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
 }
 
-/** A running program can be renamed on Windows, not overwritten. Copies left by earlier updates go when nothing holds them. */
-async function putInPlace(fresh: string, path: string): Promise<void> {
-  const directory = join(path, "..");
-  if (await exists(path)) await rename(path, `${path}.old-${randomUUID().slice(0, 8)}`);
-  await rename(fresh, path);
-  for (const name of await readdir(directory)) {
+async function readProgramState(directory: string): Promise<ProgramState> {
+  try {
+    const saved = JSON.parse(await readFile(join(directory, PROGRAM_STATE_FILE), "utf8")) as Partial<ProgramState>;
+    return { verified: saved.verified ?? null, message: saved.message ?? null };
+  } catch {
+    return { verified: null, message: null };
+  }
+}
+
+async function writeProgramState(directory: string, state: ProgramState): Promise<void> {
+  const fresh = join(directory, `${PROGRAM_STATE_FILE}.${randomUUID().slice(0, 8)}.tmp`);
+  await writeFile(fresh, JSON.stringify(state), "utf8");
+  await rename(fresh, join(directory, PROGRAM_STATE_FILE));
+}
+
+async function markVerified(path: string, version: string): Promise<void> {
+  const directory = dirname(path);
+  const file = await stat(path);
+  await writeProgramState(directory, { verified: { version, size: file.size, mtimeMs: file.mtimeMs }, message: null });
+}
+
+/** What the wrapper tells the person while it has nothing to start. Null: the build's ordinary "not ready yet" text. */
+export async function setProgramMessage(directory: string, message: string | null): Promise<void> {
+  const state = await readProgramState(directory);
+  if (state.message !== message) await writeProgramState(directory, { ...state, message });
+}
+
+/** Copies left by earlier updates go when nothing holds them: a running program can be renamed on Windows, not deleted. */
+async function removeOldCopies(directory: string): Promise<void> {
+  const names = await readdir(directory).catch(() => [] as string[]);
+  for (const name of names) {
     if (name.includes(".old-")) await rm(join(directory, name), { force: true }).catch(() => undefined);
+  }
+}
+
+/** An update stopped between its two renames leaves no program, only the previous one under its old name. */
+async function recoverInterrupted(path: string): Promise<void> {
+  if (await exists(path)) return;
+  const directory = dirname(path);
+  const base = path.slice(directory.length + 1);
+  const names = await readdir(directory).catch(() => [] as string[]);
+  const previous = names.find((name) => name.startsWith(`${base}.old-`));
+  if (previous !== undefined) await rename(join(directory, previous), path);
+}
+
+/** Takes the unverified program off its path; a file that cannot be deleted right now is renamed instead. */
+async function removeUnverified(path: string): Promise<void> {
+  try {
+    await rm(path, { force: true });
+  } catch {
+    await rename(path, `${path}.old-${randomUUID().slice(0, 8)}`);
   }
 }
 
@@ -232,36 +289,69 @@ async function installFile(deps: InstallDeps, file: OpenCodeFile, path: string, 
     } catch (error) {
       return { state: "failed", reason: "unpack", path, detail: error instanceof Error ? error.message : String(error) };
     }
-    await putInPlace(fresh, path);
+    // The previous program stays until the new one has answered, and comes back on any failure.
+    const previous = (await exists(path)) ? `${path}.old-${randomUUID().slice(0, 8)}` : null;
+    if (previous !== null) await rename(path, previous);
+    try {
+      await (deps.move ?? rename)(fresh, path);
+    } catch (error) {
+      if (previous !== null) await rename(previous, path);
+      return { state: "failed", reason: "disk", path, detail: error instanceof Error ? error.message : String(error) };
+    }
     // Run at its final path: that is the path an IT rule or the person's request names.
     const ran = await run(path);
+    if (ran.kind === "ok" && ran.version === deps.version) {
+      await markVerified(path, ran.version);
+      await removeOldCopies(deps.directory);
+      return { state: "installed", path, version: ran.version };
+    }
+    if (previous !== null) {
+      await removeUnverified(path);
+      await rename(previous, path);
+    } else if (ran.kind !== "denied") {
+      await removeUnverified(path);
+    } // A refused program stays where the IT request says; without a record the wrapper does not start it.
     if (ran.kind === "unsupported-cpu") return "unsupported-cpu";
     if (ran.kind === "denied") return { state: "failed", reason: "denied", path, detail: ran.detail };
     if (ran.kind === "broken") return { state: "failed", reason: "broken", path, detail: ran.detail };
-    if (ran.version !== deps.version) return { state: "failed", reason: "broken", path, detail: `it reports ${ran.version}, the build has ${deps.version}` };
-    return { state: "installed", path, version: ran.version };
+    return { state: "failed", reason: "broken", path, detail: `it reports ${ran.version}, the build has ${deps.version}` };
   } finally {
     await rm(work, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-export async function ensureOpenCode(deps: InstallDeps): Promise<InstallOutcome> {
-  const platform = deps.platform ?? process.platform;
-  const path = openCodeProgram(deps.directory, platform);
+async function ensure(deps: InstallDeps, platform: NodeJS.Platform, path: string): Promise<InstallOutcome> {
   const run = deps.run ?? ((program: string) => runProgram(program, platform));
   await mkdir(deps.directory, { recursive: true });
+  await recoverInterrupted(path);
   if (await exists(path)) {
     const ran = await run(path);
-    if (ran.kind === "ok" && ran.version === deps.version) return { state: "current", path, version: ran.version };
+    if (ran.kind === "ok" && ran.version === deps.version) {
+      await markVerified(path, ran.version);
+      await removeOldCopies(deps.directory);
+      return { state: "current", path, version: ran.version };
+    }
     if (ran.kind === "denied") return { state: "failed", reason: "denied", path, detail: ran.detail };
   }
   const key = `${platform}-${deps.arch ?? process.arch}`;
   const file = deps.files[key];
   if (file === undefined) return { state: "failed", reason: "no-file", path, detail: key };
+  if (deps.mayDownload === false) return { state: "failed", reason: "paused", path, detail: key };
   const outcome = await installFile(deps, file, path, run);
   if (outcome !== "unsupported-cpu") return outcome;
   const baseline = deps.files[`${key}-baseline`];
   if (baseline === undefined) return { state: "failed", reason: "broken", path, detail: "the processor cannot run this build" };
   const second = await installFile(deps, baseline, path, run);
   return second === "unsupported-cpu" ? { state: "failed", reason: "broken", path, detail: "the processor cannot run this build" } : second;
+}
+
+/** Never throws: a disk that is full or read-only is a failure the sync reports and retries like any other. */
+export async function ensureOpenCode(deps: InstallDeps): Promise<InstallOutcome> {
+  const platform = deps.platform ?? process.platform;
+  const path = openCodeProgram(deps.directory, platform);
+  try {
+    return await ensure(deps, platform, path);
+  } catch (error) {
+    return { state: "failed", reason: "disk", path, detail: error instanceof Error ? error.message : String(error) };
+  }
 }

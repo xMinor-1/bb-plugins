@@ -37,7 +37,7 @@ import { checkOpenCodeConfiguration } from "./host/check-models.js";
 import { readSystemPolicy } from "./host/system-policy.js";
 import { lockState } from "./host/lock-state.js";
 import { findOpenCode } from "./host/find-opencode.js";
-import { ensureOpenCode, openCodeProgram, type InstallOutcome, type OpenCodeFile } from "./host/install-opencode.js";
+import { ensureOpenCode, openCodeProgram, setProgramMessage, type InstallOutcome, type OpenCodeFile } from "./host/install-opencode.js";
 import { ACP_PROVIDER_PLUGIN, agentEntry, agentRuntime, backupAgents, mergeAgents, writeShim, type AgentRuntime } from "./host/acp-agent.js";
 
 export { SELF_ID };
@@ -107,7 +107,13 @@ export interface ManagedState {
   installs: Record<string, PendingInstall>;
   /** bb agent providers Fleet Kit keeps turned off; one found on again was turned on by hand. */
   agents: { disabled: string[] };
+  /** Failed OpenCode downloads in a row, so that a broken link does not fetch a hundred megabytes every few minutes. */
+  opencodeFailures?: { version: string; count: number; at: number } | null;
 }
+
+/** After this many failures in a row: only the odd scheduled try, or a sync the person asks for. */
+const OPENCODE_MAX_FAILURES = 3;
+const OPENCODE_PAUSE_MS = 6 * 60 * 60_000;
 
 export const emptyManaged = (): ManagedState => ({
   plugins: {},
@@ -151,7 +157,7 @@ export interface SyncDeps {
   /** For tests. */
   now?: () => number;
   /** For tests. */
-  ensureOpenCode?: (files: Record<string, OpenCodeFile>, directory: string, version: string) => Promise<InstallOutcome>;
+  ensureOpenCode?: (files: Record<string, OpenCodeFile>, directory: string, version: string, mayDownload: boolean) => Promise<InstallOutcome>;
   /** For tests. */
   agentRuntime?: AgentRuntime;
   /** For tests: how long to wait for one install. */
@@ -230,6 +236,7 @@ function loadManaged(saved: ManagedState): ManagedState {
     sourceChanges: copy.sourceChanges ?? {},
     installs: copy.installs ?? {},
     agents: { disabled: copy.agents?.disabled ?? [] },
+    opencodeFailures: copy.opencodeFailures ?? null,
   };
 }
 
@@ -238,6 +245,8 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
   const steps = new Steps();
   const managed = loadManaged(deps.managed);
   const notices: Notice[] = [];
+  const retryOpenCode = { soon: false };
+  let opencode: OpenCodeStatus | null = null;
   let fleetKitOutdated = false;
   const finish = (manifest: Manifest | null, opencode: OpenCodeStatus | null, selfUpdate = false): SyncOutcome => ({
     report: {
@@ -254,7 +263,7 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
     opencode,
     notices,
     selfUpdate,
-    retrySoon: opencode?.install?.state === "failed",
+    retrySoon: retryOpenCode.soon,
   });
 
   // ------------------------------------------------------------ manifest
@@ -345,12 +354,7 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
 
   // ------------------------------------------------------------ OpenCode
   // Its configuration is written before OpenCode can start, so there is no moment with another provider's model on the list.
-  let opencode: OpenCodeStatus | null = null;
-  try {
-    opencode = await syncOpenCode(deps, manifest, managed, steps);
-  } catch (error) {
-    steps.add("opencode", "OpenCode", "error", errorText(error));
-  }
+  opencode = await syncOpenCode(deps, manifest, managed, steps, trigger, retryOpenCode);
 
   const earlyAgents = new Steps();
   try {
@@ -1094,9 +1098,16 @@ function installStatus(outcome: InstallOutcome, steps: Steps): NonNullable<OpenC
         ? say("opencodeIntegrity")
         : outcome.reason === "no-file"
           ? say("opencodeNoFile", { key: outcome.detail })
-          : say("opencodeInstallFailed", { detail: outcome.detail });
+          : outcome.reason === "paused"
+            ? say("opencodeInstallPaused")
+            : say("opencodeInstallFailed", { detail: outcome.detail });
   steps.add("opencode", "OpenCode", "error", said);
   return { state: outcome.reason === "denied" ? "denied" : "failed", path: outcome.path, ...said };
+}
+
+function deniedText(manifest: Manifest, program: string): string {
+  const own = manifest.opencodeInstall?.deniedMessage;
+  return own !== undefined ? own.replaceAll("{path}", program) : say("opencodeDenied", { path: program, detail: "" }).message;
 }
 
 /** bb's agent `opencode`, set before the program exists: a turn before that gets the not-ready text instead of an error. */
@@ -1104,6 +1115,7 @@ async function registerAgent(deps: SyncDeps, manifest: Manifest, directory: stri
   const shim = await writeShim(directory);
   const ours = agentEntry(deps.agentRuntime ?? agentRuntime(), shim, program, {
     notReady: manifest.opencodeInstall?.notReadyMessage ?? say("opencodeNotReady").message,
+    denied: deniedText(manifest, program),
   });
   const settings = await within(deps.sdk.plugins.getSettings({ pluginId: ACP_PROVIDER_PLUGIN, signal: deps.signal }), CALL_MS, "Reading bb's agents");
   const current = String(settings.values?.customAgents ?? "");
@@ -1122,7 +1134,7 @@ async function registerAgent(deps: SyncDeps, manifest: Manifest, directory: stri
   }
 }
 
-async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps): Promise<OpenCodeStatus> {
+async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, trigger: SyncReport["trigger"], retry: { soon: boolean }): Promise<OpenCodeStatus> {
   const status: OpenCodeStatus = {
     installed: false,
     version: null,
@@ -1133,6 +1145,23 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     defaultModel: null,
     lock: null,
   };
+  const installDir = deps.settings.opencodeInstallDir ?? "";
+  try {
+    await configureOpenCode(deps, manifest, managed, steps, status, trigger, retry);
+  } catch (error) {
+    // Whatever the disk or bb did: the sync goes on with the plugins, and the person's install says what happened.
+    const said = say("opencodeInstallFailed", { detail: errorText(error) });
+    steps.add("opencode", "OpenCode", "error", said);
+    if (installDir !== "" && manifest.opencodeInstall !== undefined) {
+      status.install = { state: "failed", path: openCodeProgram(installDir), ...said };
+      retry.soon = true;
+      await deps.onOpenCode?.(status);
+    }
+  }
+  return status;
+}
+
+async function configureOpenCode(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, status: OpenCodeStatus, trigger: SyncReport["trigger"], retry: { soon: boolean }): Promise<void> {
   const installDir = deps.settings.opencodeInstallDir ?? "";
   const own = installDir !== "" && manifest.opencodeInstall !== undefined;
   // A machine that gets Fleet Kit's own OpenCode never runs another one, whatever is on PATH.
@@ -1145,11 +1174,11 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
       major = openCodeMajor(binary.version);
     } catch {
       steps.add("opencode", "OpenCode", "warning", say("opencodeUnsupported", { version: String(binary.version) }));
-      return status;
+      return;
     }
     if (major !== 2) {
       steps.add("opencode", "OpenCode", "warning", say("opencodeTooOld", { version: String(binary.version) }));
-      return status;
+      return;
     }
   }
 
@@ -1163,7 +1192,7 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     });
   } catch (error) {
     steps.add("opencode", "opencode.json", "error", errorText(error));
-    return status;
+    return;
   }
 
   // The config file moved (the directory setting changed): clean the old one first.
@@ -1204,7 +1233,13 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     const lock = await lockState(location.configFile).catch(() => null);
     if (lock) status.lock = lock;
     steps.add("opencode", location.configFile, "error", errorText(error));
-    return status;
+    if (own) {
+      // No OpenCode without its limits. The installer and the wrapper show this instead of a finished install.
+      status.install = { state: "failed", path: openCodeProgram(installDir), ...say("opencodeConfigFailed", { error: errorText(error) }) };
+      retry.soon = true;
+      await deps.onOpenCode?.(status);
+    }
+    return;
   }
 
   try {
@@ -1224,18 +1259,34 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     }
     await deps.onOpenCode?.(status);
     const files = manifest.opencodeInstall!.files as Record<string, OpenCodeFile>;
+    const version = manifest.install.opencode;
+    const now = (deps.now ?? Date.now)();
+    const before = managed.opencodeFailures?.version === version ? managed.opencodeFailures : null;
+    const mayDownload = trigger === "manual" || before === null || before.count < OPENCODE_MAX_FAILURES || now - before.at >= OPENCODE_PAUSE_MS;
     const outcome = deps.ensureOpenCode
-      ? await deps.ensureOpenCode(files, installDir, manifest.install.opencode)
-      : await ensureOpenCode({ directory: installDir, version: manifest.install.opencode, files, signal: deps.signal });
+      ? await deps.ensureOpenCode(files, installDir, version, mayDownload)
+      : await ensureOpenCode({ directory: installDir, version, files, signal: deps.signal, mayDownload });
     status.install = installStatus(outcome, steps);
+    let message: string | null = null;
+    if (outcome.state === "failed") {
+      const passing = outcome.reason === "download" || outcome.reason === "integrity" || outcome.reason === "unpack" || outcome.reason === "disk";
+      const count = passing ? (before?.count ?? 0) + 1 : (before?.count ?? 0);
+      if (passing) managed.opencodeFailures = { version, count, at: now };
+      retry.soon = passing && count < OPENCODE_MAX_FAILURES;
+      if (outcome.reason === "denied") message = deniedText(manifest, outcome.path);
+      else if (!retry.soon) message = manifest.opencodeInstall?.failedMessage ?? say("opencodeFailedForGood").message;
+    } else {
+      managed.opencodeFailures = null;
+    }
+    await setProgramMessage(installDir, message).catch(() => undefined);
     await deps.onOpenCode?.(status);
-    if (outcome.state === "failed") return status;
+    if (outcome.state === "failed") return;
     status.installed = true;
     status.version = outcome.version;
     binary = { command: [outcome.path], version: outcome.version };
   } else if (binary === null) {
     steps.add("opencode", "OpenCode", "warning", say("opencodeMissing"));
-    return status;
+    return;
   }
 
   // Threads get the directory through Fleet Kit's env contribution, but bb
@@ -1278,7 +1329,7 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
   } finally {
     await rm(probe, { recursive: true, force: true });
   }
-  return status;
+  return;
 }
 
 function sameDirectory(a: string | undefined, b: string): boolean {

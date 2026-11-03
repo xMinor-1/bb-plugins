@@ -179,6 +179,10 @@ const rootShape = {
       files: z.record(z.string().regex(/^[a-z0-9]+-[a-z0-9]+(-baseline)?$/), opencodeFile),
       /** What an agent turn answers until OpenCode is in place; a build sets it in its own language. */
       notReadyMessage: z.string().min(1).optional(),
+      /** Shown in a turn when the system refuses to start OpenCode; {path} is the program. */
+      deniedMessage: z.string().min(1).optional(),
+      /** Shown in a turn when installing keeps failing and Fleet Kit has stopped trying for now. */
+      failedMessage: z.string().min(1).optional(),
     })
     .strict()
     .optional(),

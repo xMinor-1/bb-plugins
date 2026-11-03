@@ -19,7 +19,7 @@ const SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"];
 const SCAN_MAX = 1 << 20; // initialize and its answer are short; longer lines are not parsed
 const CLOSE_WAIT_MS = 2000;
 const HOLD_MS = Number(process.env.ACP_SHIM_HOLD_MS) || 12000; // MCP wait limit; only tests change it
-const HOLD_POLL_MS = 150;
+const HOLD_POLL_MS = Number(process.env.ACP_SHIM_HOLD_POLL_MS) || 150; // only tests change it
 const KEEP_IMAGE = process.env.ACP_SHIM_KEEP_IMAGE === "1"; // only the MCP wait, images as they were
 const [name, ...args] = process.argv.slice(2);
 
@@ -27,9 +27,30 @@ const [name, ...args] = process.argv.slice(2);
 // folder bb looks at first and relative PATH items are skipped: OpenCode is never started from a project folder. Not
 // found is null rather than the bare name, which process creation on Windows would look up in the current folder.
 // A path that names a missing file is also null: Fleet Kit may still be installing it.
+function programState(file) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(path.dirname(file), "bb-acp-state.json"), "utf8"));
+  } catch {
+    return {};
+  }
+}
+// Fleet Kit's own OpenCode (it sets ACP_SHIM_NOT_READY): only the file that passed its version check, not one still being
+// checked or left by an update that failed.
+function isVerified(file) {
+  if (!process.env.ACP_SHIM_NOT_READY) return true;
+  const verified = programState(file).verified;
+  if (!verified) return false;
+  try {
+    const stat = fs.statSync(file);
+    return stat.size === verified.size && stat.mtimeMs === verified.mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
 function resolveBin(cmd) {
   if (!cmd) return cmd;
-  if ((isWin ? /[\\/]/ : /\//).test(cmd)) return fs.existsSync(cmd) ? cmd : null;
+  if ((isWin ? /[\\/]/ : /\//).test(cmd)) return fs.existsSync(cmd) && isVerified(cmd) ? cmd : null;
   const exts = isWin ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter((ext) => /^\.(com|exe|bat|cmd)$/i.test(ext)) : [""];
   for (const entry of (process.env.PATH || "").split(isWin ? ";" : ":")) {
     const dir = isWin ? entry.replace(/^"(.*)"$/, "$1") : entry;
@@ -69,7 +90,9 @@ function serveNotReady(text) {
     } else if (method === "session/new") {
       send({ id, result: { sessionId: `not-ready-${process.pid}-${Date.now()}` } });
     } else if (method === "session/prompt") {
-      send({ method: "session/update", params: { sessionId: params?.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } } });
+      // What Fleet Kit found out since this process started: a refusal, or that it has stopped trying.
+      const said = programState(name).message || text;
+      send({ method: "session/update", params: { sessionId: params?.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: said } } } });
       send({ id, result: { stopReason: "end_turn" } });
       if (resolveBin(name)) process.stdout.write("", () => process.exit(0));
     } else if (typeof method === "string" && method.startsWith("session/set_")) {
@@ -125,6 +148,10 @@ try {
 } catch (error) {
   // On Windows a refused start throws here instead of emitting "error".
   process.stderr.write(`bb-acp-shim: ${error.message}\n`);
+  if (process.env.ACP_SHIM_DENIED) {
+    serveNotReady(process.env.ACP_SHIM_DENIED);
+    return;
+  }
   process.exit(127);
 }
 const pending = new Set(); // ids of bb's initialize requests still without an answer
@@ -400,6 +427,15 @@ for (const sig of SIGNALS) {
 }
 child.on("error", (error) => {
   process.stderr.write(`bb-acp-shim: ${error.message}\n`);
+  if (process.env.ACP_SHIM_DENIED && !finished) {
+    // A refused start comes before anything of bb's has been read: from here on this process answers bb.
+    finished = true;
+    clearTimeout(holdTimer);
+    process.stdin.removeAllListeners("data");
+    process.stdin.removeAllListeners("end");
+    serveNotReady(process.env.ACP_SHIM_DENIED);
+    return;
+  }
   process.exit(127);
 });
 // Exit the way the agent did, with its code or signal, after bb got all the output.

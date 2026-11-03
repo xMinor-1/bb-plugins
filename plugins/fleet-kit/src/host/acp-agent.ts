@@ -18,8 +18,8 @@ export function agentRuntime(): AgentRuntime {
   return { execPath: process.execPath, electron: process.versions.electron !== undefined };
 }
 
-export function agentEntry(runtime: AgentRuntime, shim: string, opencode: string, messages: { notReady: string }) {
-  const env: Record<string, string> = { ACP_SHIM_NOT_READY: messages.notReady };
+export function agentEntry(runtime: AgentRuntime, shim: string, opencode: string, messages: { notReady: string; denied: string }) {
+  const env: Record<string, string> = { ACP_SHIM_NOT_READY: messages.notReady, ACP_SHIM_DENIED: messages.denied };
   if (runtime.electron) env.ELECTRON_RUN_AS_NODE = "1";
   return {
     id: "opencode",
