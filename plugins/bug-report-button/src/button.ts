@@ -17,7 +17,7 @@ export const BUG_SVG =
 const SIZE_PX = 28;
 const BUTTON_CSS = [
   "position:fixed",
-  `top:calc((var(--bb-app-chrome-row-height,48px) - ${SIZE_PX}px) / 2 + var(--bb-window-frame-top,0px))`,
+  `top:calc((var(--bb-app-chrome-row-height,48px) - ${SIZE_PX}px) / 2)`,
   "left:min(calc(50% + 190px),calc(100% - 120px))",
   "z-index:2147483000",
   `width:${SIZE_PX}px`,
