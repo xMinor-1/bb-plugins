@@ -182,7 +182,13 @@ class Steps {
   }
 }
 
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 400);
+// fetch only says "fetch failed": the reason (a certificate, a refused connection) is in its cause.
+const errorText = (error: unknown) => {
+  const text = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
+  const cause = error instanceof Error ? (error.cause as { code?: unknown; message?: unknown } | undefined) : undefined;
+  const reason = cause?.code ?? cause?.message;
+  return (typeof reason === "string" && reason !== "" ? `${text} (${reason})` : text).slice(0, 300);
+};
 
 // A hung bb call must not keep the sync (and the panel's "Syncing…") forever.
 const CALL_MS = 60_000;
