@@ -1,7 +1,7 @@
 // bb-plugin-bug-report-button — server entry. It declares the settings and hands them to the page, which does the work.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { DEFAULT_LABEL, MAX_LABEL_LENGTH, readConfig, readFormUrl } from "./src/button";
+import { DEFAULT_LABEL, MAX_LABEL_LENGTH, readFormUrl } from "./src/button";
 
 export default function bugReportButton(bb: BbPluginApi) {
   const settings = bb.settings.define({
@@ -20,5 +20,9 @@ export default function bugReportButton(bb: BbPluginApi) {
       default: "",
     },
   });
-  bb.http.route("GET", "/config", async (context) => context.json(readConfig(await settings.get())));
+  // The raw settings: the page parses them with readConfig.
+  bb.http.route("GET", "/config", async (context) => {
+    const { formUrl, label } = await settings.get();
+    return context.json({ formUrl, label });
+  });
 }

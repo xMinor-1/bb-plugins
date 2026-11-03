@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import bugReportButton from "../server";
 import { BUG_SVG, BUTTON_ID, DEFAULT_LABEL, readConfig, readFormUrl, showButton, watchButton } from "../src/button";
 
 const FORM = "https://forms.example.test/report?team=7";
@@ -84,6 +85,19 @@ describe("button", () => {
 });
 
 describe("watching settings", () => {
+  it("shows the button from what the server route really answers", async () => {
+    let route = (_context: { json: (body: unknown) => unknown }): unknown => undefined;
+    const api = {
+      settings: { define: () => ({ get: async () => ({ formUrl: FORM, label: "Send it" }) }) },
+      http: { route: (_method: string, _path: string, handler: typeof route) => (route = handler) },
+    };
+    bugReportButton(api as unknown as Parameters<typeof bugReportButton>[0]);
+    watch(async () => (await route({ json: (body) => body })) as Record<string, unknown>);
+    await settle();
+    expect(button()?.getAttribute("href")).toBe(FORM);
+    expect(button()?.getAttribute("aria-label")).toBe("Send it");
+  });
+
   it("shows nothing while the address is empty", async () => {
     const load = vi.fn(async () => ({ formUrl: "", label: "Send it" }));
     watch(load);
