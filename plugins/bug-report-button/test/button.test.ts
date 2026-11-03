@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadPluginApp, mountPluginContentScripts } from "@get-bb/plugin-sdk/testing/app";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import bugReportButton from "../server";
-import { BUG_SVG, BUTTON_ID, DEFAULT_LABEL, readConfig, readFormUrl, showButton, watchButton } from "../src/button";
+import { BUG_SVG, BUTTON_ID, DEFAULT_LABEL, MAX_LABEL_LENGTH, readConfig, readFormUrl, showButton, watchButton } from "../src/button";
 
 const FORM = "https://forms.example.test/report?team=7";
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -163,5 +164,63 @@ describe("watching settings", () => {
     answer({ formUrl: FORM });
     await settle();
     expect(button()).toBeNull();
+  });
+});
+
+describe("server settings", () => {
+  type Schema = { safeParse: (value: unknown) => { success: boolean } };
+  const schemaOf = (name: string) => {
+    let descriptors: Record<string, { experimental_schema: Schema }> = {};
+    const api = {
+      settings: {
+        define: (value: typeof descriptors) => {
+          descriptors = value;
+          return { get: async () => ({}) };
+        },
+      },
+      http: { route: () => {} },
+    };
+    bugReportButton(api as unknown as Parameters<typeof bugReportButton>[0]);
+    return descriptors[name]!.experimental_schema;
+  };
+
+  it("takes an empty or http(s) form address and refuses the rest", () => {
+    const schema = schemaOf("formUrl");
+    for (const value of ["", "   ", FORM, "http://localhost:9000/form"]) expect(schema.safeParse(value).success, value).toBe(true);
+    for (const value of ["javascript:alert(1)", "data:text/html,x", "file:///etc/passwd", "forms.example.test", `https://a.test/${"x".repeat(2048)}`, 7]) {
+      expect(schema.safeParse(value).success, String(value).slice(0, 40)).toBe(false);
+    }
+  });
+
+  it("limits the caption length", () => {
+    const schema = schemaOf("label");
+    expect(schema.safeParse("x".repeat(MAX_LABEL_LENGTH)).success).toBe(true);
+    expect(schema.safeParse("x".repeat(MAX_LABEL_LENGTH + 1)).success).toBe(false);
+  });
+});
+
+describe("plugin app", () => {
+  const mount = async (response: () => Response) => {
+    const fetchMock = vi.fn(async (_url: string) => response());
+    vi.stubGlobal("fetch", fetchMock);
+    const app = await loadPluginApp(() => import("../app"));
+    const mounted = await mountPluginContentScripts(app, { pluginId: "bug-report-button", generation: 1 });
+    await settle();
+    return { fetchMock, mounted };
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("mounts, asks the plugin's own route, shows the button and removes it on dispose", async () => {
+    const { fetchMock, mounted } = await mount(() => Response.json({ formUrl: FORM, label: "Send it" }));
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/plugins/bug-report-button/http/config");
+    expect(button()?.getAttribute("href")).toBe(FORM);
+    await mounted.lifecycle.dispose();
+    expect(button()).toBeNull();
+  });
+
+  it("shows nothing when the route fails", async () => {
+    const { mounted } = await mount(() => Response.json({ formUrl: FORM }, { status: 500 }));
+    expect(button()).toBeNull();
+    await mounted.lifecycle.dispose();
   });
 });
