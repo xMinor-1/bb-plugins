@@ -37,6 +37,8 @@ import { checkOpenCodeConfiguration } from "./host/check-models.js";
 import { readSystemPolicy } from "./host/system-policy.js";
 import { lockState } from "./host/lock-state.js";
 import { findOpenCode } from "./host/find-opencode.js";
+import { ensureOpenCode, openCodeProgram, type InstallOutcome, type OpenCodeFile } from "./host/install-opencode.js";
+import { ACP_PROVIDER_PLUGIN, agentEntry, agentRuntime, backupAgents, mergeAgents, writeShim, type AgentRuntime } from "./host/acp-agent.js";
 
 export { SELF_ID };
 
@@ -47,6 +49,8 @@ export interface FleetKitSettings {
   manifestToken: string | undefined;
   syncIntervalMinutes: number;
   opencodeConfigDir: string;
+  /** Fleet Kit installs OpenCode here and registers it as bb's agent. Empty: it only looks for an OpenCode on PATH. */
+  opencodeInstallDir?: string | undefined;
   /** Set by hand on a test machine: path:, npm: and local git sources, loopback gateways. */
   allowDevSources: boolean;
   paused: boolean;
@@ -140,8 +144,14 @@ export interface SyncDeps {
    * while that update is still going neither counts a try nor starts another.
    */
   selfUpdateStartedAt?: number | undefined;
+  /** Called as soon as the state of the OpenCode install changes: an install takes minutes and the panel shows it. */
+  onOpenCode?: ((status: OpenCodeStatus) => Promise<void>) | undefined;
   /** For tests. */
   now?: () => number;
+  /** For tests. */
+  ensureOpenCode?: (files: Record<string, OpenCodeFile>, directory: string, version: string) => Promise<InstallOutcome>;
+  /** For tests. */
+  agentRuntime?: AgentRuntime;
   /** For tests: how long to wait for one install. */
   installMs?: number;
 }
@@ -154,10 +164,18 @@ export interface SyncOutcome {
   notices: Notice[];
   /** Start Fleet Kit's own update after the outcome is saved. */
   selfUpdate: boolean;
+  /** The OpenCode install failed for a reason that may pass: try again before the next scheduled sync. */
+  retrySoon: boolean;
 }
+
+/** Early-pass warnings that only mean a plugin is not installed yet; the final pass reports what is still true. */
+const NOT_YET = new Set(["aiServiceMissing", "agentUnavailable", "agentPluginOff", "agentAllowedMissing", "agentsNoneHere", "agentsNoneReady"]);
 
 class Steps {
   readonly list: Step[] = [];
+  keepChanges(early: Steps) {
+    for (const step of early.list) if (step.outcome !== "ok" && !NOT_YET.has(step.code ?? "")) this.list.push(step);
+  }
   add(area: Step["area"], item: string, outcome: Step["outcome"], text: Said | string) {
     const said = typeof text === "string" ? say("raw", { text: text.slice(0, 600) }) : text;
     this.list.push({ area, item, outcome, code: said.code, params: said.params, message: said.message.slice(0, 600) });
@@ -228,6 +246,7 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
     opencode,
     notices,
     selfUpdate,
+    retrySoon: opencode?.install?.state === "failed",
   });
 
   // ------------------------------------------------------------ manifest
@@ -304,6 +323,34 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
   // --------------------------------------------------------- bb settings
   await applyBbSettings(deps, manifest, steps);
 
+  // ---------------------------------------------- first, what limits agents
+  // Before anything takes minutes: no cloud AI service, no other agent and no outside model while the plugins install.
+  // A plugin not installed yet may be what a choice names, so what these passes cannot do yet is reported by the final ones.
+  const early = new Steps();
+  try {
+    await applyAiServices(deps, manifest, early);
+  } catch (error) {
+    early.add("ai", "ai-services", "error", errorText(error));
+  }
+  steps.keepChanges(early);
+
+  // ------------------------------------------------------------ OpenCode
+  // Its configuration is written before OpenCode can start, so there is no moment with another provider's model on the list.
+  let opencode: OpenCodeStatus | null = null;
+  try {
+    opencode = await syncOpenCode(deps, manifest, managed, steps);
+  } catch (error) {
+    steps.add("opencode", "OpenCode", "error", errorText(error));
+  }
+
+  const earlyAgents = new Steps();
+  try {
+    await applyAgents(deps, manifest, managed, earlyAgents, notices, { turnOn: false });
+  } catch (error) {
+    earlyAgents.add("agent", "agents", "error", errorText(error));
+  }
+  steps.keepChanges(earlyAgents);
+
   // ------------------------------------------------------------- plugins
   try {
     await syncPlugins(deps, manifest, managed, steps, notices);
@@ -322,14 +369,6 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
     await applyAgents(deps, manifest, managed, steps, notices);
   } catch (error) {
     steps.add("agent", "agents", "error", errorText(error));
-  }
-
-  // ------------------------------------------------------------ OpenCode
-  let opencode: OpenCodeStatus | null = null;
-  try {
-    opencode = await syncOpenCode(deps, manifest, managed, steps);
-  } catch (error) {
-    steps.add("opencode", "OpenCode", "error", errorText(error));
   }
 
   // -------------------------------------------------------------- secrets
@@ -814,7 +853,7 @@ function agentReady(entry: AgentEntry): boolean {
  * working agent. An allowed agent that is not ready is not turned on either
  * (bb refuses it), so a sync never repeats a call bb already refused.
  */
-async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, notices: Notice[]) {
+async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, notices: Notice[], options: { turnOn: boolean } = { turnOn: true }) {
   const policy = manifest.agents;
   if (policy === undefined) return;
   let catalog = await within(deps.sdk.providers.catalog(), CALL_MS, "Listing bb's agents");
@@ -832,7 +871,7 @@ async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedS
       steps.add("agent", entry.displayName, "warning", say(entry.pluginEnabled ? "agentUnavailable" : "agentPluginOff"));
       continue;
     }
-    if (entry.enabled) continue;
+    if (entry.enabled || !options.turnOn) continue;
     try {
       catalog = await within(deps.sdk.providers.setEnabled({ providerId: entry.id, enabled: true }), CALL_MS, "Turning the agent on");
       steps.add("agent", entry.displayName, "changed", say("agentEnabled"));
@@ -1032,6 +1071,48 @@ async function applyPluginConfig(deps: SyncDeps, manifest: Manifest, entry: Mani
   steps.add("plugin", entry.id, "changed", say("settingsApplied", { keys: Object.keys(changes).join(", ") }));
 }
 
+/** The person's status line and the sync step for an install's outcome. */
+function installStatus(outcome: InstallOutcome, steps: Steps): NonNullable<OpenCodeStatus["install"]> {
+  if (outcome.state !== "failed") {
+    const said = say("opencodeReady", { version: outcome.version });
+    if (outcome.state === "installed") steps.add("opencode", "OpenCode", "changed", said);
+    return { state: "ready", path: outcome.path, ...said };
+  }
+  const said =
+    outcome.reason === "denied"
+      ? say("opencodeDenied", { path: outcome.path, detail: outcome.detail })
+      : outcome.reason === "integrity"
+        ? say("opencodeIntegrity")
+        : outcome.reason === "no-file"
+          ? say("opencodeNoFile", { key: outcome.detail })
+          : say("opencodeInstallFailed", { detail: outcome.detail });
+  steps.add("opencode", "OpenCode", "error", said);
+  return { state: outcome.reason === "denied" ? "denied" : "failed", path: outcome.path, ...said };
+}
+
+/** bb's agent `opencode`, set before the program exists: a turn before that gets the not-ready text instead of an error. */
+async function registerAgent(deps: SyncDeps, manifest: Manifest, directory: string, program: string, steps: Steps) {
+  const shim = await writeShim(directory);
+  const ours = agentEntry(deps.agentRuntime ?? agentRuntime(), shim, program, {
+    notReady: manifest.opencodeInstall?.notReadyMessage ?? say("opencodeNotReady").message,
+  });
+  const settings = await within(deps.sdk.plugins.getSettings({ pluginId: ACP_PROVIDER_PLUGIN, signal: deps.signal }), CALL_MS, "Reading bb's agents");
+  const current = String(settings.values?.customAgents ?? "");
+  const merged = mergeAgents(current, ours);
+  if (merged.value === current) return;
+  const backup = current.trim() !== "" ? await backupAgents(directory, current, new Date((deps.now ?? Date.now)())) : null;
+  const save = (value: string) => within(deps.sdk.plugins.updateSettings({ pluginId: ACP_PROVIDER_PLUGIN, values: { customAgents: value } }), CALL_MS, "Saving bb's agents");
+  try {
+    await save(merged.value);
+    if (!merged.kept) steps.add("opencode", "agent", "warning", say("opencodeAgentReset", { backup: backup ?? "" }));
+  } catch (error) {
+    // bb refused the list with the person's other agents: OpenCode's entry alone keeps the build working.
+    if (!merged.kept || merged.value === JSON.stringify([ours])) throw error;
+    await save(JSON.stringify([ours]));
+    steps.add("opencode", "agent", "warning", say("opencodeAgentReset", { backup: backup ?? "" }));
+  }
+}
+
 async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps): Promise<OpenCodeStatus> {
   const status: OpenCodeStatus = {
     installed: false,
@@ -1043,23 +1124,24 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     defaultModel: null,
     lock: null,
   };
-  const binary = await findOpenCode(deps.environment);
-  if (binary === null) {
-    steps.add("opencode", "OpenCode", "warning", say("opencodeMissing"));
-    return status;
-  }
-  status.installed = true;
-  status.version = binary.version;
-  let major: number;
-  try {
-    major = openCodeMajor(binary.version);
-  } catch {
-    steps.add("opencode", "OpenCode", "warning", say("opencodeUnsupported", { version: String(binary.version) }));
-    return status;
-  }
-  if (major !== 2) {
-    steps.add("opencode", "OpenCode", "warning", say("opencodeTooOld", { version: String(binary.version) }));
-    return status;
+  const installDir = deps.settings.opencodeInstallDir ?? "";
+  const own = installDir !== "" && manifest.opencodeInstall !== undefined;
+  // A machine that gets Fleet Kit's own OpenCode never runs another one, whatever is on PATH.
+  let binary = own ? null : await findOpenCode(deps.environment);
+  if (binary !== null) {
+    status.installed = true;
+    status.version = binary.version;
+    let major: number;
+    try {
+      major = openCodeMajor(binary.version);
+    } catch {
+      steps.add("opencode", "OpenCode", "warning", say("opencodeUnsupported", { version: String(binary.version) }));
+      return status;
+    }
+    if (major !== 2) {
+      steps.add("opencode", "OpenCode", "warning", say("opencodeTooOld", { version: String(binary.version) }));
+      return status;
+    }
   }
 
   const location = resolveOpenCodeLocation({ opencodeConfigDir: deps.settings.opencodeConfigDir, environment: deps.environment });
@@ -1123,6 +1205,30 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
     steps.add("opencode", "secret resolver", "error", errorText(error));
   }
 
+  if (own) {
+    const program = openCodeProgram(installDir);
+    status.install = { state: "installing", path: program, ...say("opencodeInstalling", { version: manifest.install.opencode }) };
+    try {
+      await registerAgent(deps, manifest, installDir, program, steps);
+    } catch (error) {
+      steps.add("opencode", "agent", "error", say("opencodeAgentFailed", { error: errorText(error) }));
+    }
+    await deps.onOpenCode?.(status);
+    const files = manifest.opencodeInstall!.files as Record<string, OpenCodeFile>;
+    const outcome = deps.ensureOpenCode
+      ? await deps.ensureOpenCode(files, installDir, manifest.install.opencode)
+      : await ensureOpenCode({ directory: installDir, version: manifest.install.opencode, files, signal: deps.signal });
+    status.install = installStatus(outcome, steps);
+    await deps.onOpenCode?.(status);
+    if (outcome.state === "failed") return status;
+    status.installed = true;
+    status.version = outcome.version;
+    binary = { command: [outcome.path], version: outcome.version };
+  } else if (binary === null) {
+    steps.add("opencode", "OpenCode", "warning", say("opencodeMissing"));
+    return status;
+  }
+
   // Threads get the directory through Fleet Kit's env contribution, but bb
   // builds its model list without it (bb 0.48): that list shows the build's
   // models only when bb itself runs with the same OPENCODE_CONFIG_DIR.
@@ -1145,7 +1251,7 @@ async function syncOpenCode(deps: SyncDeps, manifest: Manifest, managed: Managed
       projectDirectory: probe,
       environment: deps.environment,
       opencodeConfigDir: deps.settings.opencodeConfigDir,
-      command: binary.command,
+      command: binary!.command,
       timeoutMs: 60_000,
       signal: deps.signal,
     });

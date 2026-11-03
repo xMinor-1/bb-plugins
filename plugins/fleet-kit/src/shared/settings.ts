@@ -9,6 +9,8 @@ export const opencodeConfigDirSchema = z.string().max(4000).refine((value) =>
   value === "" || (!/[\x00-\x1f\x7f]/.test(value) && /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)/.test(value)),
   "Use an absolute directory path, or leave empty to use the ACP environment default.",
 );
+// Fleet Kit's own: not in the Qlik copy.
+export const opencodeInstallDirSchema = opencodeConfigDirSchema;
 export function parseAllowedProviders(value: string): string[] {
   return [...new Set(allowedProvidersSchema.parse(value).trim().split(/[\s,]+/).filter(Boolean))];
 }

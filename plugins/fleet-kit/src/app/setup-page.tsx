@@ -11,6 +11,7 @@ import type { Setup, SetupMark, SetupStep } from "../../contract";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { render } from "../shared/texts.js";
 import { defineMessages, LanguageSwitch, pluralRu, useLang, useMessages } from "@/lib/i18n";
 import { errorText, Frame, SecretInput, STATUS_CHANNEL, useSavedIn } from "./parts";
 
@@ -273,6 +274,7 @@ function StepCard({ step, secretStore, onMark, onSecret }: {
 }
 
 export function SetupPage() {
+  const pageLang = useLang();
   const { rpc, setup, error, setError, checking, refetch } = useSetup(PAGE_POLL_MS);
   const t = useMessages(messages);
   const navigate = useBbNavigate();
@@ -294,6 +296,12 @@ export function SetupPage() {
       </div>
       <p className="mt-1 text-xs text-muted-foreground">{t.intro}</p>
       {error ? <p role="alert" className="mt-3 text-sm text-destructive">{error}</p> : null}
+
+      {setup?.opencodeInstall && setup.opencodeInstall.state !== "ready" ? (
+        <p role={setup.opencodeInstall.state === "installing" ? "status" : "alert"} className={cn("mt-3 rounded-lg border px-4 py-2.5 text-sm", setup.opencodeInstall.state === "installing" ? "border-border" : "border-destructive/50 text-destructive")}>
+          {render(pageLang, setup.opencodeInstall)}
+        </p>
+      ) : null}
 
       {setup === null ? (
         error ? null : <p className="mt-4 text-sm text-muted-foreground">{t.loading}</p>

@@ -1,0 +1,260 @@
+// Puts the OpenCode version the manifest names on this machine: downloads the package file the manifest lists, checks
+// it against the manifest's integrity hash, takes the one program out of it and runs it once.
+//
+// When the system refuses to run the program, that is an answer, not a failure to work around: the sync reports it with
+// the program's path and a text for an IT request, and does not try any other way of starting it.
+import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
+import { chmod, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
+import { normalizeVersion } from "./find-opencode.js";
+
+export interface OpenCodeFile {
+  url: string;
+  /** Subresource integrity of the file: sha512-<base64>. */
+  integrity: string;
+  /** Path of the program inside the .tgz. */
+  entry: string;
+}
+
+export type RunOutcome =
+  | { kind: "ok"; version: string }
+  /** The system would not start it, or stopped it at once. */
+  | { kind: "denied"; detail: string }
+  /** Started and failed on this processor: a build without AVX2 may work. */
+  | { kind: "unsupported-cpu"; detail: string }
+  | { kind: "broken"; detail: string };
+
+export type InstallOutcome =
+  | { state: "current" | "installed"; path: string; version: string }
+  | { state: "failed"; reason: "download" | "integrity" | "unpack" | "broken" | "denied" | "no-file"; path: string; detail: string };
+
+export interface InstallDeps {
+  directory: string;
+  version: string;
+  files: Record<string, OpenCodeFile>;
+  platform?: NodeJS.Platform;
+  arch?: string;
+  signal: AbortSignal;
+  /** For tests. */
+  download?: (url: string, file: string, signal: AbortSignal) => Promise<void>;
+  run?: (path: string) => Promise<RunOutcome>;
+  delays?: number[];
+}
+
+const DOWNLOAD_MS = 20 * 60_000;
+const RUN_MS = 60_000;
+const DEFAULT_DELAYS = [5_000, 20_000];
+const BLOCK = 512;
+/** STATUS_ILLEGAL_INSTRUCTION as a signed exit code on Windows. */
+const WINDOWS_ILLEGAL_INSTRUCTION = -1073741795;
+
+export function programName(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "opencode.exe" : "opencode";
+}
+
+export function openCodeProgram(directory: string, platform: NodeJS.Platform = process.platform): string {
+  return join(directory, programName(platform));
+}
+
+async function downloadFile(url: string, file: string, signal: AbortSignal): Promise<void> {
+  const response = await fetch(url, { redirect: "follow", signal: AbortSignal.any([signal, AbortSignal.timeout(DOWNLOAD_MS)]) });
+  if (!response.ok || response.body === null) throw new Error(`HTTP ${response.status}`);
+  if (response.url !== "" && !response.url.startsWith("https://") && url.startsWith("https://")) {
+    throw new Error("the download was redirected away from https");
+  }
+  await pipeline(Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(file, { mode: 0o600 }), { signal });
+}
+
+async function fileIntegrity(file: string): Promise<string> {
+  const hash = createHash("sha512");
+  await pipeline(createReadStream(file), hash);
+  return `sha512-${hash.digest("base64")}`;
+}
+
+function tarName(header: Buffer): string {
+  const text = (start: number, length: number) => {
+    const end = header.indexOf(0, start);
+    return header.toString("utf8", start, end >= 0 && end < start + length ? end : start + length);
+  };
+  const prefix = header.toString("latin1", 257, 263).startsWith("ustar") ? text(345, 155) : "";
+  return prefix === "" ? text(0, 100) : `${prefix}/${text(0, 100)}`;
+}
+
+function tarSize(header: Buffer): number {
+  // Sizes above 8 GiB use a binary form; nothing here is that big.
+  return Number.parseInt(header.toString("latin1", 124, 136).replace(/[^0-7]/g, "") || "0", 8);
+}
+
+/** Copies one file out of a .tgz. False: the archive has no such file. */
+export async function extractEntry(archive: string, entry: string, target: string): Promise<boolean> {
+  let pending: Buffer = Buffer.alloc(0);
+  let skip = 0;
+  let copy = 0;
+  let found = false;
+  const finder = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+      while (pending.length > 0) {
+        if (copy > 0) {
+          const part = pending.subarray(0, Math.min(copy, pending.length));
+          this.push(part);
+          copy -= part.length;
+          pending = pending.subarray(part.length);
+        } else if (skip > 0) {
+          const part = Math.min(skip, pending.length);
+          skip -= part;
+          pending = pending.subarray(part);
+        } else {
+          if (pending.length < BLOCK) break;
+          const header = pending.subarray(0, BLOCK);
+          pending = pending.subarray(BLOCK);
+          if (header.every((byte) => byte === 0)) continue;
+          const size = tarSize(header);
+          const padded = Math.ceil(size / BLOCK) * BLOCK;
+          const regular = header[156] === 0 || header[156] === 0x30;
+          if (!found && regular && tarName(header) === entry) {
+            found = true;
+            copy = size;
+            skip = padded - size;
+          } else {
+            skip = padded;
+          }
+        }
+      }
+      done();
+    },
+  });
+  await pipeline(createReadStream(archive), createGunzip(), finder, createWriteStream(target, { mode: 0o755 }));
+  return found;
+}
+
+/** Runs `<program> --version`. `spawn` is direct: no shell, and no second way of starting it. */
+export function runProgram(path: string, platform: NodeJS.Platform = process.platform): Promise<RunOutcome> {
+  return new Promise((resolve) => {
+    let out = "";
+    let finished = false;
+    const finish = (outcome: RunOutcome) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve(outcome);
+    };
+    const child = spawn(path, ["--version"], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true, shell: false, env: withoutNodeMode(process.env) });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish({ kind: "broken", detail: `no answer in ${RUN_MS / 1000} s` });
+    }, RUN_MS);
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (out.length < 4096) out += chunk.toString("utf8");
+    });
+    child.on("error", (error: NodeJS.ErrnoException) => finish({ kind: "denied", detail: error.code ?? error.message }));
+    child.on("close", (code, signal) => {
+      if (code === 0) return finish({ kind: "ok", version: normalizeVersion(out.trim().split(/\r?\n/).pop() ?? "") });
+      if (signal === "SIGILL" || code === WINDOWS_ILLEGAL_INSTRUCTION) return finish({ kind: "unsupported-cpu", detail: `code ${code}, signal ${signal}` });
+      // A killed new program on a Mac is what the system does to something it refuses to run.
+      if (platform === "darwin" && signal === "SIGKILL") return finish({ kind: "denied", detail: "stopped by the system (SIGKILL)" });
+      finish({ kind: "broken", detail: `code ${code}, signal ${signal}` });
+    });
+  });
+}
+
+/** bb's own processes run in the app's Node mode; a program started from them must not inherit that. */
+export function withoutNodeMode(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const copy = { ...env };
+  delete copy.ELECTRON_RUN_AS_NODE;
+  return copy;
+}
+
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+
+async function exists(path: string): Promise<boolean> {
+  return stat(path).then(() => true, () => false);
+}
+
+/** A running program can be renamed on Windows, not overwritten. Copies left by earlier updates go when nothing holds them. */
+async function putInPlace(fresh: string, path: string): Promise<void> {
+  const directory = join(path, "..");
+  if (await exists(path)) await rename(path, `${path}.old-${randomUUID().slice(0, 8)}`);
+  await rename(fresh, path);
+  for (const name of await readdir(directory)) {
+    if (name.includes(".old-")) await rm(join(directory, name), { force: true }).catch(() => undefined);
+  }
+}
+
+async function fetchChecked(deps: InstallDeps, file: OpenCodeFile, archive: string): Promise<{ reason: "download" | "integrity"; detail: string } | null> {
+  const delays = deps.delays ?? DEFAULT_DELAYS;
+  const download = deps.download ?? downloadFile;
+  let problem: { reason: "download" | "integrity"; detail: string } = { reason: "download", detail: "" };
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    if (attempt > 0) await sleep(delays[attempt - 1]!, deps.signal);
+    if (deps.signal.aborted) break;
+    try {
+      await download(file.url, archive, deps.signal);
+      if ((await fileIntegrity(archive)) === file.integrity) return null;
+      problem = { reason: "integrity", detail: "the file does not match the manifest's hash" };
+    } catch (error) {
+      problem = { reason: "download", detail: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  return problem;
+}
+
+async function installFile(deps: InstallDeps, file: OpenCodeFile, path: string, run: (p: string) => Promise<RunOutcome>): Promise<InstallOutcome | "unsupported-cpu"> {
+  const work = join(deps.directory, `.install-${randomUUID().slice(0, 8)}`);
+  await mkdir(work, { recursive: true });
+  try {
+    const archive = join(work, "package.tgz");
+    const problem = await fetchChecked(deps, file, archive);
+    if (problem !== null) return { state: "failed", path, ...problem };
+    const fresh = join(work, programName(deps.platform));
+    try {
+      if (!(await extractEntry(archive, file.entry, fresh))) return { state: "failed", reason: "unpack", path, detail: `no ${file.entry} in the package` };
+      await chmod(fresh, 0o755);
+    } catch (error) {
+      return { state: "failed", reason: "unpack", path, detail: error instanceof Error ? error.message : String(error) };
+    }
+    await putInPlace(fresh, path);
+    // Run at its final path: that is the path an IT rule or the person's request names.
+    const ran = await run(path);
+    if (ran.kind === "unsupported-cpu") return "unsupported-cpu";
+    if (ran.kind === "denied") return { state: "failed", reason: "denied", path, detail: ran.detail };
+    if (ran.kind === "broken") return { state: "failed", reason: "broken", path, detail: ran.detail };
+    if (ran.version !== deps.version) return { state: "failed", reason: "broken", path, detail: `it reports ${ran.version}, the build has ${deps.version}` };
+    return { state: "installed", path, version: ran.version };
+  } finally {
+    await rm(work, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export async function ensureOpenCode(deps: InstallDeps): Promise<InstallOutcome> {
+  const platform = deps.platform ?? process.platform;
+  const path = openCodeProgram(deps.directory, platform);
+  const run = deps.run ?? ((program: string) => runProgram(program, platform));
+  await mkdir(deps.directory, { recursive: true });
+  if (await exists(path)) {
+    const ran = await run(path);
+    if (ran.kind === "ok" && ran.version === deps.version) return { state: "current", path, version: ran.version };
+    if (ran.kind === "denied") return { state: "failed", reason: "denied", path, detail: ran.detail };
+  }
+  const key = `${platform}-${deps.arch ?? process.arch}`;
+  const file = deps.files[key];
+  if (file === undefined) return { state: "failed", reason: "no-file", path, detail: key };
+  const outcome = await installFile(deps, file, path, run);
+  if (outcome !== "unsupported-cpu") return outcome;
+  const baseline = deps.files[`${key}-baseline`];
+  if (baseline === undefined) return { state: "failed", reason: "broken", path, detail: "the processor cannot run this build" };
+  const second = await installFile(deps, baseline, path, run);
+  return second === "unsupported-cpu" ? { state: "failed", reason: "broken", path, detail: "the processor cannot run this build" } : second;
+}

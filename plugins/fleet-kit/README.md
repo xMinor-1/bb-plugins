@@ -19,6 +19,9 @@ brings bb to that description and keeps it there.
 - **OpenCode**: merges the build's OpenCode 2 block into `opencode.json` —
   providers, default model, `enabled_providers` — and leaves everything else in
   the file alone.
+- **OpenCode install** (optional): puts the version the build names on the
+  machine itself and registers it as bb's agent, so an installer only has to
+  deliver bb. See [Installing OpenCode](#installing-opencode).
 - **Secrets**: asks for each key once, keeps it in the operating system's
   credential store, and gives it to OpenCode at request time. The key never
   lands in `opencode.json`, in logs, or in the panel.
@@ -57,6 +60,7 @@ does nothing.
 | `manifestUrl` | Where the manifest lives: an `https://` URL, a `file://` URL, or an absolute path (a synced folder works). `http://` and relative paths are refused. |
 | `manifestToken` | Secret. Sent as `Authorization: Bearer` when fetching an `https://` manifest. |
 | `syncIntervalMinutes` | 5 to 1440, default 30. |
+| `opencodeInstallDir` | Where Fleet Kit installs OpenCode. Empty: it installs nothing and uses the OpenCode found on PATH. See [Installing OpenCode](#installing-opencode). |
 | `opencodeConfigDir` | Keep this bb's OpenCode configuration in its own directory (see [A separate OpenCode directory](#a-separate-opencode-directory)). Empty: OpenCode's default, or `OPENCODE_CONFIG_DIR` if bb runs with it. |
 | `secretStore` | `auto` (the OS credential store) or `file` (a 0600 file). |
 | `paused` | Stop syncing. |
@@ -126,8 +130,15 @@ a newer Fleet Kit can still deliver it.
 - `schema` — the manifest format. From a manifest newer than this Fleet Kit,
   only Fleet Kit's own update applies; the panel says a newer Fleet Kit is
   needed.
-- `install` — the versions an installer should put on a new machine. Fleet Kit
-  only checks that `install.bb` is not below `bb.minVersion`.
+- `install` — the versions a new machine gets. Fleet Kit checks that `install.bb`
+  is not below `bb.minVersion`, and installs `install.opencode` when the machine
+  has `opencodeInstallDir` set.
+- `opencodeInstall` — where that OpenCode comes from: `files` by
+  `<platform>-<arch>` (`win32-x64`, `darwin-arm64`; `-baseline` for processors
+  without AVX2), each with `url` (`https://`), `integrity` (`sha512-<base64>`, as
+  in `package-lock.json`) and `entry`, the program's path inside the `.tgz`.
+  `notReadyMessage` is what an agent turn answers until OpenCode is in place, in
+  the build's language.
 - `bb.minVersion` — Fleet Kit stops with an error on an older bb.
 - `bb.settings` — keys of bb's general settings (`bb settings general`). An
   unknown key or a value of the wrong type is an error, not a silent skip.
@@ -294,7 +305,38 @@ The person who uses OpenCode edits this file too, so Fleet Kit:
   `providers` that is not an object) is left untouched and reported.
 
 OpenCode 1.x reads a different format, so Fleet Kit does not touch its
-configuration and shows "Update OpenCode to 2.x".
+configuration and shows "Update OpenCode to 2.x". A machine with no OpenCode gets
+the configuration anyway, and a machine with `opencodeInstallDir` never runs
+another OpenCode, so neither case applies there.
+
+### Installing OpenCode
+
+With `opencodeInstallDir` set and `opencodeInstall` in the manifest, every sync
+does this, in this order, before it touches any plugin:
+
+1. Writes `opencode.json` with `enabled_providers`. OpenCode is not on the
+   machine yet, so there is no moment with another provider's model on the list.
+2. Registers the agent: entry `opencode` in the `customAgents` setting of bb's
+   ACP provider, with absolute paths, so bb runs this OpenCode and no other on
+   PATH. Other agents in that setting stay; a value it has to replace is copied
+   to `backup/` in the same folder.
+3. Downloads the file, checks `integrity`, takes `entry` out of the package, runs
+   `--version`, and compares it with `install.opencode`. A version already in
+   place is not downloaded again.
+4. Turns other agents off, then goes on to plugins.
+
+The entry runs `bb-acp-shim.cjs` under the program that runs bb: Node, or the
+desktop app in its Node mode. The wrapper tells bb OpenCode takes no images (bb
+then sends a file path), holds the first prompt until MCP servers connect, at
+most 12 s, and while OpenCode is missing answers turns with `notReadyMessage`. A
+thread opened in that time gets a real agent on the turn after OpenCode appears;
+bb notes the restart in the thread.
+
+A download, hash or unpack failure is tried three times in a row and again in
+three minutes; the panel and the First run page say what is wrong. When the system
+refuses to run the program (a policy, an antivirus, access rights), the sync
+reports an error with the program's path and a text for an IT request, and tries
+no other way of starting it.
 
 ### Secrets
 
