@@ -340,7 +340,10 @@ A download, hash, unpack or disk failure is tried three times within a sync, and
 the sync is repeated in three minutes, up to three syncs in a row. After that the
 file is fetched once in six hours, or by a sync the person starts. A refusal, a
 program that does not work and a missing file are not repeated early. Any failure,
-also of writing the settings, is `state: failed` with a text, never an exception.
+also of writing the settings, is `state: failed` with a text, never an exception. When the
+system refuses to run the program (a policy, an antivirus, access rights), the sync
+reports an error with the program's path and a text for an IT request, and tries
+no other way of starting it.
 
 ### Secrets
 
