@@ -12,11 +12,11 @@ import plugin from "../server";
 const ALLOWED = { providerId: "acp-opencode", model: "corp/large" };
 const EXTERNAL = { providerId: "acp-opencode", model: "opencode/free-model" };
 
-async function setup() {
+async function setup(guide = "") {
   const hostCalls: { method: string; input: unknown; hostId: string }[] = [];
   const { bb, harness } = createFakePluginHost({
     pluginId: "qlik-sense",
-    settings: { allowedModels: "acp-opencode corp/*" },
+    settings: { allowedModels: "acp-opencode corp/*", guide },
     agentSkillIds: ["qlik-sense"],
     experimental_hostEntry: true,
     sdk: {
@@ -85,6 +85,75 @@ describe("tool calls", () => {
     await s.dispatch("th_null", { providerId: "acp-opencode", model: null });
     expect(text(await s.tool("th_null"))).toMatch(/not available/);
     expect(s.hostCalls).toHaveLength(0);
+  });
+});
+
+describe("company guide", () => {
+  const GUIDE = "# Start here\nACME notes.\n\n# Sales report\nSales field names.";
+  const readGuide = (s: Awaited<ReturnType<typeof setup>>, threadId: string, section?: string) =>
+    s.harness.behavior.callAgentTool("qlik_guide", section ? { section } : {}, { threadId });
+
+  it("offers the tool only when the setting is filled", async () => {
+    const empty = await setup();
+    expect(text(await empty.configure("acp-opencode", "corp/large"))).not.toContain("qlik_guide");
+    const blank = await setup("  \n ");
+    expect(text(await blank.configure("acp-opencode", "corp/large"))).not.toContain("qlik_guide");
+    const filled = await setup(GUIDE);
+    expect(text(await filled.configure("acp-opencode", "corp/large"))).toContain("qlik_guide");
+    expect(text(await filled.configure("acp-opencode", "corp/large"))).toContain("qlik_get_data");
+  });
+
+  it("never offers it to a model outside the list", async () => {
+    const s = await setup(GUIDE);
+    for (const [provider, model] of [
+      ["acp-opencode", "opencode/free-model"],
+      ["claude-code", "claude-opus-5-5"],
+    ] as const) {
+      expect(text(await s.configure(provider, model)), `${provider} ${model}`).not.toContain("qlik_");
+    }
+  });
+
+  it("gives an allowed model the start and a section, without calling Qlik", async () => {
+    const s = await setup(GUIDE);
+    await s.dispatch("th_guide", ALLOWED);
+    const start = text(await readGuide(s, "th_guide"));
+    expect(start).toContain("ACME notes.");
+    expect(start).toContain("- Sales report");
+    expect(start).not.toContain("Sales field names.");
+    expect(text(await readGuide(s, "th_guide", "sales"))).toContain("Sales field names.");
+    expect(s.hostCalls).toHaveLength(0);
+  });
+
+  it("refuses when the thread switched to a model outside the list", async () => {
+    const s = await setup(GUIDE);
+    await s.dispatch("th_guide_switch", ALLOWED);
+    await s.dispatch("th_guide_switch", EXTERNAL);
+    const result = text(await readGuide(s, "th_guide_switch"));
+    expect(result).toMatch(/not available to acp-opencode opencode\/free-model/);
+    expect(result).not.toContain("ACME");
+  });
+
+  it("refuses a thread whose model is unknown", async () => {
+    const s = await setup(GUIDE);
+    const result = text(await readGuide(s, "th_guide_unknown"));
+    expect(result).toMatch(/not available/);
+    expect(result).not.toContain("ACME");
+  });
+
+  it("marks the thread: a model outside the list cannot continue it", async () => {
+    const s = await setup(GUIDE);
+    await s.dispatch("th_guide_mark", ALLOWED);
+    await readGuide(s, "th_guide_mark");
+    expect(await s.dispatch("th_guide_mark", EXTERNAL)).toMatchObject({ action: "reject" });
+  });
+
+  it("reports an unknown section as an error and lists the sections", async () => {
+    const s = await setup(GUIDE);
+    await s.dispatch("th_guide_miss", ALLOWED);
+    const result = await readGuide(s, "th_guide_miss", "Margin");
+    expect(text(result)).toContain('no section \\"Margin\\"');
+    expect(text(result)).toContain("Sales report");
+    expect(result).toMatchObject({ isError: true });
   });
 });
 

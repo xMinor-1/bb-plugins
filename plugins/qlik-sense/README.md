@@ -82,11 +82,24 @@ failures.
 | `qlik_field_values` | values of a field, with what remains possible under filters |
 | `qlik_get_data` | data of a sheet object with filters, as a table |
 | `qlik_query` | a custom breakdown: fields or master dimensions × master measures or formulas |
+| `qlik_guide` | your company's notes on its reports; offered only when the `guide` setting is filled |
 
 Filters: `{ "Region": "North" }`, `{ "Region": ["North", "East"] }`, or Qlik
 search strings (`"*Nor*"`, `">=01.10.2026<=31.10.2026"`). Each call starts from
 clean selections, in the agent's own engine session, so the person's open
 Qlik tab never moves.
+
+Buttons and input boxes on a sheet are not reachable: an object comes back with
+their default values. The agent changes the period with a filter on a field or
+with `qlik_query`.
+
+### Company guide
+
+The `guide` setting holds Markdown that only allowed models can read:
+which report answers what, the field names to filter by, what the measures
+mean, known pitfalls. A `# Title` line starts a section. `qlik_guide` returns
+the first section and lists the others; `section` reads one of them. Company
+details live in this setting, not in the plugin.
 
 ## How it works
 
