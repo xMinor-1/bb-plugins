@@ -17,6 +17,7 @@
 import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { catalogSchema, checkLinkResultSchema, checkSignInResultSchema, connectionStatusSchema, hostContract, MAX_ROWS, qlikAppSummarySchema, qlikSheetSummarySchema, type ConnectionStatus, type ToolInput } from "./contract";
+import { guideAnswer, MAX_GUIDE_CHARS } from "./src/shared/guide";
 import { normalizeBaseUrl } from "./src/shared/links";
 import { groupModels } from "./src/shared/models";
 import { createPolicy, formatRules, parseRules, PolicyError, type Policy } from "./src/shared/policy";
@@ -88,6 +89,10 @@ const REPORTS_INSTRUCTIONS =
   "what each is for, and links to open them. Only those apps can be read. Every data call recalculates on current data with the " +
   "filters you pass; filters from earlier calls are not kept. Quote the sheet link with the numbers so the user can check them.";
 
+const GUIDE_INSTRUCTIONS =
+  "Qlik Sense: this company keeps notes on its reports. Before answering a question about business numbers, read qlik_guide: " +
+  "it says which report answers what, which fields to filter by, what the measures mean, and where the numbers mislead.";
+
 interface Execution {
   providerId: string;
   model: string | null;
@@ -127,6 +132,15 @@ export default async function plugin(bb: BbPluginApi) {
         }
       }, "Each line must be: <provider-id> <model-glob>"),
     },
+    guide: {
+      type: "string",
+      label: "Guide for agents (Markdown)",
+      description:
+        "Your company's notes on its reports: which one answers what, field names, what the measures mean, known pitfalls. Agents get it through the qlik_guide tool, allowed models only. It is a plain setting, not a secret: anyone who can run the bb CLI here can read it, so keep passwords and figures out of it. A `# Title` line starts a section: the tool returns the first section and lists the others.",
+      experimental_multiline: true,
+      default: "",
+      experimental_schema: z.string().max(MAX_GUIDE_CHARS),
+    },
   });
 
   let policy: Policy = createPolicy([]);
@@ -141,8 +155,13 @@ export default async function plugin(bb: BbPluginApi) {
       policyError = error instanceof PolicyError ? error.message : String(error);
     }
   };
-  applyPolicy((await settings.get()).allowedModels);
-  settings.onChange((next) => applyPolicy(next.allowedModels));
+  const initialSettings = await settings.get();
+  applyPolicy(initialSettings.allowedModels);
+  let guide = initialSettings.guide;
+  settings.onChange((next) => {
+    applyPolicy(next.allowedModels);
+    guide = next.guide;
+  });
 
   const host = bb.hosts.experimental_client({ contract: hostContract });
   const kv = bb.storage.kv;
@@ -176,7 +195,9 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.agents.configure((ctx) =>
-    policy.allows(ctx.provider.id, ctx.provider.model) ? { tools: TOOL_NAMES, skills: [SKILL] } : { tools: [], skills: [] },
+    policy.allows(ctx.provider.id, ctx.provider.model)
+      ? { tools: guide.trim() ? [...TOOL_NAMES, TOOL_GUIDE] : TOOL_NAMES, skills: [SKILL] }
+      : { tools: [], skills: [] },
   );
 
   bb.events.on("thread.deleted", async ({ thread }) => {
@@ -213,6 +234,24 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   const label = (pending: string, completed: string) => ({ label: { pending, completed } });
+
+  bb.agents.registerTool({
+    name: TOOL_GUIDE,
+    description:
+      "This company's notes on its Qlik reports: which report answers which question, fields to filter by, what the measures mean, known pitfalls. " +
+      "Without `section` returns the start of the guide and the list of its other sections.",
+    instructions: GUIDE_INSTRUCTIONS,
+    presentation: label("Reading the Qlik guide", "Read the Qlik guide"),
+    parameters: z.object({ section: z.string().max(300).optional().describe("A section title from the guide's list (a part of the title works)") }),
+    execute: async ({ section }, ctx) => {
+      const allowed = await gate(ctx.threadId);
+      if (!allowed.ok) return { content: [{ type: "text" as const, text: allowed.message }], isError: true };
+      // The guide names reports, sheets and fields: company data, like the sheet names.
+      await markTainted(ctx.threadId);
+      const answer = guideAnswer(guide, section);
+      return { content: [{ type: "text" as const, text: answer.text }], isError: answer.isError };
+    },
+  });
 
   bb.agents.registerTool({
     name: "qlik_reports",
@@ -420,6 +459,7 @@ export default async function plugin(bb: BbPluginApi) {
 }
 
 const TOOL_NAMES = ["qlik_reports", "qlik_list_sheets", "qlik_sheet_objects", "qlik_list_fields", "qlik_field_values", "qlik_get_data", "qlik_query"];
+const TOOL_GUIDE = "qlik_guide";
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {

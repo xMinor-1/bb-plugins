@@ -10,6 +10,13 @@ ticked in the Qlik Sense panel. Nothing you do changes Qlik: every call opens
 its own engine session, clears selections, applies the filters you pass, and
 reads freshly calculated data.
 
+## Company guide
+
+If you have the `qlik_guide` tool, read it before anything else. It holds this
+company's notes on its reports: which one answers what, the fields to filter
+by, what the measures mean, where the numbers mislead. Where it differs from
+the general advice below, follow the guide.
+
 ## Find the report first
 
 1. Call `qlik_reports`. It lists the enabled apps, the sheets the user
