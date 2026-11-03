@@ -27,6 +27,15 @@ interface CommandResult { exitCode: number | null; stdout: string; failed: boole
 /** Resolves only after the child closes, including cancellation and timeouts.
  * stdout is bounded; stderr is drained and discarded, never put in errors/logs. */
 async function run(command: readonly [string, ...string[]], args: string[], options: ModelCheckOptions): Promise<CommandResult> {
+  try {
+    return await runChild(command, args, options);
+  } catch {
+    // On Windows a refused start throws from spawn instead of emitting "error".
+    return { exitCode: null, stdout: "", failed: true };
+  }
+}
+
+async function runChild(command: readonly [string, ...string[]], args: string[], options: ModelCheckOptions): Promise<CommandResult> {
   if (options.signal?.aborted) return { exitCode: null, stdout: "", failed: true };
   return await new Promise((resolve) => {
     const child = spawn(command[0], [...command.slice(1), ...args], {

@@ -3,7 +3,7 @@
 //
 // When the system refuses to run the program, that is an answer, not a failure to work around: the sync reports it with
 // the program's path and a text for an IT request, and does not try any other way of starting it.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { chmod, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
@@ -144,12 +144,19 @@ export function runProgram(path: string, platform: NodeJS.Platform = process.pla
       clearTimeout(timer);
       resolve(outcome);
     };
-    const child = spawn(path, ["--version"], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true, shell: false, env: withoutNodeMode(process.env) });
+    let child: ChildProcess;
+    try {
+      child = spawn(path, ["--version"], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true, shell: false, env: withoutNodeMode(process.env) });
+    } catch (error) {
+      // On Windows a refused start (ERROR_ACCESS_DENIED, a policy) throws here instead of emitting "error".
+      resolve({ kind: "denied", detail: (error as NodeJS.ErrnoException).code ?? String(error) });
+      return;
+    }
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       finish({ kind: "broken", detail: `no answer in ${RUN_MS / 1000} s` });
     }, RUN_MS);
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout!.on("data", (chunk: Buffer) => {
       if (out.length < 4096) out += chunk.toString("utf8");
     });
     child.on("error", (error: NodeJS.ErrnoException) => finish({ kind: "denied", detail: error.code ?? error.message }));

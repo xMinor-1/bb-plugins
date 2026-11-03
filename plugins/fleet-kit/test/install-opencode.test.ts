@@ -176,6 +176,11 @@ describe("runProgram", () => {
     expect((await runProgram(program)).kind).toBe("denied");
   });
 
+  it("treats a start that throws, as Windows does on a refusal, as a refusal", async () => {
+    // A NUL in the path makes spawn throw at once on every system, the way ERROR_ACCESS_DENIED does on Windows.
+    expect((await runProgram("opencode\0denied")).kind).toBe("denied");
+  });
+
   it("reads the version; another failure is not a refusal", async () => {
     const dir = temp();
     const program = join(dir, "opencode");

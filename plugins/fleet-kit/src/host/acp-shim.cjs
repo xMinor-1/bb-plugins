@@ -119,7 +119,14 @@ let logTail = Buffer.alloc(0);
 try {
   logPos = fs.statSync(LOG_FILE).size;
 } catch {}
-const child = launch(bin, args);
+let child;
+try {
+  child = launch(bin, args);
+} catch (error) {
+  // On Windows a refused start throws here instead of emitting "error".
+  process.stderr.write(`bb-acp-shim: ${error.message}\n`);
+  process.exit(127);
+}
 const pending = new Set(); // ids of bb's initialize requests still without an answer
 
 // bb -> agent: chunks pass as they are, initialize requests are noted on the way. "\n" is searched in the new chunk only.
