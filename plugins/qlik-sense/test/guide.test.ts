@@ -22,6 +22,15 @@ describe("parseGuide", () => {
     expect(sections[0]!.body).toContain("# not a heading");
   });
 
+  it("does not take inline code at the start of a line for a code block", () => {
+    expect(parseGuide("# One\n```code``` in text\n# Two\nbody").map((section) => section.title)).toEqual(["One", "Two"]);
+  });
+
+  it("closes a code block only with its own kind of fence", () => {
+    const sections = parseGuide("# One\n~~~\n```\n# not a heading\n~~~\n# Two\nbody");
+    expect(sections.map((section) => section.title)).toEqual(["One", "Two"]);
+  });
+
   it("reads Windows line ends", () => {
     expect(parseGuide("# One\r\nbody\r\n# Two\r\nmore").map((section) => section.title)).toEqual(["One", "Two"]);
   });
@@ -49,7 +58,7 @@ describe("guideAnswer", () => {
   it("reads a section by its title or a part of it, in any case", () => {
     expect(guideAnswer(GUIDE, "Sales report").text).toBe("# Sales report\nSales notes.");
     expect(guideAnswer(GUIDE, "funnel").text).toBe("# Funnel report\nFunnel notes.");
-    expect(guideAnswer("# Воронка по КА\nтекст", "воронка").text).toBe("# Воронка по КА\nтекст");
+    expect(guideAnswer("# Отчёт о продажах\nтекст", "продажах").text).toBe("# Отчёт о продажах\nтекст");
   });
 
   it("prefers the exact title over a part of a longer one", () => {

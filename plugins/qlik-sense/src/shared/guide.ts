@@ -16,14 +16,26 @@ export interface GuideAnswer {
 }
 
 const HEADING = /^# +(\S.*?)\s*$/;
-const FENCE = /^\s*(```|~~~)/;
+// As in Markdown: a backtick fence has no backticks after it, so "```code``` text" opens nothing.
+const FENCE_OPEN = /^ {0,3}(`{3,})[^`]*$|^ {0,3}(~{3,})/;
+
+function closesFence(line: string, fence: string): boolean {
+  const mark = line.trim();
+  return mark.length >= fence.length && [...mark].every((char) => char === fence[0]);
+}
 
 export function parseGuide(text: string): GuideSection[] {
   const sections: { title: string; lines: string[] }[] = [];
-  let fenced = false;
+  let fence: string | null = null;
   for (const line of text.split(/\r?\n/)) {
-    if (FENCE.test(line)) fenced = !fenced;
-    const heading = fenced ? null : HEADING.exec(line);
+    let heading: RegExpExecArray | null = null;
+    if (fence) {
+      if (closesFence(line, fence)) fence = null;
+    } else {
+      const opened = FENCE_OPEN.exec(line);
+      fence = opened ? (opened[1] ?? opened[2]!) : null;
+      if (!fence) heading = HEADING.exec(line);
+    }
     if (heading) {
       sections.push({ title: heading[1]!, lines: [line] });
     } else if (sections.length) {

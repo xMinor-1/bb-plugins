@@ -136,7 +136,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Guide for agents (Markdown)",
       description:
-        "Your company's notes on its reports: which one answers what, field names, what the measures mean, known pitfalls. Only allowed models read it, through the qlik_guide tool. A `# Title` line starts a section: the tool returns the first section and lists the others.",
+        "Your company's notes on its reports: which one answers what, field names, what the measures mean, known pitfalls. Agents get it through the qlik_guide tool, allowed models only. It is a plain setting, not a secret: anyone who can run the bb CLI here can read it, so keep passwords and figures out of it. A `# Title` line starts a section: the tool returns the first section and lists the others.",
       experimental_multiline: true,
       default: "",
       experimental_schema: z.string().max(MAX_GUIDE_CHARS),

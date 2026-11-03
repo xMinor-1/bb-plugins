@@ -95,11 +95,15 @@ with `qlik_query`.
 
 ### Company guide
 
-The `guide` setting holds Markdown that only allowed models can read:
-which report answers what, the field names to filter by, what the measures
-mean, known pitfalls. A `# Title` line starts a section. `qlik_guide` returns
-the first section and lists the others; `section` reads one of them. Company
-details live in this setting, not in the plugin.
+The `guide` setting holds Markdown for agents: which report answers what, the
+field names to filter by, what the measures mean, known pitfalls. A `# Title`
+line starts a section. `qlik_guide` returns the first section and lists the
+others; `section` reads one of them. The tool answers allowed models only.
+Company details live in this setting, not in the plugin.
+
+It is a plain setting, not a secret: anyone who can run the bb CLI on this bb,
+including an agent with a shell, can read it with `bb plugin config`. Keep
+passwords and figures out of it.
 
 ## How it works
 
