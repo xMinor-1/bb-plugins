@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Bug Report Button",
-    "description": "A small bug button on every screen of bb that opens your bug report form in the browser. Address and caption come from plugin settings.",
+    "description": "A small bug button in the top bar of bb, on every screen, that opens your bug report form in the browser. Address and caption come from plugin settings.",
     "branding": {
       "icon": "./icon.svg"
     },

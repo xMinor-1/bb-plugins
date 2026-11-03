@@ -1,6 +1,6 @@
 # Bug Report Button
 
-A small bug button on every screen of bb. A click opens your bug report form in the browser, so people can report
+A small bug button in the top bar of bb, on every screen. A click opens your bug report form in the browser, so people can report
 a problem from wherever they noticed it. The plugin holds no address of its own and sends nothing anywhere.
 
 ## Settings
@@ -17,9 +17,9 @@ bb plugin config bug-report-button set label "Report a bug"
 
 ## Where the button is
 
-Fixed to the right edge of the window at mid-height. The corners hold the composer's send button, the sidebar footer
-and the panel toggle. The button stays there on every route, over dialogs, with the sidebar collapsed, and on the
-onboarding screen. It can cover a little of the content on the right edge of a narrow window.
+In the top bar of the window, in the free space between the thread title and the actions on the right. bb draws that
+bar on every route, so the button stays in one place on threads, Home and Settings, over dialogs, with the sidebar
+collapsed, and on the onboarding screen. A very long title in a narrow window can run under it.
 
 ## Where the form opens
 
