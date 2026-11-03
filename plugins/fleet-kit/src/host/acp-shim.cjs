@@ -20,6 +20,9 @@ const SCAN_MAX = 1 << 20; // initialize and its answer are short; longer lines a
 const CLOSE_WAIT_MS = 2000;
 const HOLD_MS = Number(process.env.ACP_SHIM_HOLD_MS) || 12000; // MCP wait limit; only tests change it
 const HOLD_POLL_MS = Number(process.env.ACP_SHIM_HOLD_POLL_MS) || 150; // only tests change it
+// OpenCode logs "mcp connected" a moment before the tools can be used, and tells nothing later: ACP has no list of tools, and
+// its server has no address to ask. A prompt within about 130 ms of the line ran without them; 159 ms and more had them.
+const HOLD_GRACE_MS = process.env.ACP_SHIM_HOLD_GRACE_MS !== undefined ? Number(process.env.ACP_SHIM_HOLD_GRACE_MS) : 500;
 const KEEP_IMAGE = process.env.ACP_SHIM_KEEP_IMAGE === "1"; // only the MCP wait, images as they were
 const [name, ...args] = process.argv.slice(2);
 
@@ -289,15 +292,19 @@ function holdPrompt() {
   const left = new Set(wanted || []);
   const markers = directoryMarkers(sessionCwd);
   const deadline = Date.now() + HOLD_MS;
+  let lastFinished = null;
   const tick = () => {
     if (stage !== "holding") return;
     try {
       for (const line of readLogLines()) {
         const server = finishedServer(line, markers);
-        if (server !== null) left.delete(server);
+        if (server !== null) {
+          left.delete(server);
+          lastFinished = Date.now();
+        }
       }
     } catch {}
-    if (wanted && left.size === 0) return releasePrompt();
+    if (wanted && left.size === 0 && Date.now() - lastFinished >= HOLD_GRACE_MS) return releasePrompt();
     if (Date.now() >= deadline) {
       process.stderr.write(`bb-acp-shim: first prompt released after ${HOLD_MS} ms, MCP not ready: ${wanted ? [...left].join(", ") : "config not read"}\n`);
       return releasePrompt();

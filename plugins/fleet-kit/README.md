@@ -137,8 +137,9 @@ a newer Fleet Kit can still deliver it.
   `<platform>-<arch>` (`win32-x64`, `darwin-arm64`; `-baseline` for processors
   without AVX2), each with `url` (`https://`), `integrity` (`sha512-<base64>`, as
   in `package-lock.json`) and `entry`, the program's path inside the `.tgz`.
-  `notReadyMessage` is what an agent turn answers until OpenCode is in place, in
-  the build's language.
+  `notReadyMessage` is what an agent turn answers until OpenCode is in place,
+  `deniedMessage` when the system refuses to run it (`{path}` is the program),
+  `failedMessage` when Fleet Kit has stopped trying. All in the build's language.
 - `bb.minVersion` — Fleet Kit stops with an error on an older bb.
 - `bb.settings` — keys of bb's general settings (`bb settings general`). An
   unknown key or a value of the wrong type is an error, not a silent skip.
@@ -322,21 +323,24 @@ does this, in this order, before it touches any plugin:
    to `backup/` in the same folder.
 3. Downloads the file, checks `integrity`, takes `entry` out of the package, runs
    `--version`, and compares it with `install.opencode`. A version already in
-   place is not downloaded again.
+   place is not downloaded again. The previous program stays until the new one
+   has answered, and comes back on any failure. The program that passed is
+   recorded in `bb-acp-state.json`, and the wrapper starts no other.
 4. Turns other agents off, then goes on to plugins.
 
 The entry runs `bb-acp-shim.cjs` under the program that runs bb: Node, or the
 desktop app in its Node mode. The wrapper tells bb OpenCode takes no images (bb
 then sends a file path), holds the first prompt until MCP servers connect, at
-most 12 s, and while OpenCode is missing answers turns with `notReadyMessage`. A
+most 12 s and half a second more, and while there is nothing checked to start
+answers turns with `notReadyMessage`, `deniedMessage` or `failedMessage`. A
 thread opened in that time gets a real agent on the turn after OpenCode appears;
 bb notes the restart in the thread.
 
-A download, hash or unpack failure is tried three times in a row and again in
-three minutes; the panel and the First run page say what is wrong. When the system
-refuses to run the program (a policy, an antivirus, access rights), the sync
-reports an error with the program's path and a text for an IT request, and tries
-no other way of starting it.
+A download, hash, unpack or disk failure is tried three times within a sync, and
+the sync is repeated in three minutes, up to three syncs in a row. After that the
+file is fetched once in six hours, or by a sync the person starts. A refusal, a
+program that does not work and a missing file are not repeated early. Any failure,
+also of writing the settings, is `state: failed` with a text, never an exception.
 
 ### Secrets
 
