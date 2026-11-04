@@ -18,8 +18,12 @@ export function agentRuntime(): AgentRuntime {
   return { execPath: process.execPath, electron: process.versions.electron !== undefined };
 }
 
-export function agentEntry(runtime: AgentRuntime, shim: string, opencode: string, messages: { notReady: string; denied: string }) {
+export function agentEntry(runtime: AgentRuntime, shim: string, opencode: string, messages: { notReady: string; denied: string; config?: { file: string; failed: string } }) {
   const env: Record<string, string> = { ACP_SHIM_NOT_READY: messages.notReady, ACP_SHIM_DENIED: messages.denied };
+  if (messages.config) {
+    env.ACP_SHIM_CONFIG = messages.config.file;
+    env.ACP_SHIM_CONFIG_FAILED = messages.config.failed;
+  }
   if (runtime.electron) env.ELECTRON_RUN_AS_NODE = "1";
   return {
     id: "opencode",

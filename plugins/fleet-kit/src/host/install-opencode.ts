@@ -41,6 +41,8 @@ export const PROGRAM_STATE_FILE = "bb-acp-state.json";
 interface ProgramState {
   verified: { version: string; size: number; mtimeMs: number } | null;
   message: string | null;
+  /** The settings could not be written: without them OpenCode opens every provider, so the wrapper starts nothing. */
+  blocked: boolean;
 }
 
 export interface InstallDeps {
@@ -206,9 +208,9 @@ async function exists(path: string): Promise<boolean> {
 async function readProgramState(directory: string): Promise<ProgramState> {
   try {
     const saved = JSON.parse(await readFile(join(directory, PROGRAM_STATE_FILE), "utf8")) as Partial<ProgramState>;
-    return { verified: saved.verified ?? null, message: saved.message ?? null };
+    return { verified: saved.verified ?? null, message: saved.message ?? null, blocked: saved.blocked === true };
   } catch {
-    return { verified: null, message: null };
+    return { verified: null, message: null, blocked: false };
   }
 }
 
@@ -221,13 +223,21 @@ async function writeProgramState(directory: string, state: ProgramState): Promis
 async function markVerified(path: string, version: string): Promise<void> {
   const directory = dirname(path);
   const file = await stat(path);
-  await writeProgramState(directory, { verified: { version, size: file.size, mtimeMs: file.mtimeMs }, message: null });
+  const state = await readProgramState(directory);
+  await writeProgramState(directory, { ...state, verified: { version, size: file.size, mtimeMs: file.mtimeMs }, message: null });
 }
 
 /** What the wrapper tells the person while it has nothing to start. Null: the build's ordinary "not ready yet" text. */
-export async function setProgramMessage(directory: string, message: string | null): Promise<void> {
+export async function setProgramMessage(directory: string, message: string | null, blocked = false): Promise<void> {
   const state = await readProgramState(directory);
-  if (state.message !== message) await writeProgramState(directory, { ...state, message });
+  if (state.message === message && state.blocked === blocked) return;
+  await mkdir(directory, { recursive: true });
+  await writeProgramState(directory, { ...state, message, blocked });
+}
+
+/** The settings are written again: the wrapper may start the program, and its reason not to is gone. */
+export async function unblockProgram(directory: string): Promise<void> {
+  if ((await readProgramState(directory)).blocked) await setProgramMessage(directory, null, false);
 }
 
 /** Copies left by earlier updates go when nothing holds them: a running program can be renamed on Windows, not deleted. */
@@ -238,14 +248,26 @@ async function removeOldCopies(directory: string): Promise<void> {
   }
 }
 
-/** An update stopped between its two renames leaves no program, only the previous one under its old name. */
-async function recoverInterrupted(path: string): Promise<void> {
-  if (await exists(path)) return;
+/**
+ * An update stopped on the way leaves the previous program under an old name, and maybe an unchecked one on the path. Only
+ * the copy that passed the check comes back: a failed update can leave other old copies around.
+ */
+async function restoreVerified(path: string): Promise<void> {
   const directory = dirname(path);
+  const { verified } = await readProgramState(directory);
+  if (verified === null) return;
+  const isVerified = async (file: string) => {
+    const found = await stat(file).catch(() => null);
+    return found !== null && found.size === verified.size && found.mtimeMs === verified.mtimeMs;
+  };
+  if (await isVerified(path)) return;
   const base = path.slice(directory.length + 1);
-  const names = await readdir(directory).catch(() => [] as string[]);
-  const previous = names.find((name) => name.startsWith(`${base}.old-`));
-  if (previous !== undefined) await rename(join(directory, previous), path);
+  for (const name of await readdir(directory).catch(() => [] as string[])) {
+    if (!name.startsWith(`${base}.old-`) || !(await isVerified(join(directory, name)))) continue;
+    if (await exists(path)) await removeUnverified(path);
+    await rename(join(directory, name), path);
+    return;
+  }
 }
 
 /** Takes the unverified program off its path; a file that cannot be deleted right now is renamed instead. */
@@ -301,7 +323,14 @@ async function installFile(deps: InstallDeps, file: OpenCodeFile, path: string, 
     // Run at its final path: that is the path an IT rule or the person's request names.
     const ran = await run(path);
     if (ran.kind === "ok" && ran.version === deps.version) {
-      await markVerified(path, ran.version);
+      try {
+        await markVerified(path, ran.version);
+      } catch (error) {
+        // Without the record the wrapper would not start it: the previous program stays the one in use.
+        await removeUnverified(path);
+        if (previous !== null) await rename(previous, path);
+        return { state: "failed", reason: "disk", path, detail: error instanceof Error ? error.message : String(error) };
+      }
       await removeOldCopies(deps.directory);
       return { state: "installed", path, version: ran.version };
     }
@@ -323,7 +352,7 @@ async function installFile(deps: InstallDeps, file: OpenCodeFile, path: string, 
 async function ensure(deps: InstallDeps, platform: NodeJS.Platform, path: string): Promise<InstallOutcome> {
   const run = deps.run ?? ((program: string) => runProgram(program, platform));
   await mkdir(deps.directory, { recursive: true });
-  await recoverInterrupted(path);
+  await restoreVerified(path);
   if (await exists(path)) {
     const ran = await run(path);
     if (ran.kind === "ok" && ran.version === deps.version) {

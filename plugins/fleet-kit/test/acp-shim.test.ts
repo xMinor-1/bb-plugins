@@ -114,6 +114,68 @@ describe("while OpenCode is not there yet", () => {
     expect(existsSync(join(dir, "started"))).toBe(false);
   });
 
+  describe("the limit on providers", () => {
+    function checkedProgram() {
+      const dir = mkdtempSync(join(tmpdir(), "fk-shim-"));
+      dirs.push(dir);
+      const program = join(dir, "opencode");
+      writeFileSync(program, `#!/bin/sh\ntouch "${dir}/started"\nsleep 5\n`);
+      chmodSync(program, 0o755);
+      record(program);
+      return { dir, program, config: join(dir, "opencode.json") };
+    }
+    const settle = () => new Promise((r) => setTimeout(r, 300));
+
+    it.each([
+      ["a broken file", "{"],
+      ["no limit in it", '{"model":"x/y"}'],
+      ["an empty limit", '{"enabled_providers":[]}'],
+    ])("%s: the checked program is not started, and the turn says why", async (_name, text) => {
+      const { dir, program, config } = checkedProgram();
+      writeFileSync(config, text);
+      const shim = start(program, { ACP_SHIM_NOT_READY: "still installing", ACP_SHIM_CONFIG: config, ACP_SHIM_CONFIG_FAILED: "settings are broken" });
+      shim.send({ id: 1, method: "initialize", params: {} });
+      await shim.until((l) => l.id === 1);
+      shim.send({ id: 2, method: "session/prompt", params: { sessionId: "s" } });
+      const chunk = await shim.until((l) => l.method === "session/update");
+      expect(chunk.params.update.content.text).toBe("settings are broken");
+      expect(existsSync(join(dir, "started"))).toBe(false);
+    });
+
+    it("no file at all: not started", async () => {
+      const { dir, program, config } = checkedProgram();
+      const shim = start(program, { ACP_SHIM_NOT_READY: "still installing", ACP_SHIM_CONFIG: config, ACP_SHIM_CONFIG_FAILED: "settings are broken" });
+      shim.send({ id: 1, method: "initialize", params: {} });
+      await shim.until((l) => l.id === 1);
+      expect(existsSync(join(dir, "started"))).toBe(false);
+    });
+
+    it.each([
+      ["plain", '{"enabled_providers":["corp"]}'],
+      ["comments and a trailing comma, as OpenCode allows", '// mine\n{ /* a */ "url": "http://x//y", "enabled_providers": ["corp",], }\n'],
+    ])("%s: started (control)", async (_name, text) => {
+      const { dir, program, config } = checkedProgram();
+      writeFileSync(config, text);
+      start(program, { ACP_SHIM_NOT_READY: "still installing", ACP_SHIM_CONFIG: config, ACP_SHIM_CONFIG_FAILED: "settings are broken" });
+      for (let i = 0; i < 100 && !existsSync(join(dir, "started")); i += 1) await settle();
+      expect(existsSync(join(dir, "started"))).toBe(true);
+    });
+
+    it("blocked by Fleet Kit: not started, and the reason from its record reaches the turn", async () => {
+      const { dir, program, config } = checkedProgram();
+      writeFileSync(config, '{"enabled_providers":["corp"]}');
+      const state = join(dir, "bb-acp-state.json");
+      writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, "utf8")), blocked: true, message: "disk is read-only" }));
+      const shim = start(program, { ACP_SHIM_NOT_READY: "still installing", ACP_SHIM_CONFIG: config, ACP_SHIM_CONFIG_FAILED: "settings are broken" });
+      shim.send({ id: 1, method: "initialize", params: {} });
+      await shim.until((l) => l.id === 1);
+      shim.send({ id: 2, method: "session/prompt", params: { sessionId: "s" } });
+      const chunk = await shim.until((l) => l.method === "session/update");
+      expect(chunk.params.update.content.text).toBe("disk is read-only");
+      expect(existsSync(join(dir, "started"))).toBe(false);
+    });
+  });
+
   it("says what Fleet Kit has found out: a refusal, or that it stopped trying", async () => {
     const dir = mkdtempSync(join(tmpdir(), "fk-shim-"));
     dirs.push(dir);

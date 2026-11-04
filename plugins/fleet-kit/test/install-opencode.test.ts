@@ -155,14 +155,64 @@ describe("ensureOpenCode", () => {
     expect(downloads).toBe(0);
   });
 
-  it("brings back the previous program after an update stopped between its renames", async () => {
+  /** The program recorded as checked, kept under an old name, as an update leaves it. */
+  function recordedOldCopy(dir: string, name = "opencode.old-abc") {
+    const copy = join(dir, name);
+    writeFileSync(copy, versionScript("2.2.5"));
+    chmodSync(copy, 0o755);
+    const file = statSync(copy);
+    writeFileSync(join(dir, "bb-acp-state.json"), JSON.stringify({ verified: { version: "2.2.5", size: file.size, mtimeMs: file.mtimeMs }, message: null }));
+    return copy;
+  }
+
+  it("brings back the program that passed its check after an update stopped between its renames", async () => {
     const dir = temp();
-    writeFileSync(join(dir, "opencode.old-abc"), versionScript("2.2.5"));
-    chmodSync(join(dir, "opencode.old-abc"), 0o755);
+    recordedOldCopy(dir);
     let downloads = 0;
     const outcome = await ensureOpenCode(deps(dir, { url: "x", integrity: "x", entry: "x" }, { download: async () => void (downloads += 1) }));
     expect(outcome.state).toBe("current");
     expect(downloads).toBe(0);
+  });
+
+  it("among old copies takes the checked one, and puts it in place of an unchecked program", async () => {
+    const dir = temp();
+    writeFileSync(join(dir, "opencode.old-000"), "#!/bin/sh\necho left by a failed update\n");
+    recordedOldCopy(dir, "opencode.old-zzz");
+    writeFileSync(join(dir, "opencode"), "#!/bin/sh\nexit 3\n");
+    chmodSync(join(dir, "opencode"), 0o755);
+    let downloads = 0;
+    const outcome = await ensureOpenCode(deps(dir, { url: "x", integrity: "x", entry: "x" }, { download: async () => void (downloads += 1) }));
+    expect(outcome.state).toBe("current");
+    expect(downloads).toBe(0);
+    expect(readFileSync(join(dir, "opencode"), "utf8")).toBe(versionScript("2.2.5"));
+  });
+
+  it("does not bring back an old copy nobody checked", async () => {
+    const dir = temp();
+    writeFileSync(join(dir, "opencode.old-abc"), versionScript("2.2.5"));
+    chmodSync(join(dir, "opencode.old-abc"), 0o755);
+    const outcome = await ensureOpenCode(deps(dir, { url: "x", integrity: "x", entry: "x" }, { mayDownload: false }));
+    expect(outcome).toMatchObject({ state: "failed", reason: "paused" });
+    expect(existsSync(join(dir, "opencode"))).toBe(false);
+  });
+
+  it("a record that cannot be written takes the new program back, and the previous one stays", async () => {
+    const dir = temp();
+    writeFileSync(join(dir, "opencode"), versionScript("2.2.4"));
+    chmodSync(join(dir, "opencode"), 0o755);
+    const { archive, integrity } = makePackage(versionScript("2.2.5"));
+    const state = join(dir, "bb-acp-state.json");
+    const outcome = await ensureOpenCode(
+      deps(dir, { url: archive, integrity, entry: "package/bin/opencode" }, {
+        run: async (path) => {
+          const text = readFileSync(path, "utf8");
+          if (text === versionScript("2.2.5")) mkdirSync(state);
+          return { kind: "ok", version: text.includes("2.2.5") ? "2.2.5" : "2.2.4" };
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({ state: "failed", reason: "disk" });
+    expect(readFileSync(join(dir, "opencode"), "utf8")).toBe(versionScript("2.2.4"));
   });
 
   it("a disk that refuses is a failure, not an exception", async () => {

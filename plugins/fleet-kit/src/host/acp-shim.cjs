@@ -40,9 +40,26 @@ function programState(file) {
 }
 // Fleet Kit's own OpenCode (it sets ACP_SHIM_NOT_READY): only the file that passed its version check, not one still being
 // checked or left by an update that failed.
+// OpenCode throws away a config file it cannot read, and the limit on providers with it: without the file it opens them all.
+// Comments and trailing commas are allowed there, as OpenCode allows them.
+function limitHolds() {
+  const file = process.env.ACP_SHIM_CONFIG;
+  if (!file) return true;
+  try {
+    const text = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+    const plain = text.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (_, string) => string || "").replace(/("(?:[^"\\]|\\.)*")|,(\s*[}\]])/g, (_, string, end) => string || end);
+    const limit = JSON.parse(plain).enabled_providers;
+    return Array.isArray(limit) && limit.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function isVerified(file) {
   if (!process.env.ACP_SHIM_NOT_READY) return true;
-  const verified = programState(file).verified;
+  const state = programState(file);
+  if (state.blocked || !limitHolds()) return false;
+  const verified = state.verified;
   if (!verified) return false;
   try {
     const stat = fs.statSync(file);
@@ -95,7 +112,7 @@ function serveNotReady(text) {
       send({ id, result: { sessionId: `not-ready-${process.pid}-${Date.now()}` } });
     } else if (method === "session/prompt") {
       // What Fleet Kit found out since this process started: a refusal, or that it has stopped trying.
-      const said = programState(name).message || text;
+      const said = programState(name).message || (limitHolds() ? "" : process.env.ACP_SHIM_CONFIG_FAILED) || text;
       send({ method: "session/update", params: { sessionId: params?.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: said } } } });
       send({ id, result: { stopReason: "end_turn" } });
       if (resolveBin(name)) process.stdout.write("", () => process.exit(0));

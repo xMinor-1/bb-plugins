@@ -183,6 +183,8 @@ const rootShape = {
       deniedMessage: z.string().min(1).optional(),
       /** Shown in a turn when installing keeps failing and Fleet Kit has stopped trying for now. */
       failedMessage: z.string().min(1).optional(),
+      /** Shown in a turn when OpenCode's settings could not be written and it is not started; {error} is the reason. */
+      configFailedMessage: z.string().min(1).optional(),
     })
     .strict()
     .optional(),

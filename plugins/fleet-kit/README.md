@@ -331,16 +331,21 @@ does this, in this order, before it touches any plugin:
 The entry runs `bb-acp-shim.cjs` under the program that runs bb: Node, or the
 desktop app in its Node mode. The wrapper tells bb OpenCode takes no images (bb
 then sends a file path), holds the first prompt until MCP servers connect, at
-most 12 s and half a second more, and while there is nothing checked to start
-answers turns with `notReadyMessage`, `deniedMessage` or `failedMessage`. A
+most 12 s and half a second more, and starts OpenCode only when the program passed
+its check and the config file holds `enabled_providers`: a file OpenCode cannot read
+is thrown away with the limit, and every provider opens. Until then it answers turns
+with `notReadyMessage`, `deniedMessage`, `failedMessage` or `configFailedMessage`. A
 thread opened in that time gets a real agent on the turn after OpenCode appears;
 bb notes the restart in the thread.
 
 A download, hash, unpack or disk failure is tried three times within a sync, and
 the sync is repeated in three minutes, up to three syncs in a row. After that the
-file is fetched once in six hours, or by a sync the person starts. A refusal, a
-program that does not work and a missing file are not repeated early. Any failure,
-also of writing the settings, is `state: failed` with a text, never an exception. When the
+file is fetched once in six hours, or by a sync the person starts, which also begins
+the count again. A refusal and a program that does not work count the same way but
+are not repeated early; a missing file is neither counted nor repeated early. Settings
+or a bb agent entry that cannot be written are `state: failed` too, repeated in three
+minutes up to three times, then with the scheduled sync. Any failure is `state: failed`
+with a text, never an exception. When the
 system refuses to run the program (a policy, an antivirus, access rights), the sync
 reports an error with the program's path and a text for an IT request, and tries
 no other way of starting it.
