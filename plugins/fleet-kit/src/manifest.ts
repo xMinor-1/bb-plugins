@@ -163,7 +163,31 @@ export type AiChoice = z.infer<typeof aiChoice>;
 
 const providerId = z.string().regex(/^[a-z0-9][a-z0-9._-]*$/, "use a bb provider id such as acp-opencode");
 
+/** A package file with one program in it, for one operating system and processor. */
+const opencodeFile = z
+  .object({
+    url: z.string().regex(/^(https:\/\/|file:\/\/\/|http:\/\/(localhost|127\.0\.0\.1)[:/])\S+$/, "use an https:// address"),
+    integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]{86}==$/, "use sha512-<base64>, as in package-lock.json"),
+    entry: z.string().min(1),
+  })
+  .strict();
+
 const rootShape = {
+  /** Where Fleet Kit gets the OpenCode of install.opencode, by <platform>-<arch>; "-baseline" is for processors without AVX2. */
+  opencodeInstall: z
+    .object({
+      files: z.record(z.string().regex(/^[a-z0-9]+-[a-z0-9]+(-baseline)?$/), opencodeFile),
+      /** What an agent turn answers until OpenCode is in place; a build sets it in its own language. */
+      notReadyMessage: z.string().min(1).optional(),
+      /** Shown in a turn when the system refuses to start OpenCode; {path} is the program. */
+      deniedMessage: z.string().min(1).optional(),
+      /** Shown in a turn when installing keeps failing and Fleet Kit has stopped trying for now. */
+      failedMessage: z.string().min(1).optional(),
+      /** Shown in a turn when OpenCode's settings could not be written and it is not started; {error} is the reason. */
+      configFailedMessage: z.string().min(1).optional(),
+    })
+    .strict()
+    .optional(),
   $schema: z.string().optional(),
   schema: z.number().int().positive(),
   name: z.string().min(1),

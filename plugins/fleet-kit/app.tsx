@@ -180,6 +180,7 @@ function ModelsLine({ opencode }: { opencode: NonNullable<Status["opencode"]> })
   const t = useMessages(messages);
   const lang = useLang();
   const providers = opencode.allowedProviders.join(", ");
+  if (opencode.install && opencode.install.state !== "ready") return <p className={opencode.install.state === "installing" ? "text-muted-foreground" : "text-destructive"}>{render(lang, opencode.install)}</p>;
   if (!opencode.installed) return <p className="text-amber-600 dark:text-amber-400">{t.notInstalled}</p>;
   if (opencode.version !== null && !/^v?2\./.test(opencode.version)) {
     return <p className="text-amber-600 dark:text-amber-400">{t.tooOld(opencode.version)}</p>;

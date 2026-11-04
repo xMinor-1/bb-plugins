@@ -143,3 +143,15 @@ describe("manifest location", () => {
     expect(() => parseManifestJson("{")).toThrow("not valid JSON");
   });
 });
+
+describe("opencodeInstall", () => {
+  const file = { url: "https://files.example.test/o.tgz", integrity: `sha512-${"A".repeat(86)}==`, entry: "package/bin/opencode" };
+  it("takes files by platform, with an optional baseline build", () => {
+    const parsed = checkManifest({ ...sampleManifest(), opencodeInstall: { files: { "win32-x64": file, "win32-x64-baseline": file }, notReadyMessage: "wait" } });
+    expect(parsed.errors).toEqual([]);
+  });
+  it("refuses a plain http address and a hash in another form", () => {
+    expect(checkManifest({ ...sampleManifest(), opencodeInstall: { files: { "win32-x64": { ...file, url: "http://files.example.test/o.tgz" } } } }).errors.length).toBeGreaterThan(0);
+    expect(checkManifest({ ...sampleManifest(), opencodeInstall: { files: { "win32-x64": { ...file, integrity: "abc" } } } }).errors.length).toBeGreaterThan(0);
+  });
+});

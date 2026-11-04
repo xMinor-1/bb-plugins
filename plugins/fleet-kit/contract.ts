@@ -41,6 +41,17 @@ export type Notice = z.infer<typeof noticeSchema>;
 export const opencodeStatusSchema = z.object({
   installed: z.boolean(),
   version: z.string().nullable(),
+  /** Fleet Kit's own OpenCode: where it stands. Absent when this machine does not get one. */
+  install: z
+    .object({
+      state: z.enum(["ready", "installing", "failed", "denied"]),
+      path: z.string(),
+      code: z.string(),
+      params: z.record(z.string(), z.union([z.string(), z.number()])),
+      message: z.string(),
+    })
+    .nullable()
+    .optional(),
   configFile: z.string().nullable(),
   /** Which layer limits OpenCode to the allowed providers. */
   protection: z.enum(["system-policy", "user-setting", "none", "unknown"]),
@@ -112,6 +123,8 @@ export const setupSchema = z.object({
   remaining: z.number().int(),
   complete: z.boolean(),
   secretStore: z.string(),
+  /** OpenCode installed by Fleet Kit while it is not ready; the page says what is going on. */
+  opencodeInstall: opencodeStatusSchema.shape.install,
 });
 export type Setup = z.infer<typeof setupSchema>;
 

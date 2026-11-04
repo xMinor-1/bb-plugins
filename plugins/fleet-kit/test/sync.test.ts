@@ -1,7 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { InstallOutcome } from "../src/host/install-opencode.js";
 import { emptyManaged, runSync, type ManagedState, type SyncDeps } from "../src/sync.js";
 import { openFileSecretStore } from "../src/secret-store.js";
 import { clone, sampleManifest } from "./fixtures.js";
@@ -177,7 +178,8 @@ async function setup(manifest: Record<string, unknown>, initial: FakePlugin[], m
     store,
     managed,
     signal: new AbortController().signal,
-    environment: { HOME: dir },
+    // Never the real home: OpenCode's configuration is written even without an OpenCode on the machine.
+    environment: { HOME: dir, XDG_CONFIG_HOME: join(dir, ".config") },
   };
   return { ...fake, deps, store, path };
 }
@@ -633,7 +635,7 @@ describe("bb agents", () => {
     first.agents.find((entry) => entry.id === "acp-opencode")!.available = false;
     const one = await runSync(first.deps, "start");
     expect(callsOf(first.calls, "agent ")).toEqual([]);
-    expect(one.report.steps.find((step) => step.item === "OpenCode")).toMatchObject({ outcome: "warning", code: "agentUnavailable" });
+    expect(one.report.steps.find((step) => step.code === "agentUnavailable")).toMatchObject({ outcome: "warning", item: "OpenCode" });
     expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
     expect(first.agents.filter((entry) => entry.enabled).map((entry) => entry.id)).toEqual(["acp-opencode", "codex", "claude-code"]);
   });
@@ -644,7 +646,7 @@ describe("bb agents", () => {
     Object.assign(opencode, { enabled: false, pluginEnabled: false });
     const one = await runSync(first.deps, "start");
     expect(callsOf(first.calls, "agent ")).toEqual([]);
-    expect(one.report.steps.find((step) => step.item === "OpenCode")).toMatchObject({ outcome: "warning", code: "agentPluginOff" });
+    expect(one.report.steps.find((step) => step.code === "agentPluginOff")).toMatchObject({ outcome: "warning", item: "OpenCode" });
     expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
     const two = await runSync({ ...first.deps, managed: one.managed }, "schedule");
     expect(callsOf(first.calls, "agent ")).toEqual([]);
@@ -688,5 +690,286 @@ describe("bb agents", () => {
     const outcome = await runSync(first.deps, "start");
     expect(callsOf(first.calls, "agent ")).toEqual([]);
     expect(outcome.report.steps.find((step) => step.area === "agent")).toMatchObject({ outcome: "error", code: "agentsNoneHere" });
+  });
+});
+
+describe("OpenCode installed by Fleet Kit", () => {
+  const acp = (values: Record<string, unknown> = {}): FakePlugin => ({ id: "provider-acp", source: "builtin:provider-acp", version: "1.0.0", enabled: true, provenance: "builtin", schema: { customAgents: { type: "string" } }, values });
+  const withInstall = () => ({
+    ...sampleManifest(),
+    aiServices: { "thread-title": "off" },
+    opencodeInstall: { files: { "linux-x64": { url: "https://files.example.test/o.tgz", integrity: `sha512-${"A".repeat(86)}==`, entry: "package/bin/opencode" } }, notReadyMessage: "wait please" },
+  });
+
+  async function prepare(result: (directory: string) => InstallOutcome, texts: Record<string, string> = {}) {
+    const manifest = withInstall();
+    Object.assign(manifest.opencodeInstall, texts);
+    const first = await setup(manifest, [self(), acp()]);
+    const installDir = join(first.deps.environment.HOME!, "own");
+    const order: string[] = [];
+    let configAtInstall = "";
+    let agentAtInstall = "";
+    first.deps.settings.opencodeInstallDir = installDir;
+    first.deps.agentRuntime = { execPath: "/app", electron: true };
+    first.deps.ensureOpenCode = async () => {
+      order.push(`install after: ${pluginCalls(first.calls).join(",")}`);
+      configAtInstall = await readFile(join(first.deps.environment.HOME!, ".config", "opencode", "opencode.json"), "utf8");
+      const settings = await first.sdk.plugins.getSettings({ pluginId: "provider-acp" });
+      agentAtInstall = String(settings.values.customAgents);
+      return result(installDir);
+    };
+    return { ...first, installDir, order, config: () => configAtInstall, agent: () => agentAtInstall };
+  }
+
+  it("stops fetching after three failures in a row, until later or until the person asks", async () => {
+    const run = await prepare((directory) => ({ state: "failed", reason: "download", path: join(directory, "opencode"), detail: "offline" }));
+    const allowed: boolean[] = [];
+    const inner = run.deps.ensureOpenCode!;
+    run.deps.ensureOpenCode = async (files, directory, version, mayDownload) => {
+      allowed.push(mayDownload);
+      return mayDownload ? inner(files, directory, version, mayDownload) : { state: "failed", reason: "paused", path: join(directory, "opencode"), detail: "" };
+    };
+    let now = 1_000_000;
+    run.deps.now = () => now;
+    const once = async (trigger: "schedule" | "manual") => {
+      const outcome = await runSync(run.deps, trigger);
+      run.deps.managed = outcome.managed;
+      return outcome;
+    };
+    expect((await once("schedule")).retrySoon).toBe(true);
+    expect((await once("schedule")).retrySoon).toBe(true);
+    expect((await once("schedule")).retrySoon).toBe(false);
+    const paused = await once("schedule");
+    expect(paused.retrySoon).toBe(false);
+    expect(paused.report.steps.some((step) => step.code === "opencodeInstallPaused")).toBe(true);
+    expect(allowed).toEqual([true, true, true, false]);
+    await once("manual");
+    expect(allowed[4]).toBe(true);
+    now += 7 * 60 * 60_000;
+    await once("schedule");
+    expect(allowed[5]).toBe(true);
+  });
+
+  it("does not retry soon what a retry cannot help", async () => {
+    for (const reason of ["no-file", "broken", "denied"] as const) {
+      const run = await prepare((directory) => ({ state: "failed", reason, path: join(directory, "opencode"), detail: "x" }));
+      expect((await runSync(run.deps, "schedule")).retrySoon).toBe(false);
+    }
+  });
+
+  it("tells the wrapper what to say when installing has stopped or is refused", async () => {
+    const stopped = await prepare((directory) => ({ state: "failed", reason: "no-file", path: join(directory, "opencode"), detail: "x" }));
+    await runSync(stopped.deps, "schedule");
+    expect(JSON.parse(await readFile(join(stopped.installDir, "bb-acp-state.json"), "utf8")).message).not.toBe(null);
+    const passing = await prepare((directory) => ({ state: "failed", reason: "download", path: join(directory, "opencode"), detail: "x" }));
+    await runSync(passing.deps, "schedule");
+    expect(JSON.parse(await readFile(join(passing.installDir, "bb-acp-state.json"), "utf8").catch(() => '{"message":null}')).message).toBe(null);
+  });
+
+  it("an exception on the way is a failed install with a retry, and the plugins still go on", async () => {
+    const run = await prepare(() => {
+      throw new Error("disk gone");
+    });
+    const outcome = await runSync(run.deps, "schedule");
+    expect(outcome.opencode?.install?.state).toBe("failed");
+    expect(outcome.opencode?.install?.message).toContain("disk gone");
+    expect(outcome.retrySoon).toBe(true);
+    expect(pluginCalls(run.calls).some((call) => call.includes("notes"))).toBe(true);
+  });
+
+  it("settings that cannot be written leave a failed install and no OpenCode", async () => {
+    const run = await prepare((directory) => ({ state: "current", path: join(directory, "opencode"), version: "2.2.5" }));
+    let installs = 0;
+    run.deps.ensureOpenCode = async (_files, directory) => {
+      installs += 1;
+      return { state: "current", path: join(directory, "opencode"), version: "2.2.5" };
+    };
+    const blocked = join(run.deps.environment.HOME!, ".config");
+    await rm(blocked, { recursive: true, force: true });
+    await writeFile(blocked, "a file where the folder should go");
+    const outcome = await runSync(run.deps, "schedule");
+    expect(installs).toBe(0);
+    expect(outcome.opencode?.install?.state).toBe("failed");
+    expect(outcome.report.steps.some((step) => step.area === "opencode" && step.outcome === "error")).toBe(true);
+    expect(outcome.retrySoon).toBe(true);
+  });
+
+  describe("settings and the agent entry", () => {
+    const ready = (directory: string): InstallOutcome => ({ state: "current", path: join(directory, "opencode"), version: "2.2.5" });
+    const stateFile = (run: { installDir: string }) => join(run.installDir, "bb-acp-state.json");
+    const breakConfig = async (run: { deps: { environment: Record<string, string | undefined> } }) => {
+      const dir = join(run.deps.environment.HOME!, ".config", "opencode");
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "opencode.json"), "{");
+    };
+    const again = async (run: Awaited<ReturnType<typeof prepare>>, trigger: "schedule" | "manual" = "schedule") => {
+      const outcome = await runSync(run.deps, trigger);
+      run.deps.managed = outcome.managed;
+      return outcome;
+    };
+
+    it("a broken config: failed, the wrapper is told and registered, nothing installed, and it clears once the file is good", async () => {
+      const run = await prepare(ready, { configFailedMessage: "Настройки не записаны: {error}" });
+      let installs = 0;
+      const inner = run.deps.ensureOpenCode!;
+      run.deps.ensureOpenCode = async (...args) => {
+        installs += 1;
+        return inner(...args);
+      };
+      await breakConfig(run);
+      const failed = await again(run);
+      expect(failed.opencode?.install?.state).toBe("failed");
+      expect(installs).toBe(0);
+      const saved = JSON.parse(await readFile(stateFile(run), "utf8"));
+      expect(saved.blocked).toBe(true);
+      expect(saved.message).toMatch(/^Настройки не записаны: ./);
+      const entry = JSON.parse(String((await run.sdk.plugins.getSettings({ pluginId: "provider-acp" })).values.customAgents)).find((one: { id: string }) => one.id === "opencode");
+      expect(entry.env.ACP_SHIM_CONFIG).toContain("opencode.json");
+      expect(entry.env.ACP_SHIM_CONFIG_FAILED).toMatch(/^Настройки не записаны: ./);
+      await writeFile(join(run.deps.environment.HOME!, ".config", "opencode", "opencode.json"), "{}");
+      const fixed = await again(run);
+      expect(fixed.opencode?.install?.state).toBe("ready");
+      expect(installs).toBe(1);
+      const after = JSON.parse(await readFile(stateFile(run), "utf8"));
+      expect(after.blocked).toBe(false);
+      expect(after.message).toBe(null);
+      expect(fixed.managed.opencodeSetupFailures).toBe(null);
+    });
+
+    it("a config that keeps failing stops the timer after three; a sync the person starts brings it back", async () => {
+      const run = await prepare(ready);
+      await breakConfig(run);
+      expect((await again(run)).retrySoon).toBe(true);
+      expect((await again(run)).retrySoon).toBe(true);
+      const third = await again(run);
+      expect(third.retrySoon).toBe(false);
+      expect(third.opencode?.install?.code).toBe("opencodeConfigStopped");
+      expect((await again(run)).retrySoon).toBe(false);
+      expect((await again(run, "manual")).retrySoon).toBe(true);
+    });
+
+    it("an agent entry that cannot be saved: failed with a limited retry, never ready", async () => {
+      const run = await prepare(ready);
+      const update = run.sdk.plugins.updateSettings.bind(run.sdk.plugins);
+      let refuse = true;
+      run.sdk.plugins.updateSettings = (async (request: { pluginId: string }) => {
+        if (refuse && request.pluginId === "provider-acp") throw new Error("bb refused");
+        return update(request as never);
+      }) as typeof run.sdk.plugins.updateSettings;
+      const first = await again(run);
+      expect(first.opencode?.install?.state).toBe("failed");
+      expect(first.opencode?.install?.message).toContain("bb refused");
+      expect(first.retrySoon).toBe(true);
+      await again(run);
+      expect((await again(run)).retrySoon).toBe(false);
+      refuse = false;
+      const fixed = await again(run);
+      expect(fixed.opencode?.install?.state).toBe("ready");
+      expect(fixed.managed.opencodeSetupFailures).toBe(null);
+    });
+
+    it("a state that cannot be published does not take the retry away", async () => {
+      const run = await prepare(() => {
+        throw new Error("disk gone");
+      });
+      run.deps.onOpenCode = async () => {
+        throw new Error("store gone");
+      };
+      const outcome = await runSync(run.deps, "schedule");
+      expect(outcome.retrySoon).toBe(true);
+      expect(outcome.opencode?.install?.state).toBe("failed");
+      expect(pluginCalls(run.calls).some((call) => call.includes("notes"))).toBe(true);
+    });
+
+    it.each(["broken", "denied"] as const)("%s counts towards the pause, and a sync the person starts begins the count again", async (reason) => {
+      const run = await prepare((directory) => ({ state: "failed", reason, path: join(directory, "opencode"), detail: "x" }));
+      const allowed: boolean[] = [];
+      const inner = run.deps.ensureOpenCode!;
+      run.deps.ensureOpenCode = async (files, directory, version, mayDownload) => {
+        allowed.push(mayDownload);
+        return inner(files, directory, version, mayDownload);
+      };
+      run.deps.now = () => 1_000_000;
+      await again(run);
+      await again(run);
+      await again(run);
+      await again(run);
+      expect(allowed).toEqual([true, true, true, false]);
+      expect((await again(run, "manual")).managed.opencodeFailures?.count).toBe(1);
+      await again(run);
+      expect(allowed[allowed.length - 1]).toBe(true);
+    });
+
+    it("the build's own texts reach the wrapper: deniedMessage with the path, failedMessage when it stops", async () => {
+      const denied = await prepare((directory) => ({ state: "failed", reason: "denied", path: join(directory, "opencode"), detail: "x" }), { deniedMessage: "Заявка в ИТ: {path}" });
+      await again(denied);
+      expect(JSON.parse(await readFile(stateFile(denied), "utf8")).message).toBe(`Заявка в ИТ: ${join(denied.installDir, "opencode")}`);
+      const entry = JSON.parse(String((await denied.sdk.plugins.getSettings({ pluginId: "provider-acp" })).values.customAgents)).find((one: { id: string }) => one.id === "opencode");
+      expect(entry.env.ACP_SHIM_DENIED).toBe(`Заявка в ИТ: ${join(denied.installDir, "opencode")}`);
+      const stopped = await prepare((directory) => ({ state: "failed", reason: "no-file", path: join(directory, "opencode"), detail: "x" }), { failedMessage: "Пульт пока не повторяет" });
+      await again(stopped);
+      expect(JSON.parse(await readFile(stateFile(stopped), "utf8")).message).toBe("Пульт пока не повторяет");
+    });
+  });
+
+  it("writes the provider limit and the agent before OpenCode exists, and only then plugins", async () => {
+    const run = await prepare((directory) => ({ state: "failed", reason: "download", path: join(directory, "opencode"), detail: "offline" }));
+    const seen: Array<string | undefined> = [];
+    run.deps.onOpenCode = async (status) => void seen.push(status.install?.state);
+    let callsWhenManifestRead = -1;
+    run.deps.onManifest = async () => void (callsWhenManifestRead = pluginCalls(run.calls).filter((call) => call.includes("notes")).length);
+    const outcome = await runSync(run.deps, "start");
+    expect(JSON.parse(run.config()).enabled_providers).toEqual(["corp"]);
+    expect(run.order[0]).not.toContain("notes");
+    const agent = JSON.parse(run.agent())[0];
+    expect(agent).toMatchObject({ id: "opencode", command: "/app", env: { ELECTRON_RUN_AS_NODE: "1", ACP_SHIM_NOT_READY: "wait please" } });
+    expect(agent.args).toEqual([join(run.installDir, "bb-acp-shim.cjs"), join(run.installDir, "opencode"), "acp"]);
+    expect(seen).toEqual(["installing", "failed"]);
+    expect(callsWhenManifestRead).toBe(0);
+    expect(pluginCalls(run.calls).some((call) => call.includes("notes"))).toBe(true);
+    expect(outcome.retrySoon).toBe(true);
+    expect(outcome.report.steps.find((step) => step.code === "opencodeInstallFailed")).toMatchObject({ outcome: "error" });
+    expect(outcome.opencode).toMatchObject({ installed: false, install: { state: "failed" } });
+  });
+
+  it("names the program and the IT request when the system refuses it, and does not rush to try again", async () => {
+    const run = await prepare((directory) => ({ state: "failed", reason: "denied", path: join(directory, "opencode"), detail: "EPERM" }));
+    const outcome = await runSync(run.deps, "start");
+    const step = outcome.report.steps.find((one) => one.code === "opencodeDenied")!;
+    expect(step.outcome).toBe("error");
+    expect(step.message).toContain(join(run.installDir, "opencode"));
+    expect(step.message).toContain("IT");
+    expect(outcome.retrySoon).toBe(false);
+    expect(outcome.opencode?.install?.state).toBe("denied");
+  });
+
+  it("turns other agents off before installing plugins", async () => {
+    const run = await prepare((directory) => ({ state: "failed", reason: "download", path: join(directory, "opencode"), detail: "offline" }));
+    const manifest = { ...withInstall(), agents: { allowed: ["acp-opencode"] } };
+    await writeFile(run.path, JSON.stringify(manifest));
+    await runSync(run.deps, "start");
+    const firstOff = run.calls.findIndex((call) => call.startsWith("agent ") && call.includes("off"));
+    const firstInstall = run.calls.findIndex((call) => call.includes("notes"));
+    expect(firstOff).toBeGreaterThanOrEqual(0);
+    expect(firstOff).toBeLessThan(firstInstall);
+  });
+
+  it("keeps the person's other agents and a copy of the value it replaces", async () => {
+    const mine = JSON.stringify([{ id: "mine", command: "x" }]);
+    const run = await prepare((directory) => ({ state: "failed", reason: "download", path: join(directory, "opencode"), detail: "offline" }));
+    Object.assign((await run.sdk.plugins.getSettings({ pluginId: "provider-acp" })).values, {});
+    await run.sdk.plugins.updateSettings({ pluginId: "provider-acp", values: { customAgents: mine } });
+    await runSync(run.deps, "start");
+    expect(JSON.parse(run.agent()).map((agent: { id: string }) => agent.id)).toEqual(["mine", "opencode"]);
+    const backups = await readdir(join(run.installDir, "backup"));
+    expect(await readFile(join(run.installDir, "backup", backups[0]!), "utf8")).toBe(mine);
+  });
+
+  it("without the install folder it only looks for an OpenCode and still writes the provider limit", async () => {
+    const first = await setup(withInstall(), [self()]);
+    const outcome = await runSync(first.deps, "start");
+    expect(outcome.report.steps.find((step) => step.code === "opencodeMissing")).toMatchObject({ outcome: "warning" });
+    expect(JSON.parse(await readFile(join(first.deps.environment.HOME!, ".config", "opencode", "opencode.json"), "utf8")).enabled_providers).toEqual(["corp"]);
+    expect(outcome.opencode?.install ?? null).toBeNull();
   });
 });

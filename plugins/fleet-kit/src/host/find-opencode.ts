@@ -1,7 +1,7 @@
 // Finds the OpenCode executable that bb's ACP provider starts: bb resolves
 // `opencode` on the user's PATH (the server receives the same normalized PATH),
 // so Fleet Kit does the same and asks it for its version.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { access, constants } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 
@@ -41,10 +41,17 @@ export async function findOnPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platfo
 
 function version(command: string, env: NodeJS.ProcessEnv): Promise<string | null> {
   return new Promise((resolve) => {
-    const child = spawn(command, ["--version"], { env, stdio: ["ignore", "pipe", "ignore"], windowsHide: true, shell: false });
+    let child: ChildProcess;
+    try {
+      child = spawn(command, ["--version"], { env, stdio: ["ignore", "pipe", "ignore"], windowsHide: true, shell: false });
+    } catch {
+      // On Windows a refused start throws here instead of emitting "error".
+      resolve(null);
+      return;
+    }
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout!.on("data", (chunk: Buffer) => {
       if (out.length < 4096) out += chunk.toString("utf8");
     });
     child.on("error", () => {

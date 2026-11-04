@@ -10,8 +10,9 @@ import { z } from "zod";
 import { rpcContract, STATUS_CHANNEL, type Notice, type OpenCodeStatus, type Setup, type SetupMark, type Status, type SyncReport } from "./contract.js";
 import { checkSecretValue, openSecretStore, SECRET_NAME, type SecretStore, type SecretStorePreference } from "./src/secret-store.js";
 import { emptyManaged, runSync, SELF_ID, type FleetKitSettings, type ManagedState } from "./src/sync.js";
+import type { Manifest } from "./src/manifest.js";
 import { maskManifestUrl, parseManifestLocation } from "./src/fetch-manifest.js";
-import { opencodeConfigDirSchema } from "./src/shared/settings.js";
+import { opencodeConfigDirSchema, opencodeInstallDirSchema } from "./src/shared/settings.js";
 import { resolveOpenCodeLocation } from "./src/host/opencode-location.js";
 import { lockState, resetStuckLock } from "./src/host/lock-state.js";
 import { collectSetup, markProblem, SetupAsker, type StoredOnboarding } from "./src/setup.js";
@@ -21,6 +22,8 @@ export { rpcContract };
 const START_DELAY_MS = 15_000;
 /** The page, its banner and the sidebar badge ask at once; one answer serves them all. */
 const SETUP_FRESH_MS = 3_000;
+/** An OpenCode install that failed on the network or a bad file goes again this soon, not at the next scheduled sync. */
+const RETRY_MS = 3 * 60_000;
 
 interface StoredSecrets {
   list: { name: string; title: string; hint: string | null }[];
@@ -62,6 +65,12 @@ export default async function plugin(bb: BbPluginApi) {
       default: "",
       experimental_schema: opencodeConfigDirSchema,
     },
+    opencodeInstallDir: {
+      type: "string",
+      label: "Folder for OpenCode installed by Fleet Kit (empty: use the OpenCode found on PATH)",
+      default: "",
+      experimental_schema: opencodeInstallDirSchema,
+    },
     secretStore: {
       type: "select",
       label: "Where secrets are stored",
@@ -88,7 +97,11 @@ export default async function plugin(bb: BbPluginApi) {
   /** When this process started Fleet Kit's own update; a sync meanwhile does not start another. */
   let selfUpdateStartedAt: number | undefined;
   const controller = new AbortController();
-  bb.onDispose(() => controller.abort());
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  bb.onDispose(() => {
+    controller.abort();
+    if (retryTimer !== null) clearTimeout(retryTimer);
+  });
 
   async function readSettings(): Promise<FleetKitSettings & { secretStore: SecretStorePreference }> {
     const value = await settings.get();
@@ -97,6 +110,7 @@ export default async function plugin(bb: BbPluginApi) {
       manifestToken: typeof value.manifestToken === "string" && value.manifestToken !== "" ? value.manifestToken : undefined,
       syncIntervalMinutes: value.syncIntervalMinutes,
       opencodeConfigDir: value.opencodeConfigDir.trim(),
+      opencodeInstallDir: value.opencodeInstallDir.trim(),
       allowDevSources: value.allowDevSources,
       paused: value.paused,
       secretStore: value.secretStore as SecretStorePreference,
@@ -116,8 +130,8 @@ export default async function plugin(bb: BbPluginApi) {
   async function setup(lang: "en" | "ru"): Promise<Setup> {
     const cached = setupAnswers.get(lang);
     if (cached && Date.now() - cached.at < SETUP_FRESH_MS) return cached.answer;
-    const answer = (async () =>
-      collectSetup({
+    const answer = (async () => ({
+      ...(await collectSetup({
         listPlugins: async () => (await bb.sdk.plugins.list()).plugins,
         ask: (pluginId, language) => asker.ask(pluginId, language),
         manifestSet: (await settings.get()).manifestUrl.trim() !== "",
@@ -128,7 +142,9 @@ export default async function plugin(bb: BbPluginApi) {
         secretStore: store.label,
         lastSync: (await kv.get<SyncReport>("lastSync")) ?? null,
         lang,
-      }))();
+      })),
+      opencodeInstall: (await kv.get<OpenCodeStatus>("opencode"))?.install ?? null,
+    }))();
     setupAnswers.set(lang, { at: Date.now(), answer });
     answer.catch(() => setupAnswers.delete(lang));
     return answer;
@@ -193,21 +209,21 @@ export default async function plugin(bb: BbPluginApi) {
         environment,
         bbConfigDir: process.env.OPENCODE_CONFIG_DIR,
         selfUpdateStartedAt,
+        onOpenCode: async (value) => {
+          await kv.set("opencode", value);
+          publish();
+        },
+        onManifest: async (manifest) => {
+          await saveFromManifest(manifest);
+          publish();
+        },
       },
       trigger,
     );
     await kv.set("managed", outcome.managed);
     await kv.set("lastSync", outcome.report);
     if (outcome.opencode !== null || outcome.manifest !== null) await kv.set("opencode", outcome.opencode);
-    if (outcome.manifest !== null) {
-      await kv.set("secrets", {
-        list: outcome.manifest.secrets.map((secret) => ({ name: secret.name, title: secret.title, hint: secret.hint ?? null })),
-      } satisfies StoredSecrets);
-      await kv.set("onboarding", {
-        steps: outcome.manifest.onboarding ?? [],
-        planned: outcome.manifest.plugins.filter((entry) => entry.status === "planned").map((entry) => entry.id),
-      } satisfies StoredOnboarding);
-    }
+    if (outcome.manifest !== null) await saveFromManifest(outcome.manifest);
     if (outcome.notices.length > 0) {
       const notices = (await kv.get<Notice[]>("notices")) ?? [];
       // One notice per id: an agent turned on by hand again does not pile up notices.
@@ -216,6 +232,12 @@ export default async function plugin(bb: BbPluginApi) {
     }
     const errors = outcome.report.steps.filter((step) => step.outcome === "error").length;
     bb.log.info(`sync (${trigger}): ${outcome.report.outcome}, ${outcome.report.steps.length} steps, ${errors} errors`);
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = null;
+    if (outcome.retrySoon && !controller.signal.aborted) {
+      retryTimer = setTimeout(() => void requestSync("schedule"), RETRY_MS);
+      retryTimer.unref?.();
+    }
     if (outcome.selfUpdate) {
       // Last: the update restarts Fleet Kit, and the new version syncs on start.
       try {
@@ -259,6 +281,7 @@ export default async function plugin(bb: BbPluginApi) {
     const relevant =
       next.manifestUrl !== previous.manifestUrl ||
       next.opencodeConfigDir !== previous.opencodeConfigDir ||
+      next.opencodeInstallDir !== previous.opencodeInstallDir ||
       next.syncIntervalMinutes !== previous.syncIntervalMinutes ||
       next.paused !== previous.paused ||
       next.secretStore !== previous.secretStore ||
@@ -312,6 +335,16 @@ export default async function plugin(bb: BbPluginApi) {
     if (opencodeConfigDir === "") return [];
     return [{ name: "OPENCODE_CONFIG_DIR", value: opencodeConfigDir, reason: "Fleet Kit keeps this bb's OpenCode configuration in its own directory" }];
   });
+
+  async function saveFromManifest(manifest: Manifest) {
+    await kv.set("secrets", {
+      list: manifest.secrets.map((secret) => ({ name: secret.name, title: secret.title, hint: secret.hint ?? null })),
+    } satisfies StoredSecrets);
+    await kv.set("onboarding", {
+      steps: manifest.onboarding ?? [],
+      planned: manifest.plugins.filter((entry) => entry.status === "planned").map((entry) => entry.id),
+    } satisfies StoredOnboarding);
+  }
 
   async function setSecret(name: string, value: string) {
     const known = ((await kv.get<StoredSecrets>("secrets")) ?? { list: [] }).list.some((secret) => secret.name === name);
@@ -403,6 +436,7 @@ export default async function plugin(bb: BbPluginApi) {
               lines.push(
                 `OpenCode: ${value.opencode.installed ? value.opencode.version : "not installed"}; models: ${value.opencode.models.state} (${value.opencode.protection})`,
               );
+              if (value.opencode.install && value.opencode.install.state !== "ready") lines.push(value.opencode.install.message);
             }
             for (const secret of value.secrets) lines.push(`Secret ${secret.name}: ${secret.set ? "set" : "not set"} (${value.secretStore})`);
             return { exitCode: 0, stdout: lines.join("\n") };
