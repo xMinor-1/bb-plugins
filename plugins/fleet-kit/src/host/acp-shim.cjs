@@ -20,8 +20,9 @@ const SCAN_MAX = 1 << 20; // initialize and its answer are short; longer lines a
 const CLOSE_WAIT_MS = 2000;
 const HOLD_MS = Number(process.env.ACP_SHIM_HOLD_MS) || 12000; // MCP wait limit; only tests change it
 const HOLD_POLL_MS = Number(process.env.ACP_SHIM_HOLD_POLL_MS) || 150; // only tests change it
-// OpenCode logs "mcp connected" a moment before the tools can be used, and tells nothing later: ACP has no list of tools, and
-// its server has no address to ask. A prompt within about 130 ms of the line ran without them; 159 ms and more had them.
+// Nothing tells when the tools can be used after "mcp connected": ACP has no list of tools, and its server has no address to
+// ask. Twice on a slow machine a prompt 121 and 130 ms after that line ran without them. Polling the log every 1 ms did not
+// repeat it (the line itself comes about a second late), so the cause is not proven; half a second on the first prompt is cheap.
 const HOLD_GRACE_MS = process.env.ACP_SHIM_HOLD_GRACE_MS !== undefined ? Number(process.env.ACP_SHIM_HOLD_GRACE_MS) : 500;
 const KEEP_IMAGE = process.env.ACP_SHIM_KEEP_IMAGE === "1"; // only the MCP wait, images as they were
 const [name, ...args] = process.argv.slice(2);
