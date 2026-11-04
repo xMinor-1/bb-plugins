@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InstallOutcome } from "../src/host/install-opencode.js";
-import { emptyManaged, runSync, type ManagedState, type SyncDeps } from "../src/sync.js";
+import { emptyManaged, maySync, runSync, type ManagedState, type SyncDeps } from "../src/sync.js";
 import { openFileSecretStore } from "../src/secret-store.js";
 import { clone, sampleManifest } from "./fixtures.js";
 
@@ -693,6 +693,16 @@ describe("bb agents", () => {
   });
 });
 
+describe("a paused Fleet Kit", () => {
+  it("syncs only when the person asks", () => {
+    expect(maySync("schedule", true)).toBe(false);
+    expect(maySync("start", true)).toBe(false);
+    expect(maySync("settings", true)).toBe(false);
+    expect(maySync("manual", true)).toBe(true);
+    expect(maySync("schedule", false)).toBe(true);
+  });
+});
+
 describe("OpenCode installed by Fleet Kit", () => {
   const acp = (values: Record<string, unknown> = {}): FakePlugin => ({ id: "provider-acp", source: "builtin:provider-acp", version: "1.0.0", enabled: true, provenance: "builtin", schema: { customAgents: { type: "string" } }, values });
   const withInstall = () => ({
@@ -846,6 +856,19 @@ describe("OpenCode installed by Fleet Kit", () => {
       expect(third.opencode?.install?.code).toBe("opencodeConfigStopped");
       expect((await again(run)).retrySoon).toBe(false);
       expect((await again(run, "manual")).retrySoon).toBe(true);
+    });
+
+    it("with retries over the turn does not promise another try, and keeps the reason", async () => {
+      const run = await prepare(ready, { configFailedMessage: "Пульт повторит сам: {error}", failedMessage: "Пульт пока не повторяет" });
+      await breakConfig(run);
+      await again(run);
+      const saying = async () => JSON.parse(await readFile(stateFile(run), "utf8")).message as string;
+      expect(await saying()).toMatch(/^Пульт повторит сам: ./);
+      await again(run);
+      await again(run);
+      expect(await saying()).toMatch(/^Пульт пока не повторяет \(.+\)$/);
+      await again(run, "manual");
+      expect(await saying()).toMatch(/^Пульт повторит сам: ./);
     });
 
     it("an agent entry that cannot be saved: failed with a limited retry, never ready", async () => {

@@ -243,6 +243,11 @@ function loadManaged(saved: ManagedState): ManagedState {
   };
 }
 
+/** A paused Fleet Kit syncs only when the person asks. */
+export function maySync(trigger: SyncReport["trigger"], paused: boolean): boolean {
+  return !paused || trigger === "manual";
+}
+
 export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): Promise<SyncOutcome> {
   const startedAt = new Date().toISOString();
   const steps = new Steps();
@@ -1203,7 +1208,10 @@ async function configFailed(deps: SyncDeps, manifest: Manifest, managed: Managed
   }
   const again = setupFailed(deps, manifest, managed, status, trigger, retry, program, say("opencodeConfigFailed", { error }));
   if (!again) status.install = { state: "failed", path: program, ...say("opencodeConfigStopped", { error }) };
-  await setProgramMessage(installDir, configFailedText(manifest, error), true).catch((failure) => {
+  // With retries over, the turn must not promise another try: the build's text for that, and the reason.
+  const stopped = manifest.opencodeInstall?.failedMessage;
+  const told = again ? configFailedText(manifest, error) : stopped !== undefined ? `${stopped} (${error})` : say("opencodeConfigStopped", { error }).message;
+  await setProgramMessage(installDir, told, true).catch((failure) => {
     steps.add("opencode", "OpenCode", "warning", say("opencodeStatusNotSaved", { error: errorText(failure) }));
   });
   await publishOpenCode(deps, status, steps);

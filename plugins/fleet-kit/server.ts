@@ -9,7 +9,7 @@ import { PluginCliError, cliCommand, defineCli, experimental_PluginRpcRefusal, t
 import { z } from "zod";
 import { rpcContract, STATUS_CHANNEL, type Notice, type OpenCodeStatus, type Setup, type SetupMark, type Status, type SyncReport } from "./contract.js";
 import { checkSecretValue, openSecretStore, SECRET_NAME, type SecretStore, type SecretStorePreference } from "./src/secret-store.js";
-import { emptyManaged, runSync, SELF_ID, type FleetKitSettings, type ManagedState } from "./src/sync.js";
+import { emptyManaged, maySync, runSync, SELF_ID, type FleetKitSettings, type ManagedState } from "./src/sync.js";
 import type { Manifest } from "./src/manifest.js";
 import { maskManifestUrl, parseManifestLocation } from "./src/fetch-manifest.js";
 import { opencodeConfigDirSchema, opencodeInstallDirSchema } from "./src/shared/settings.js";
@@ -195,6 +195,8 @@ export default async function plugin(bb: BbPluginApi) {
     lastSyncAt = Date.now();
     const current = await readSettings();
     if (current.manifestUrl.trim() === "") return;
+    // The retry timer and a sync asked for during a sync can fire after a pause: uninstalling relies on it.
+    if (!maySync(trigger, current.paused)) return;
     const managed = (await kv.get<ManagedState>("managed")) ?? emptyManaged();
     const environment: NodeJS.ProcessEnv = { ...process.env };
     if (current.opencodeConfigDir !== "") environment.OPENCODE_CONFIG_DIR = current.opencodeConfigDir;
@@ -220,6 +222,13 @@ export default async function plugin(bb: BbPluginApi) {
       },
       trigger,
     );
+    // Before anything that can fail: a state that cannot be saved must not cost the retry.
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = null;
+    if (outcome.retrySoon && !controller.signal.aborted) {
+      retryTimer = setTimeout(() => void requestSync("schedule"), RETRY_MS);
+      retryTimer.unref?.();
+    }
     await kv.set("managed", outcome.managed);
     await kv.set("lastSync", outcome.report);
     if (outcome.opencode !== null || outcome.manifest !== null) await kv.set("opencode", outcome.opencode);
@@ -232,12 +241,6 @@ export default async function plugin(bb: BbPluginApi) {
     }
     const errors = outcome.report.steps.filter((step) => step.outcome === "error").length;
     bb.log.info(`sync (${trigger}): ${outcome.report.outcome}, ${outcome.report.steps.length} steps, ${errors} errors`);
-    if (retryTimer !== null) clearTimeout(retryTimer);
-    retryTimer = null;
-    if (outcome.retrySoon && !controller.signal.aborted) {
-      retryTimer = setTimeout(() => void requestSync("schedule"), RETRY_MS);
-      retryTimer.unref?.();
-    }
     if (outcome.selfUpdate) {
       // Last: the update restarts Fleet Kit, and the new version syncs on start.
       try {
