@@ -1742,3 +1742,48 @@
   color: var(--tb-faint);
   flex: none;
 }
+
+/* The chat below the board: the page splits top and bottom, the line between them moves. */
+.tb-pb-vert {
+  flex-direction: column;
+}
+.tb-pb-vert > .tb-work {
+  flex: 1 1 0;
+  min-height: 120px;
+}
+.tb-pb-vert > .tb-chat {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  z-index: auto;
+  width: auto;
+  height: var(--tb-chat-h, 45%);
+  min-height: 150px;
+  max-height: calc(100% - 140px);
+  border-left: 0;
+}
+.tb-split {
+  height: 8px;
+  flex: none;
+  cursor: row-resize;
+  border-top: 1px solid var(--tb-line);
+  position: relative;
+  touch-action: none;
+}
+.tb-split::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--tb-line-strong);
+  transform: translateX(-50%);
+}
+.tb-split:hover::after,
+.tb-split:focus-visible::after,
+.tb-split.tb-on::after {
+  background: var(--tb-fg);
+}

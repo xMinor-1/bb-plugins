@@ -143,7 +143,7 @@ describe("the board", () => {
   it("saves one part of the prefs without resetting the board in view", async () => {
     const { rpc } = await setup();
     await rpc("board", { source: { kind: "queue", queue: "OPS" } });
-    const display = { view: "list", group: "story", fields: ["key", "assignee"], clamp: 2, width: "wide" };
+    const display = { view: "list", group: "story", fields: ["key", "assignee"], clamp: 2, width: "wide", chat: "bottom", chatHeight: 60 };
     const saved = await rpc<{ display: unknown; source: unknown; recent: unknown[] }>("setPrefs", { display });
     expect(saved.display).toEqual(display);
     expect(saved.source).toEqual({ kind: "queue", queue: "OPS" });

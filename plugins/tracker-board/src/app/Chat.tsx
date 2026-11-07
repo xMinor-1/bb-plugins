@@ -68,7 +68,53 @@ const ChatComposer = memo(function ChatComposer({ projectId, hostId, placeholder
   );
 });
 
-export function ChatColumn({ t, rpc, agentsAllowed }: { t: Messages; rpc: Rpc; agentsAllowed: boolean }) {
+const HEIGHT_STEP = 5;
+
+/** The line between the board and the chat below it: drag it, or use the arrow keys. */
+export function ChatSplitter({ t, height, onResize }: { t: Messages; height: number; onResize: (height: number) => void }) {
+  const clamp = (value: number) => Math.round(Math.min(80, Math.max(20, value)));
+  return (
+    <div
+      className="tb-split"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={t.resizeChat}
+      aria-valuemin={20}
+      aria-valuemax={80}
+      aria-valuenow={height}
+      tabIndex={0}
+      title={t.resizeChat}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowUp") onResize(clamp(height + HEIGHT_STEP));
+        if (event.key === "ArrowDown") onResize(clamp(height - HEIGHT_STEP));
+      }}
+      onPointerDown={(event) => {
+        const area = event.currentTarget.parentElement;
+        if (!area) return;
+        event.preventDefault();
+        const bar = event.currentTarget;
+        bar.classList.add("tb-on");
+        let next = height;
+        // While dragging only the CSS variable moves; the height is saved once, on release.
+        const move = (moved: PointerEvent) => {
+          const box = area.getBoundingClientRect();
+          next = clamp(((box.bottom - moved.clientY) / box.height) * 100);
+          area.style.setProperty("--tb-chat-h", `${next}%`);
+        };
+        const up = () => {
+          bar.classList.remove("tb-on");
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          if (next !== height) onResize(next);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      }}
+    />
+  );
+}
+
+export function ChatColumn({ t, rpc, agentsAllowed, place, onPlace }: { t: Messages; rpc: Rpc; agentsAllowed: boolean; place: "right" | "bottom"; onPlace: (place: "right" | "bottom") => void }) {
   const [chat, setChat] = useState<ChatView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [focus, setFocus] = useState(0);
@@ -103,6 +149,9 @@ export function ChatColumn({ t, rpc, agentsAllowed }: { t: Messages; rpc: Rpc; a
       {chat ? <PillInserter threadId={chat.threadId} onInserted={bumpFocus} /> : null}
       <div className="tb-chat-h">
         <span className="tb-chat-t">{t.chat}</span>
+        <button className="tb-ib" type="button" onClick={() => onPlace(place === "right" ? "bottom" : "right")} title={place === "right" ? t.chatToBottom : t.chatToRight} aria-label={place === "right" ? t.chatToBottom : t.chatToRight}>
+          {place === "right" ? <Icons.layBottom /> : <Icons.layRight />}
+        </button>
         <button className="tb-ib" type="button" onClick={reset} title={t.newChat} aria-label={t.newChat} disabled={!chat?.threadId}>
           <Icons.plus />
         </button>

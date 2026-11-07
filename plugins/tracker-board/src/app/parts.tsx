@@ -16,6 +16,8 @@ export const Icons = {
   gear: () => svg(15, <><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" /></>),
   x: () => svg(14, <path d="M18 6 6 18M6 6l12 12" />, 2),
   expand: () => svg(14, <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />, 2),
+  layBottom: () => svg(15, <><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M3.5 13h17" /></>),
+  layRight: () => svg(15, <><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M14 4v16" /></>),
   ext: () => svg(13, <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />, 2),
   link: () => svg(13, <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" />, 2),
   chevR: () => svg(12, <path d="m9 6 6 6-6 6" />, 2.4),

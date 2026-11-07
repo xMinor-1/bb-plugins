@@ -163,9 +163,11 @@ export function DisplaySettings({ t, display, setDisplay }: { t: Messages; displ
           <Seg label={t.columnWidth} value={display.width} options={[["narrow", t.narrow], ["normal", t.normal], ["wide", t.wide]]} onChange={(width) => setDisplay({ ...display, width })} />
         </>
       )}
+      <h4>{t.chat}</h4>
+      <Seg label={t.chatPlace} value={display.chat} options={[["right", t.chatRight], ["bottom", t.chatBottom]]} onChange={(chat) => setDisplay({ ...display, chat })} />
       <div className="tb-disp-foot">
         <span className="tb-hint">{t.savedForYou}</span>
-        <button className="tb-btn tb-ghost" type="button" onClick={() => setDisplay({ view: display.view, group: "none", fields: DEFAULT_FIELDS, clamp: 3, width: "normal" })}>
+        <button className="tb-btn tb-ghost" type="button" onClick={() => setDisplay({ ...display, group: "none", fields: DEFAULT_FIELDS, clamp: 3, width: "normal" })}>
           {t.reset}
         </button>
       </div>

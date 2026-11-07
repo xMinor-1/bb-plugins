@@ -24,6 +24,10 @@ export const displaySchema = z
     fields: z.array(z.enum(CARD_FIELDS)).max(CARD_FIELDS.length).default(DEFAULT_FIELDS),
     clamp: z.union([z.literal(2), z.literal(3), z.literal(99)]).default(3),
     width: z.enum(["narrow", "normal", "wide"]).default("normal"),
+    /** The chat beside the board or below it; the same on every board. */
+    chat: z.enum(["right", "bottom"]).default("right"),
+    /** The chat's share of the page's height when it is below, in per cent. */
+    chatHeight: z.number().int().min(20).max(80).default(45),
   })
   .strict();
 export type Display = z.infer<typeof displaySchema>;

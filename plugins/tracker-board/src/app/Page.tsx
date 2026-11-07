@@ -8,7 +8,7 @@ import type { Display, Source } from "../shared/prefs";
 import type { rpcContract } from "../server/rpc-contract";
 import { boardColumns, BoardView, ListView } from "./Board";
 import { BulkBar, BulkDialog, type BulkRequest } from "./Bulk";
-import { ChatColumn } from "./Chat";
+import { ChatColumn, ChatSplitter } from "./Chat";
 import { messages } from "./messages";
 import { Icons, statusColors, todayText } from "./parts";
 import { templatesRequestStore, useOpenIssue } from "./requests";
@@ -301,11 +301,14 @@ export function BoardPage() {
   );
 
   const parent = templatesFor && board ? board.issues.find((issue) => issue.key === templatesFor) ?? null : null;
+  const chatShown = chatOpen && !settingsOpen;
+  const chatBelow = chatShown && prefs.display.chat === "bottom";
   return (
     <div className="tb-root tb-page">
-      <div className="tb-pb">
+      <div className={`tb-pb${chatBelow ? " tb-pb-vert" : ""}`} style={chatBelow ? { ["--tb-chat-h" as string]: `${prefs.display.chatHeight}%` } : undefined}>
         <div className={`tb-work${selection.size > 0 ? " tb-selecting" : ""}`}>{data ? <ViewContext.Provider value={data}>{work}</ViewContext.Provider> : work}</div>
-        {chatOpen && !settingsOpen ? <ChatColumn t={t} rpc={rpc} agentsAllowed={config.agentsAllowed} /> : null}
+        {chatShown && chatBelow ? <ChatSplitter t={t} height={prefs.display.chatHeight} onResize={(chatHeight) => void savePrefs(rpc, { display: { ...prefs.display, chatHeight } })} /> : null}
+        {chatShown ? <ChatColumn t={t} rpc={rpc} agentsAllowed={config.agentsAllowed} place={prefs.display.chat} onPlace={(chat) => void savePrefs(rpc, { display: { ...prefs.display, chat } })} /> : null}
       </div>
       {bulk && data ? (
         <ViewContext.Provider value={data}>
