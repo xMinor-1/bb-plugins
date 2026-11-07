@@ -63,6 +63,22 @@ describe("ownAgents in the manifest", () => {
   });
 });
 
+describe("branding in the manifest", () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+  it("accepts a name, an SVG logo and the plugins it replaces", () => {
+    const manifest = withOwn({ branding: { appName: "Example", logoSvg: svg, replaces: ["app-branding"] } });
+    expect(checkManifest(manifest).errors).toEqual([]);
+  });
+  it("refuses a logo that is not SVG, unknown fields, and replacing a plugin it still installs or itself", () => {
+    expect(checkManifest(withOwn({ branding: { logoSvg: "<img src=x>" } })).manifest).toBeNull();
+    expect(checkManifest(withOwn({ branding: { colour: "red" } })).manifest).toBeNull();
+    const installed = withOwn({ branding: { replaces: ["notes", "fleet-kit"] } });
+    const errors = checkManifest(installed).errors.join("\n");
+    expect(errors).toContain('branding.replaces: "notes" is also in plugins');
+    expect(errors).toContain("branding.replaces: Fleet Kit cannot remove itself");
+  });
+});
+
 describe("own agents and build skills", () => {
   const build = (): AgentBuild => {
     const result = checkManifest(withOwn({ skills: [skill("tools"), skill("corp", "own"), skill("shared", "all"), { id: "old" }] }));

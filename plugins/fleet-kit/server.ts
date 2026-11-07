@@ -21,6 +21,7 @@ import { chooseBranch, noBranchState, togglePlugin, turnsOff, type BranchChoice,
 import { agentBuildOf, consentKey, emptyAgentBuild, normalizeAgentBuild, normalizeChoice, ownAgentsOn, skillInstructions, skillsFor, SKILL_TOOL, type AgentBuild, type OwnAgentsChoice } from "./src/own-agents.js";
 import { oneAtATime, systemConfirmWindow, type ConfirmWindow, type WindowText } from "./src/host/confirm-window.js";
 import type { OwnAgentsOutcome } from "./contract.js";
+import { readBranding } from "./src/app/branding.js";
 
 export { rpcContract };
 
@@ -500,7 +501,12 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
       await kv.set("ownAgents", null);
       ownChoice = null;
     }
+    // Before the sync removes a plugin the branding replaces: the page asks for it on its next check.
+    await kv.set("branding", { appName: manifest.branding?.appName ?? "", logoSvg: manifest.branding?.logoSvg ?? "" });
   }
+
+  // The build's name and logo for the page's content script (app.tsx). Not a secret: the page shows them.
+  bb.http.route("GET", "/branding", async (context) => context.json(readBranding((await kv.get<Record<string, unknown>>("branding")) ?? {})));
 
   // The build's skills, each to the agents of its audience; the person's own agents only once turned on.
   bb.agents.configure((ctx) => {

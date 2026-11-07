@@ -219,6 +219,17 @@ describe("own agents on the server", () => {
     expect((await choiceBroken.status())!.on).toBe(false);
   });
 
+  it("serves the saved branding to the page, and nothing before a build was read", async () => {
+    const s = await setup({ ok: true });
+    const get = async () => (await s.harness.behavior.fetchHttp("GET", "/branding")).json();
+    expect(await get()).toEqual({ appName: "", logoSvg: "" });
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+    await s.kv.set("branding", { appName: "Example", logoSvg: svg });
+    expect(await get()).toEqual({ appName: "Example", logoSvg: svg });
+    await s.kv.set("branding", { appName: "Example", logoSvg: "<script>1</script>" });
+    expect(await get()).toEqual({ appName: "Example", logoSvg: "" });
+  });
+
   it("shows the offer in the status", async () => {
     const s = await setup({ ok: true });
     const status = (await s.harness.callRpc("status", null)) as { ownAgents: Record<string, unknown> };

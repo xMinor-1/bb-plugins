@@ -11,6 +11,7 @@ import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { defineMessages, getLang, intlLocale, LanguageSwitch, useLang, useMessages, type Lang } from "@/lib/i18n";
 import { render } from "./src/shared/texts";
+import { watchBranding } from "./src/app/branding";
 import { Frame, Section, SecretRow, STATUS_CHANNEL } from "./src/app/parts";
 import { markSetupEntryRegistered, SETUP_PANEL, SetupBanner, SetupPage, setupEntryWanted, setupTitle, useSetupBadge } from "./src/app/setup-page";
 type Outcome = NonNullable<Status["lastSync"]>["outcome"];
@@ -436,6 +437,18 @@ function FleetKitPage() {
 }
 
 export default definePluginApp((app) => {
+  // The build's name and logo. A content script and not an overlay: bb's onboarding screen, which carries its logo,
+  // replaces the app shell, so overlays only appear after it. A content script has no RPC hook, so it asks the server.
+  app.contentScripts.register({
+    id: "branding",
+    mount({ pluginId }) {
+      return watchBranding(document, async () => {
+        const response = await fetch(`/api/v1/plugins/${encodeURIComponent(pluginId)}/http/branding`);
+        if (!response.ok) throw new Error(`Branding: HTTP ${response.status}`);
+        return (await response.json()) as Record<string, unknown>;
+      });
+    },
+  });
   const withSetup = setupEntryWanted();
   app.slots.navPanel({
     id: "fleet-kit",
