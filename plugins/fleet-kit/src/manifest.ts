@@ -13,6 +13,7 @@
 // provider's key or headers, and OpenCode's own `{env:...}` / `{file:...}`
 // substitutions are refused everywhere.
 import { z } from "zod";
+import { MAX_LOGO_LENGTH, isUsableLogo } from "./app/branding.js";
 
 /** The newest manifest format this Fleet Kit understands. */
 export const SUPPORTED_SCHEMA = 1;
@@ -254,6 +255,25 @@ const rootShape = {
         })
         .passthrough(),
     )
+    .optional(),
+  /**
+   * The build's name and logo in bb's page: the title, the logo and the
+   * favicon. `replaces` names plugins that did this before (such as App
+   * Branding): Fleet Kit removes them once it has the branding, so a machine
+   * is never left without it. A root field: an older Fleet Kit only warns
+   * about it and keeps the old plugin, which it does not remove.
+   */
+  branding: z
+    .object({
+      appName: z.string().max(80).optional(),
+      logoSvg: z
+        .string()
+        .max(MAX_LOGO_LENGTH)
+        .refine((value) => isUsableLogo(value), "logoSvg must be SVG source")
+        .optional(),
+      replaces: z.array(id).optional(),
+    })
+    .strict()
     .optional(),
   /**
    * More agents the person may turn on: their own Claude Code or Codex. Off
@@ -545,6 +565,10 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
       errors.push(`agents.allowed: the default agent "${defaultProvider}" (bb.settings.defaultProviderId) would be turned off`);
     }
     if (new Set(manifest.agents.allowed).size !== manifest.agents.allowed.length) errors.push("agents.allowed: an agent is listed twice");
+  }
+  for (const replaced of manifest.branding?.replaces ?? []) {
+    if (ids.has(replaced)) errors.push(`branding.replaces: "${replaced}" is also in plugins; it would be installed and removed on every sync`);
+    if (replaced === SELF_ID) errors.push("branding.replaces: Fleet Kit cannot remove itself");
   }
   if (manifest.ownAgents !== undefined) {
     const own = manifest.ownAgents;

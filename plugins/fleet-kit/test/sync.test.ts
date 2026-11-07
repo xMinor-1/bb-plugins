@@ -286,6 +286,34 @@ describe("sync", () => {
     expect(pluginCalls(first.calls)).toEqual(["remove notes"]);
   });
 
+  it("removes a plugin the build's branding replaces from the sync after the one that saved the branding", async () => {
+    const first = await setup(sampleManifest(), [self()]);
+    const outcome = await runSync(first.deps, "start");
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    manifest.plugins = manifest.plugins.filter((plugin: any) => plugin.id !== "notes");
+    manifest.branding = { appName: "Example", logoSvg: "<svg xmlns=\"http://www.w3.org/2000/svg\"/>", replaces: ["notes"] };
+    await writeFile(first.path, JSON.stringify(manifest));
+    first.calls.length = 0;
+    const saved: string[] = [];
+    const deps = { ...first.deps, onManifest: async (value: any) => void saved.push(value.branding?.appName) };
+    // The sync that first sees the branding saves it and keeps the plugin: an open page has not read it yet.
+    const second = await runSync({ ...deps, managed: outcome.managed }, "schedule");
+    expect(saved).toEqual(["Example"]);
+    expect(pluginCalls(first.calls)).toEqual([]);
+    expect(first.plugins.has("notes")).toBe(true);
+    // The next one removes it.
+    const third = await runSync({ ...deps, managed: second.managed }, "schedule");
+    expect(pluginCalls(first.calls)).toEqual(["remove notes"]);
+    expect(first.plugins.has("notes")).toBe(false);
+    // A changed logo waits one sync again; without a branding nothing it named is removed.
+    manifest.branding.appName = "Renamed";
+    manifest.plugins.push({ id: "notes", source: "git:https://git.example.test/notes.git@semver:notes/:^1.0.0", status: "required" });
+    manifest.branding.replaces = [];
+    await writeFile(first.path, JSON.stringify(manifest));
+    const fourth = await runSync({ ...deps, managed: third.managed }, "schedule");
+    expect(fourth.managed.branding).toContain("Renamed");
+  });
+
   it("never removes a plugin bundled with bb", async () => {
     const manifest = clone(sampleManifest()) as Record<string, any>;
     manifest.removePlugins = ["bb-guide"];

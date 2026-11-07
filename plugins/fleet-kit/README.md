@@ -161,6 +161,10 @@ a newer Fleet Kit can still deliver it.
 - `agents.allowed` — the bb agents (providers, `bb provider list`) that stay
   enabled; every other agent is turned off, including ones a later bb adds.
   `bb.settings.defaultProviderId`, when set, must be in the list.
+- `branding` — the build's name and logo in bb's page: `appName` (page
+  title), `logoSvg` (SVG source, up to 64 KB: logo and favicon), `replaces`
+  (plugins that did this before, such as App Branding). See
+  [Branding](#branding).
 - `ownAgents` — more agents the person may turn on: `providers` (such as
   `claude-code`, `codex`), `warning` (shown in the panel and in the system
   window), optional `title` and `delegate` (`provider` from `agents.allowed`,
@@ -374,6 +378,23 @@ so it does not repeat a refused call on every sync.
 Removing the `agents` block from the manifest stops this check but does not
 turn the agents Fleet Kit turned off back on: turn them on in bb's settings or
 with `bb provider enable <id>`.
+
+### Branding
+
+`branding` puts the build's name and logo over bb's own in the page: the page
+title, the logo image and the favicon. bb's files stay as they are. A content
+script applies it, so it shows on bb's onboarding screen too; it asks Fleet
+Kit's server (`GET /branding`) on load and every 30 seconds, so a new manifest
+reaches an open window. The logo is drawn as an image: scripts in the SVG do
+not run.
+
+`replaces` lists plugins that did the same before. Fleet Kit removes them from
+the sync after the one that saved the branding: an open page reads the
+branding within 30 seconds, so it shows the build's logo before the old
+plugin's goes. Do
+not put such a plugin in `removePlugins`: an older Fleet Kit, which has no
+branding, would remove it and leave the page without a logo until it updates.
+An older Fleet Kit ignores `branding` with a warning and keeps the plugin.
 
 ### Own agents
 

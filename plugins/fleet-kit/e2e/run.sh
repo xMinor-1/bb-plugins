@@ -32,6 +32,8 @@ fi
 docker cp "$here/release-current.sh" "$name:/tmp/release-current.sh"
 docker cp "$here/scenario.sh" "$name:/tmp/scenario.sh"
 docker cp "$here/own-agents.sh" "$name:/tmp/own-agents.sh"
+docker cp "$here/branding.sh" "$name:/tmp/branding.sh"
+docker cp "$here/branding-update.sh" "$name:/tmp/branding-update.sh"
 docker cp "$here/fake-gateway.mjs" "$name:/tmp/fake-gateway.mjs"
 docker cp "$here/inside-setup.sh" "$name:/tmp/inside-setup.sh"
 

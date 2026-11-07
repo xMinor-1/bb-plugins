@@ -117,6 +117,8 @@ export interface ManagedState {
   branchStart?: BranchStart | null;
   /** The optional plugins as the last sync under an existing branch left them: a dropped branch keeps them so. */
   branchApplied?: Record<string, boolean>;
+  /** The branding an earlier sync saved: a plugin it replaces is removed only once the page has had it. */
+  branding?: string | null;
 }
 
 /** After this many failures in a row: only the odd scheduled try, or a sync the person asks for. */
@@ -255,6 +257,7 @@ function loadManaged(saved: ManagedState): ManagedState {
     opencodeSetupFailures: copy.opencodeSetupFailures ?? null,
     branchStart: copy.branchStart ?? null,
     branchApplied: copy.branchApplied ?? {},
+    branding: copy.branding ?? null,
   };
 }
 
@@ -554,7 +557,12 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
 
   // Removal is explicit only: a plugin missing from the manifest stays, so a
   // short or broken manifest cannot strip every machine of its plugins.
-  const removals = new Set(manifest.removePlugins ?? []);
+  // A plugin the build's branding replaces goes too, but only from the sync after the one that saved this
+  // branding: an open page reads it every 30 seconds, so it already shows the build's logo when the plugin's goes.
+  const brandingKey = manifest.branding === undefined ? null : JSON.stringify({ appName: manifest.branding.appName ?? "", logoSvg: manifest.branding.logoSvg ?? "" });
+  const brandingReady = brandingKey !== null && managed.branding === brandingKey;
+  managed.branding = brandingKey;
+  const removals = new Set([...(manifest.removePlugins ?? []), ...(brandingReady ? (manifest.branding?.replaces ?? []) : [])]);
 
   // A switch or first install left unfinished for a plugin the build no longer
   // installs (dropped from plugins, or now planned) is finished here, so the
