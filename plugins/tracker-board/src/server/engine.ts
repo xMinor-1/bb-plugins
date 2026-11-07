@@ -77,6 +77,59 @@ function supported(tracker: Tracker, change: Change): boolean {
 
 const short = (text: string, max = 80) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
+/** The change that puts an issue back as it was before `change`, read from the issue as it is now. */
+export function inverseOf(change: Change, issue: Issue): Change | null {
+  switch (change.kind) {
+    case "status":
+      return { kind: "status", key: issue.key, to: issue.status };
+    case "assignee":
+      return { kind: "assignee", key: issue.key, to: issue.assignee };
+    case "priority":
+      // A tracker takes a priority but rarely "no priority": nothing to go back to.
+      return issue.priority ? { kind: "priority", key: issue.key, to: issue.priority } : null;
+    case "labels": {
+      const added = change.add.filter((label) => !issue.labels.includes(label));
+      const removed = change.remove.filter((label) => issue.labels.includes(label));
+      return { kind: "labels", key: issue.key, add: removed, remove: added };
+    }
+    case "parent":
+      return { kind: "parent", key: issue.key, to: issue.parent };
+    case "summary":
+      return { kind: "summary", key: issue.key, to: issue.summary };
+    case "description":
+      return { kind: "description", key: issue.key, to: issue.description ?? "" };
+    case "comment":
+    case "create":
+      return null;
+  }
+}
+
+/**
+ * Whether an issue still holds what `change` set. Undo goes back only then: a value
+ * someone changed since stays theirs. Labels go back as a difference, so always.
+ */
+export function stillAsSet(change: Change, issue: Issue): boolean {
+  switch (change.kind) {
+    case "status":
+      return issue.status === change.to;
+    case "assignee":
+      return issue.assignee === change.to;
+    case "priority":
+      return issue.priority === change.to;
+    case "parent":
+      return issue.parent === change.to;
+    case "summary":
+      return issue.summary === change.to;
+    case "description":
+      return (issue.description ?? "") === change.to;
+    case "labels":
+      return true;
+    case "comment":
+    case "create":
+      return false;
+  }
+}
+
 export async function plan(ctx: PlanContext, changes: readonly Change[]): Promise<PlannedChange[]> {
   const issues = await readIssues(ctx.tracker, changes.flatMap(keysOf));
   const person = (id: string | null) => (id === null ? "nobody" : ctx.people.get(id) ?? id);
@@ -86,7 +139,10 @@ export async function plan(ctx: PlanContext, changes: readonly Change[]): Promis
   return changes.map((change, index): PlannedChange => {
     const id = `c${index + 1}`;
     const skip = (reason: SkipReason, title: string, key: string | null = null): PlannedChange => ({ id, change, key, title, ok: false, skip: reason, from: null, to: null });
-    const ok = (key: string | null, title: string, from: string | null, to: string | null): PlannedChange => ({ id, change, key, title, ok: true, skip: null, from, to });
+    const ok = (key: string | null, title: string, from: string | null, to: string | null): PlannedChange => {
+      const issue = change.kind === "create" ? null : issues.get(change.key);
+      return { id, change, key, title, ok: true, skip: null, from, to, undo: issue ? inverseOf(change, issue) : null };
+    };
     if (change.kind === "create") {
       const title = change.summary;
       if (!supported(ctx.tracker, change)) return skip("notSupported", title);

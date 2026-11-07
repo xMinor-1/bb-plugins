@@ -2,8 +2,8 @@
 
 A board and a list for a task tracker that has a REST API, inside bb. Cards show what each
 task is about, an epic or a story comes with everything nested under it, templates create
-the usual child tasks in one go, and an agent in a chat next to the board changes tasks only
-after the person confirms.
+the usual child tasks in one go, and an agent in a chat next to the board changes tasks after
+the person confirms, or at once with Undo when the person turns confirmation off.
 
 The plugin names no tracker. How to talk to the API comes from an **API profile** in settings,
 so a build keeps its tracker's address, request shapes, templates and labels in its own
@@ -54,12 +54,21 @@ The interface is in English and Russian.
 | `tracker_search` | Search by text, by queue, "mine", or children of given tasks |
 | `tracker_get_issues` | Full tasks by key, optionally with comments |
 | `tracker_people` | Find people to assign |
-| `tracker_propose_changes` | Propose changes; the person confirms them in chat, then they apply |
+| `tracker_propose_changes` | Change tasks: after the person confirms, or at once when confirmation is off |
 
-The skill `tracker-board` tells agents how to use them. Agents never get a tool that changes a
-task directly: `tracker_propose_changes` checks every change, shows the person a form above
-the chat composer with a checkbox per change and the skipped ones with reasons, and applies only
-what the person approves. Rejecting changes nothing.
+The skill `tracker-board` tells agents how to use them. `tracker_propose_changes` checks every
+change against the task as it is now; what happens next is a setting. The build sets the default
+(`confirmAgentChanges`, on unless set) and each person can switch it in the panel's settings,
+under "Agent in the chat".
+
+- **Confirmation on.** A form above the chat composer lists a checkbox per change and the skipped
+  ones with reasons, and only what the person approves applies. Rejecting changes nothing.
+- **Confirmation off.** The changes apply at once. The tool keeps how to undo each one and hands
+  the agent a `::tracker-changes{id="…"}` line for its reply, which renders as a card: what
+  changed, what failed, and Undo. Undo puts back only what still holds the agent's value: a
+  field someone changed since stays theirs, labels go back as a difference, and comments and
+  new tasks cannot be undone. A batch keeps its Undo for 14 days, and the 200 newest batches
+  are kept.
 
 Tasks can also be mentioned in any composer as `@` pills; the agent gets the key and the title
 and reads the rest with the tools.
@@ -74,6 +83,7 @@ and reads the rest with the tools.
 | `templates` | JSON templates and bundles everyone gets; people add their own on top |
 | `guide` | Markdown guide for agents: queues, statuses, what labels mean |
 | `defaultBoards` | Shared boards: queue keys, issue keys or links, one per line, on top of everyone's My boards |
+| `confirmAgentChanges` | Whether an agent's changes wait for a confirmation form by default (on unless set). Each person can switch it in the panel |
 | `allowQuery` | Let people open a board from the tracker's own query language |
 | `allowedModels` | One rule per line, `<provider-id> <model-glob>`. Empty means no agent gets the tools |
 
@@ -187,8 +197,9 @@ When `create` has no `{parent}` or `{assignee}`, the plugin sets them after crea
 - **The key goes to one address.** Requests stay on the origin of `baseUrl`, redirects are not
   followed, and the key is bound to the origin it was saved for: when the address moves, the
   plugin asks for the key again.
-- **Agents change nothing without the person.** The only changing tool proposes; the person
-  approves each change in a form, and only approved ones apply, after re-reading each task.
+- **Agents change tasks the way the person chose.** With confirmation on, the only changing tool
+  proposes, the person approves each change in a form, and only approved ones apply, after
+  re-reading each task. With it off, changes apply at once and the reply carries Undo.
 - **Only allowed models.** Tools, the skill and the guide go only to pairs in `allowedModels`.
   A thread that has read tracker data, or a message with task pills, is not sent to another model,
   and neither is any fork down its line.

@@ -2171,3 +2171,136 @@ button.tb-br-main {
   border-color: var(--tb-pri-bg);
   color: var(--tb-pri-fg);
 }
+
+/* ===== agent changes applied at once: the card in the agent's reply ===== */
+.tb-ach {
+  container-type: inline-size;
+  border: 1px solid var(--tb-line);
+  border-radius: 12px;
+  background: var(--tb-bg);
+  margin: 6px 0;
+  overflow: hidden;
+  max-width: 720px;
+}
+.tb-ach-note {
+  padding: 8px 12px;
+  color: var(--tb-muted);
+  font-size: 12.5px;
+}
+.tb-ach-h {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px 6px 12px;
+}
+.tb-ach-h b {
+  font-weight: 600;
+}
+.tb-ach-ic {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: var(--tb-ok);
+  color: #fff;
+  flex: none;
+}
+.tb-ach-ic svg {
+  width: 10px;
+  height: 10px;
+}
+.tb-ach-ic-back {
+  background: var(--tb-muted);
+}
+.tb-ach-bad {
+  color: var(--tb-danger);
+  font-size: 12.5px;
+}
+.tb-ach-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px 6px;
+  max-height: 280px;
+  overflow: auto;
+}
+.tb-ach-it {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1px 10px;
+  padding: 5px 6px;
+  border-radius: 8px;
+}
+.tb-ach-t {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.tb-ach-t .tb-k {
+  color: var(--tb-muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.tb-ach-t .tb-t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.tb-ach-d {
+  display: block;
+  justify-self: stretch;
+  min-width: 0;
+  grid-column: 1;
+  font-size: 12px;
+  color: var(--tb-muted);
+  overflow-wrap: anywhere;
+}
+.tb-ach-st {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.tb-ach-st-ok {
+  color: var(--tb-ok);
+}
+.tb-ach-st-muted {
+  color: var(--tb-faint);
+}
+.tb-ach-st-bad {
+  color: var(--tb-danger);
+}
+.tb-ach-it-back .tb-ach-d {
+  text-decoration: line-through;
+}
+.tb-ach-it-bad .tb-t {
+  color: var(--tb-muted);
+}
+.tb-ach-err {
+  padding: 6px 12px 10px;
+  color: var(--tb-danger);
+  font-size: 12.5px;
+}
+.tb-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  cursor: pointer;
+  margin: 4px 0 2px;
+}
+.tb-toggle-hint {
+  margin: 2px 0 6px 26px;
+}
+@container (max-width: 520px) {
+  .tb-ach-it {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tb-ach-st {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}

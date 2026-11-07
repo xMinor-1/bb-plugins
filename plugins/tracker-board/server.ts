@@ -7,8 +7,10 @@
 //      The panel's RPC methods answer the panel and the bb CLI (bb shows both as
 //      `client`), never another plugin.
 //   2. Agents read issues through the tools, and change them only through
-//      tracker_propose_changes, which shows a confirmation form in the chat and
-//      applies only what the person approves there.
+//      tracker_propose_changes. With confirmation on (the build's default, each
+//      person can switch it) it shows a form in the chat and applies only what the
+//      person approves there. With it off it applies at once and keeps how to undo
+//      each change; the agent's reply carries a ::tracker-changes card with Undo.
 //   3. Tools and the skill go only to provider/model pairs in `allowedModels`. A
 //      thread that has received tracker data is marked; the dispatch hook keeps it,
 //      and its forks, on allowed models. A message that mentions a task with "@"
@@ -17,12 +19,13 @@
 // This guards against mistakes, not against a malicious agent: an agent with a shell
 // runs as the same user as the key store and the `bb` command (see the README).
 import { experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { hostContract, type FailureCode, type KeyStatus } from "./contract";
 import { loadBoard, loadParents, parseSource, sourceKey, type Board, type Source } from "./src/server/board";
 import { parseDefaultBoards, withTitle } from "./src/shared/boards";
-import { apply, describe, mapLimit, plan } from "./src/server/engine";
-import { rpcContract, type BoardView, type ConfigView, type IssueView, type StatusView } from "./src/server/rpc-contract";
+import { apply, describe, mapLimit, plan, readIssues, stillAsSet } from "./src/server/engine";
+import { rpcContract, type AppliedView, type BoardView, type ConfigView, type IssueView, type StatusView } from "./src/server/rpc-contract";
 import { Tracker, TrackerError, type StatusInfo } from "./src/server/tracker";
 import { changeSchema, SKIP_TEXT, type Change, type ChangeResult, type PlannedChange } from "./src/shared/changes";
 import { LIMITS } from "./src/shared/limits";
@@ -41,6 +44,11 @@ const TOOL_PEOPLE = "tracker_people";
 const TOOL_PROPOSE = "tracker_propose_changes";
 const TOOL_NAMES = [TOOL_GUIDE, TOOL_SEARCH, TOOL_GET, TOOL_PEOPLE, TOOL_PROPOSE];
 const CONFIRM_RENDERER = "confirm-changes";
+/** `::tracker-changes{id="u_…"}` in an agent's reply: what changed, with Undo. */
+const CHANGES_DIRECTIVE = "tracker-changes";
+/** Changes applied without a form keep their undo this long, and at most this many batches. */
+const APPLIED_TTL_MS = 14 * 24 * 60 * 60_000;
+const APPLIED_KEEP = 200;
 const MENTION_PROVIDER = "issues";
 const CHANGED_CHANNEL = "changed";
 const CALL_TIMEOUT_MS = 90_000;
@@ -71,6 +79,8 @@ interface Config {
   guide: string;
   allowQuery: boolean;
   defaultBoards: Source[];
+  /** Whether agent changes wait for a confirmation form when the person did not choose. */
+  confirmDefault: boolean;
   problem: string | null;
 }
 
@@ -82,6 +92,7 @@ interface RawSettings {
   guide: string;
   allowQuery: boolean;
   defaultBoards?: string;
+  confirmAgentChanges?: boolean;
 }
 
 function readConfig(raw: RawSettings): Config {
@@ -107,7 +118,7 @@ function readConfig(raw: RawSettings): Config {
   } catch (error) {
     problems.push(error instanceof TemplatesError ? error.message : String(error));
   }
-  return { name: raw.trackerName.trim() || "Tracker", baseUrl, profile, templates, guide: raw.guide, allowQuery: raw.allowQuery, defaultBoards: parseDefaultBoards(raw.defaultBoards ?? ""), problem: problems[0] ?? null };
+  return { name: raw.trackerName.trim() || "Tracker", baseUrl, profile, templates, guide: raw.guide, allowQuery: raw.allowQuery, defaultBoards: parseDefaultBoards(raw.defaultBoards ?? ""), confirmDefault: raw.confirmAgentChanges ?? true, problem: problems[0] ?? null };
 }
 
 /**
@@ -216,6 +227,13 @@ export default async function plugin(bb: BbPluginApi) {
       type: "boolean",
       label: "Boards from a search query",
       description: "Let people open a board from the tracker's own query language.",
+      default: true,
+    },
+    confirmAgentChanges: {
+      type: "boolean",
+      label: "Confirm agent changes",
+      description:
+        "The default for everyone. On: an agent's change waits for the person to approve it in a form in the chat. Off: it is applied at once, and the chat shows what changed with Undo. Each person can switch it in the panel's settings. Only the allowed models change tasks either way.",
       default: true,
     },
     allowedModels: {
@@ -381,15 +399,23 @@ export default async function plugin(bb: BbPluginApi) {
 
   // ---------- Preferences ----------
 
+  /** The person's choice for agent confirmation, kept for `configure`, which cannot wait. */
+  let confirmPref: boolean | null = null;
+  const confirmNow = () => confirmPref ?? config.confirmDefault;
+
   async function loadPrefs(): Promise<Prefs> {
     const parsed = prefsSchema.safeParse((await kv.get("prefs")) ?? {});
-    return parsed.success ? parsed.data : prefsSchema.parse({});
+    const prefs = parsed.success ? parsed.data : prefsSchema.parse({});
+    confirmPref = prefs.confirmAgent;
+    return prefs;
   }
   async function savePrefs(next: Prefs): Promise<Prefs> {
     const checked = prefsSchema.parse(next);
     await kv.set("prefs", checked);
+    confirmPref = checked.confirmAgent;
     return checked;
   }
+  await loadPrefs().catch(() => undefined);
 
   function templatesFor(prefs: Prefs) {
     return mergeTemplates(config.templates.templates, prefs.templates);
@@ -463,7 +489,11 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       tools: TOOL_NAMES,
       skills: [SKILL],
-      instructions: `${config.name} (task tracker): read issues with ${TOOL_SEARCH} and ${TOOL_GET}; call ${TOOL_GUIDE} once before the first change in a thread. Change issues only with ${TOOL_PROPOSE}: the user confirms each change in the chat. If these tools are not listed directly, find them with your tool search before saying they are missing.`,
+      instructions: `${config.name} (task tracker): read issues with ${TOOL_SEARCH} and ${TOOL_GET}; call ${TOOL_GUIDE} once before the first change in a thread. Change issues only with ${TOOL_PROPOSE}: ${
+        confirmNow()
+          ? "the user confirms each change in a form in the chat"
+          : `the user turned confirmation off, so changes apply at once; put the ::${CHANGES_DIRECTIVE} line from its result on its own line in your reply, where the user sees them and can undo`
+      }. If these tools are not listed directly, find them with your tool search before saying they are missing.`,
     };
   });
 
@@ -645,8 +675,8 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: TOOL_PROPOSE,
     description:
-      "Propose changes to tracker issues: status, assignee, priority, labels, parent, title, description, a comment, or new issues (also from templates). The user sees every change in a confirmation form in this chat and approves or rejects each one; only approved changes are applied, and the result comes back to you. Nothing changes without that confirmation. Put related changes in one call.",
-    presentation: { label: { pending: "Proposing tracker changes", completed: "Proposed tracker changes" } },
+      "Change tracker issues: status, assignee, priority, labels, parent, title, description, a comment, or new issues (also from templates). Put related changes in one call. The user's setting decides what happens: with confirmation on, the user sees every change in a form in this chat and only what they approve is applied; with it off, the changes are applied at once and the result gives a ::tracker-changes line to put in your reply, where the user sees them and can undo. The result says which happened and what was done.",
+    presentation: { label: { pending: "Changing tracker tasks", completed: "Tracker changes handled" } },
     parameters: z.object({
       summary: z.string().min(1).max(300).describe("One sentence for the user: what you propose and why"),
       changes: z.array(changeSchema).min(1).max(LIMITS.changes),
@@ -665,6 +695,18 @@ export default async function plugin(bb: BbPluginApi) {
       }
       const applicable = planned.filter((item) => item.ok);
       if (applicable.length === 0) return toolText(`Nothing to change; no form was shown.\n${resultText(planned, new Set(), [])}`);
+      if (!confirmNow()) {
+        // The person turned confirmation off: apply now, keep how to undo, hand the card over.
+        const approved = new Set(applicable.map((item) => item.id));
+        const me = await meOn(hostId, tracker);
+        const results = await apply({ tracker, me, signal: ctx.signal }, planned, approved);
+        publishChanged(planned, results);
+        const id = await saveApplied(ctx.threadId, hostId, planned, results);
+        return toolText(
+          `Applied ${results.filter((item) => item.ok).length} of ${approved.size} changes at once: the user turned confirmation off.\n${resultText(planned, approved, results)}\n\n` +
+            `Put this line on its own line in your reply. The user sees there what changed and can undo it:\n::${CHANGES_DIRECTIVE}{id="${id}"}`,
+        );
+      }
       const result = await bb.ui.requestInput(
         {
           threadId: ctx.threadId,
@@ -703,6 +745,102 @@ export default async function plugin(bb: BbPluginApi) {
       if (change?.kind === "parent" && change.to) keys.add(change.to);
     }
     if (keys.size > 0) bb.realtime.publish(CHANGED_CHANNEL, { keys: [...keys] });
+  }
+
+  // ---------- Changes applied without a form, and their undo ----------
+
+  interface AppliedItem {
+    planned: PlannedChange;
+    ok: boolean;
+    /** The created issue's key. */
+    key: string | null;
+    code: string | null;
+    undo: "undone" | "changedSince" | "failed" | null;
+    undoCode: string | null;
+  }
+  interface AppliedRecord {
+    threadId: string;
+    hostId: string;
+    at: number;
+    items: AppliedItem[];
+    undoneAt: number | null;
+  }
+  const appliedKey = (id: string) => `applied:${id}`;
+  const undoing = new Set<string>();
+
+  async function saveApplied(threadId: string, hostId: string, planned: readonly PlannedChange[], results: readonly ChangeResult[]): Promise<string> {
+    const id = `u_${randomBytes(6).toString("hex")}`;
+    const byId = new Map(results.map((result) => [result.id, result]));
+    const items = planned.flatMap((item): AppliedItem[] => {
+      const result = byId.get(item.id);
+      return result ? [{ planned: item, ok: result.ok, key: result.key, code: result.code, undo: null, undoCode: null }] : [];
+    });
+    const at = Date.now();
+    await kv.set(appliedKey(id), { threadId, hostId, at, items, undoneAt: null } satisfies AppliedRecord);
+    // Old batches go: their undo would only overwrite what people did since.
+    const index = [...((await kv.get<{ id: string; at: number }[]>("applied:index")) ?? []), { id, at }];
+    const keep = index.filter((entry) => at - entry.at < APPLIED_TTL_MS).slice(-APPLIED_KEEP);
+    for (const entry of index) if (!keep.includes(entry)) await kv.delete(appliedKey(entry.id));
+    await kv.set("applied:index", keep);
+    return id;
+  }
+
+  async function appliedRecord(id: string, threadId: string): Promise<AppliedRecord> {
+    const record = await kv.get<AppliedRecord>(appliedKey(id));
+    // A card copied into another thread shows nothing.
+    if (!record || record.threadId !== threadId) throw new TrackerError("notFound", null, "These changes are no longer kept.");
+    return record;
+  }
+
+  function appliedView(record: AppliedRecord): AppliedView {
+    return {
+      tracker: config.name,
+      at: record.at,
+      undoneAt: record.undoneAt,
+      items: record.items.map(({ planned: { undo, ...planned }, ok, key, code, undo: undone, undoCode }) => ({
+        planned,
+        ok,
+        key,
+        code,
+        canUndo: ok && Boolean(undo) && record.undoneAt === null,
+        undo: undone,
+        undoCode,
+      })),
+    };
+  }
+
+  /** Puts back what is still as the agent left it; a value changed since stays. */
+  async function undoApplied(record: AppliedRecord): Promise<void> {
+    const tracker = await trackerOn(record.hostId);
+    const targets = record.items.filter((item) => item.ok && item.planned.undo && item.undo === null);
+    const keyOf = (item: AppliedItem) => (item.planned.undo && item.planned.undo.kind !== "create" ? item.planned.undo.key : "");
+    const fresh = await readIssues(tracker, targets.map(keyOf));
+    const ready: AppliedItem[] = [];
+    for (const item of targets) {
+      const issue = fresh.get(keyOf(item));
+      if (issue && stillAsSet(item.planned.change, issue)) ready.push(item);
+      else item.undo = "changedSince";
+    }
+    if (ready.length > 0) {
+      const statuses = await statusesOn(record.hostId);
+      const planned = await plan({ tracker, people: peopleMap(await loadPrefs()), statuses: new Map([...statuses].map(([key, info]) => [key, info.name])) }, ready.map((item) => item.planned.undo!));
+      const results = await apply({ tracker, me: await meOn(record.hostId, tracker) }, planned, new Set(planned.filter((item) => item.ok).map((item) => item.id)));
+      const byId = new Map(results.map((result) => [result.id, result]));
+      planned.forEach((item, index) => {
+        const target = ready[index]!;
+        if (!item.ok) {
+          // Already back as it was counts as undone.
+          target.undo = item.skip === "same" ? "undone" : "failed";
+          target.undoCode = item.skip === "same" ? null : item.skip;
+          return;
+        }
+        const result = byId.get(item.id);
+        target.undo = result?.ok ? "undone" : "failed";
+        target.undoCode = result?.ok ? null : result?.code ?? "error";
+      });
+      publishChanged(planned, results);
+    }
+    record.undoneAt = Date.now();
   }
 
   // ---------- "@" mentions of tasks in the composer ----------
@@ -844,6 +982,7 @@ export default async function plugin(bb: BbPluginApi) {
           queues: has("queues"),
         },
         agentsAllowed: policy.rules.length > 0,
+        confirmDefault: config.confirmDefault,
       };
       return view;
     },
@@ -995,6 +1134,21 @@ export default async function plugin(bb: BbPluginApi) {
         queues: top.map(([key, count], index) => ({ key, name: named[index] ?? key, count })),
         epics: [...epics.values()].sort((a, b) => b.count - a.count).slice(0, SUGGEST_EPICS),
       };
+    },
+    appliedChanges: async ({ id, threadId }) => appliedView(await appliedRecord(id, threadId)),
+    undoApplied: async ({ id, threadId }) => {
+      const record = await appliedRecord(id, threadId);
+      if (record.undoneAt !== null) return appliedView(record);
+      // A second click while the first one runs would undo twice.
+      if (undoing.has(id)) throw new TrackerError("conflict", null, "Undo is already running.");
+      undoing.add(id);
+      try {
+        await undoApplied(record);
+        await kv.set(appliedKey(id), record);
+        return appliedView(record);
+      } finally {
+        undoing.delete(id);
+      }
     },
     preview: async ({ changes }) => {
       const hostId = await panelHost();

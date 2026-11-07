@@ -49,6 +49,8 @@ export interface ConfigView {
   };
   /** Whether any agent may use the tracker tools. */
   agentsAllowed: boolean;
+  /** The build's default for confirming agent changes; the person's prefs may differ. */
+  confirmDefault: boolean;
 }
 
 export interface BoardView {
@@ -85,6 +87,28 @@ export interface Suggestions {
   queues: (QueueView & { count: number })[];
   epics: { issue: Issue; count: number }[];
 }
+
+/** One change an agent applied without a form, and what its undo did. */
+export interface AppliedItemView {
+  planned: Omit<PlannedChange, "undo">;
+  ok: boolean;
+  /** The created issue's key. */
+  key: string | null;
+  code: string | null;
+  canUndo: boolean;
+  undo: "undone" | "changedSince" | "failed" | null;
+  undoCode: string | null;
+}
+
+/** A batch the agent applied at once: the `::tracker-changes` card in its reply. */
+export interface AppliedView {
+  tracker: string;
+  at: number;
+  items: AppliedItemView[];
+  undoneAt: number | null;
+}
+
+const appliedInput = z.object({ id: z.string().regex(/^u_[0-9a-f]{12}$/), threadId: z.string().min(1).max(200) }).strict();
 
 export interface ChatView {
   threadId: string | null;
@@ -123,6 +147,8 @@ export const rpcContract = defineRpcContract({
   people: { input: z.object({ text: z.string().max(200) }).strict(), output: custom<Person[]>() },
   queues: { input: z.object({ text: z.string().max(200) }).strict(), output: custom<{ queues: QueueView[] }>() },
   suggestBoards: { input: z.null(), output: custom<Suggestions>() },
+  appliedChanges: { input: appliedInput, output: custom<AppliedView>() },
+  undoApplied: { input: appliedInput, output: custom<AppliedView>() },
   preview: { input: z.object({ changes }).strict(), output: custom<PlannedChange[]>() },
   apply: {
     input: z.object({ changes, approve: z.array(z.string().max(10)).max(200) }).strict(),

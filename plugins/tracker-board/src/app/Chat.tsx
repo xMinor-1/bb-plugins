@@ -114,7 +114,22 @@ export function ChatSplitter({ t, height, onResize }: { t: Messages; height: num
   );
 }
 
-export function ChatColumn({ t, rpc, agentsAllowed, place, onPlace }: { t: Messages; rpc: Rpc; agentsAllowed: boolean; place: "right" | "bottom"; onPlace: (place: "right" | "bottom") => void }) {
+export function ChatColumn({
+  t,
+  rpc,
+  agentsAllowed,
+  confirm,
+  place,
+  onPlace,
+}: {
+  t: Messages;
+  rpc: Rpc;
+  agentsAllowed: boolean;
+  /** Whether the agent's changes wait for the person's confirmation. */
+  confirm: boolean;
+  place: "right" | "bottom";
+  onPlace: (place: "right" | "bottom") => void;
+}) {
   const [chat, setChat] = useState<ChatView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [focus, setFocus] = useState(0);
@@ -176,7 +191,7 @@ export function ChatColumn({ t, rpc, agentsAllowed, place, onPlace }: { t: Messa
         <div className="tb-chat-new">
           <div className="tb-chat-empty">
             <p>{t.chatIntro1}</p>
-            <p>{t.chatIntro2}</p>
+            <p>{confirm ? t.chatIntro2 : t.chatIntro2Direct}</p>
             {agentsAllowed ? null : <p className="tb-warn">{t.chatNoAgents}</p>}
           </div>
           {chat.projectId ? (

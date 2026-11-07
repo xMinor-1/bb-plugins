@@ -1,10 +1,12 @@
 // bb-plugin-tracker-board — frontend.
 //
 // A navigation page with the board, its controls in bb's title bar, a task tab
-// for bb's side panel, and the form that asks the person to confirm an agent's
-// changes above the chat's composer.
+// for bb's side panel, the form that asks the person to confirm an agent's
+// changes above the chat's composer, and the card with Undo for changes an agent
+// applied at once.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import { messagesNow } from "@/lib/i18n";
+import { ChangesDirective } from "./src/app/ChangesCard";
 import { ConfirmForm } from "./src/app/ConfirmForm";
 import { IssueTab } from "./src/app/IssueTab";
 import { messages } from "./src/app/messages";
@@ -50,4 +52,5 @@ export default definePluginApp((app) => {
   });
 
   app.slots.pendingInteraction({ id: CONFIRM_RENDERER, component: ConfirmForm });
+  app.slots.messageDirective({ id: "tracker-changes", component: ChangesDirective });
 });

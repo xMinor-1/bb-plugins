@@ -391,6 +391,90 @@ describe("agents", () => {
   });
 });
 
+describe("agents without confirmation", () => {
+  const directive = (answer: string) => /::tracker-changes\{id=\\?"(u_[0-9a-f]{12})\\?"\}/.exec(answer)?.[1] ?? null;
+  type Applied = { items: { ok: boolean; canUndo: boolean; undo: string | null; planned: { key: string | null } }[]; undoneAt: number | null };
+
+  it("follows the build's default, and the person's choice over it", async () => {
+    const { configure, rpc } = await setup({ confirmAgentChanges: false });
+    expect((await rpc<{ confirmDefault: boolean }>("config")).confirmDefault).toBe(false);
+    const instructions = async () => ((await configure(ALLOWED.providerId, ALLOWED.model)) as { instructions: string }).instructions;
+    expect(await instructions()).toContain("changes apply at once");
+    await rpc("setPrefs", { confirmAgent: true });
+    expect(await instructions()).toContain("confirms each change");
+    const prefs = await rpc<{ confirmAgent: boolean | null }>("setPrefs", { confirmAgent: null });
+    expect(prefs.confirmAgent).toBeNull();
+    expect(await instructions()).toContain("changes apply at once");
+    // Without the setting the build confirms.
+    const plain = await setup();
+    expect((await plain.rpc<{ confirmDefault: boolean }>("config")).confirmDefault).toBe(true);
+  });
+
+  it("applies at once, hands over the card, and undoes only what is still as set", async () => {
+    const { dispatch, tool, harness, rpc } = await setup({ confirmAgentChanges: false });
+    await dispatch("thr_agent", ALLOWED);
+    const before = { status: issue("PAY-140").status, assignee: issue("PAY-150").assignee_id, labels: [...issue("PAY-114").labels] };
+    const answer = text(
+      await tool("tracker_propose_changes", {
+        summary: "Close the bug, hand the contract to Oleg, tag the analysis",
+        changes: [
+          { kind: "status", key: "PAY-140", to: "done" },
+          { kind: "assignee", key: "PAY-150", to: "u4" },
+          { kind: "labels", key: "PAY-114", add: ["urgent"] },
+          { kind: "comment", key: "PAY-114", text: "Tagged by the agent" },
+        ],
+      }),
+    );
+    // No form: the changes are in the tracker already.
+    expect(harness.inspection.pendingInteractions).toHaveLength(0);
+    expect(answer).toContain("Applied 4 of 4");
+    expect(issue("PAY-140").status).toBe("done");
+    expect(issue("PAY-150").assignee_id).toBe("u4");
+    expect(issue("PAY-114").labels).toContain("urgent");
+    const id = directive(answer);
+    expect(id).not.toBeNull();
+    expect(harness.inspection.realtimeSignals.at(-1)?.channel).toBe("changed");
+
+    const view = await rpc<Applied>("appliedChanges", { id, threadId: "thr_agent" });
+    expect(view.items.map((item) => item.canUndo)).toEqual([true, true, true, false]);
+    // A card pasted into another thread shows nothing.
+    await expect(rpc("appliedChanges", { id, threadId: "thr_other" })).rejects.toThrow(/notFound/);
+
+    // Someone reassigns the contract meanwhile: that stays theirs.
+    issue("PAY-150").assignee_id = "u2";
+    const undone = await rpc<Applied>("undoApplied", { id, threadId: "thr_agent" });
+    expect(undone.items.map((item) => item.undo)).toEqual(["undone", "changedSince", "undone", null]);
+    expect(undone.undoneAt).not.toBeNull();
+    expect(issue("PAY-140").status).toBe(before.status);
+    expect(issue("PAY-150").assignee_id).toBe("u2");
+    expect(issue("PAY-114").labels).toEqual(before.labels);
+    // A second press changes nothing more.
+    issue("PAY-140").status = "done";
+    await rpc("undoApplied", { id, threadId: "thr_agent" });
+    expect(issue("PAY-140").status).toBe("done");
+    issue("PAY-140").status = before.status;
+    issue("PAY-150").assignee_id = before.assignee;
+  });
+
+  it("keeps the form when the person wants to confirm, though the build does not", async () => {
+    const { dispatch, tool, harness, rpc } = await setup({ confirmAgentChanges: false });
+    await rpc("setPrefs", { confirmAgent: true });
+    await dispatch("thr_agent", ALLOWED);
+    const pending = tool("tracker_propose_changes", { summary: "Close it", changes: [{ kind: "status", key: "PAY-131", to: "done" }] });
+    await waitFor(() => harness.inspection.pendingInteractions.length === 1);
+    harness.behavior.cancelInteraction(harness.inspection.pendingInteractions[0]!.id);
+    expect(text(await pending)).toContain("rejected");
+    expect(issue("PAY-131").status).toBe("in_progress");
+  });
+
+  it("still refuses a model outside the allowed list", async () => {
+    const { dispatch, tool } = await setup({ confirmAgentChanges: false });
+    await dispatch("thr_x", EXTERNAL);
+    expect(text(await tool("tracker_propose_changes", { summary: "x", changes: [{ kind: "status", key: "PAY-131", to: "done" }] }, "thr_x"))).toContain("not available");
+    expect(issue("PAY-131").status).toBe("in_progress");
+  });
+});
+
 describe("the chat next to the board", () => {
   it("starts a thread from the composer's request and remembers it", async () => {
     const { rpc, spawned } = await setup();

@@ -302,6 +302,30 @@ function TemplatesSection({ t, rpc, config, prefs }: { t: Messages; rpc: Rpc; co
   );
 }
 
+/** Whether the agent's changes wait for a form. The build sets the default; each person may differ. */
+export function AgentSection({ t, rpc, config, prefs }: { t: Messages; rpc: Rpc; config: ConfigView; prefs: Prefs }) {
+  const on = prefs.confirmAgent ?? config.confirmDefault;
+  const set = (confirmAgent: boolean | null) => void savePrefs(rpc, { confirmAgent }).catch((cause) => toast.error(errorText(t, cause)));
+  return (
+    <section>
+      <h3>{t.settingsAgent}</h3>
+      <label className="tb-toggle">
+        <input className="tb-cb" type="checkbox" checked={on} onChange={(event) => set(event.target.checked)} />
+        <span>{t.confirmAgent}</span>
+      </label>
+      <p className="tb-h tb-toggle-hint">{on ? t.confirmOnHint : t.confirmOffHint}</p>
+      <p className="tb-hint">
+        {t.confirmBuild(config.confirmDefault)}{" "}
+        {prefs.confirmAgent !== null && prefs.confirmAgent !== config.confirmDefault ? (
+          <button className="tb-lnk" type="button" onClick={() => set(null)}>
+            {t.followBuild}
+          </button>
+        ) : null}
+      </p>
+    </section>
+  );
+}
+
 function PeopleSection({ t, rpc, prefs }: { t: Messages; rpc: Rpc; prefs: Prefs }) {
   const [open, setOpen] = useState(false);
   const set = (people: Person[]) => void savePrefs(rpc, { people }).catch((cause) => toast.error(errorText(t, cause)));
@@ -398,6 +422,7 @@ export function SettingsView({ t, rpc, config, prefs }: { t: Messages; rpc: Rpc;
       {config.problem ? <p className="tb-error">{t.notConfigured(config.problem)}</p> : null}
       <Connection t={t} rpc={rpc} config={config} />
       <BoardsSection t={t} rpc={rpc} config={config} prefs={prefs} />
+      {config.agentsAllowed ? <AgentSection t={t} rpc={rpc} config={config} prefs={prefs} /> : null}
       <TemplatesSection t={t} rpc={rpc} config={config} prefs={prefs} />
       <PeopleSection t={t} rpc={rpc} prefs={prefs} />
       <TransferSection t={t} rpc={rpc} prefs={prefs} />

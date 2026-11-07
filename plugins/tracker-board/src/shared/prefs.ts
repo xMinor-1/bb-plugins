@@ -59,6 +59,8 @@ export const prefsSchema = z
     boards: z.array(savedBoardSchema).max(LIMITS.boards).default([]),
     /** The person went through "What are you interested in" (or skipped it). */
     boardsReady: z.boolean().default(false),
+    /** Whether the agent's changes wait for a confirmation form; null follows the build. */
+    confirmAgent: z.boolean().nullable().default(null),
   })
   .strict();
 export type Prefs = z.infer<typeof prefsSchema>;
@@ -78,6 +80,7 @@ export const prefsPatchSchema = z
     recent: recentSchema.optional(),
     boards: z.array(savedBoardSchema).max(LIMITS.boards).optional(),
     boardsReady: z.boolean().optional(),
+    confirmAgent: z.boolean().nullable().optional(),
   })
   .strict();
 export type PrefsInput = z.input<typeof prefsSchema>;
@@ -94,12 +97,13 @@ export const exportSchema = z
     people: z.array(personSchema).max(LIMITS.people).optional(),
     recent: z.array(recentItemSchema).max(LIMITS.recent).optional(),
     boards: z.array(savedBoardSchema).max(LIMITS.boards).optional(),
+    confirmAgent: z.boolean().nullable().optional(),
   })
   .strict();
 export type ExportFile = z.infer<typeof exportSchema>;
 
 export function toExport(prefs: Prefs): ExportFile {
-  return { kind: EXPORT_KIND, version: 1, display: prefs.display, templates: prefs.templates, people: prefs.people, recent: prefs.recent, boards: prefs.boards };
+  return { kind: EXPORT_KIND, version: 1, display: prefs.display, templates: prefs.templates, people: prefs.people, recent: prefs.recent, boards: prefs.boards, confirmAgent: prefs.confirmAgent };
 }
 
 /** Settings from a file replace the matching parts; the board in view stays. */
@@ -111,6 +115,7 @@ export function fromExport(prefs: Prefs, file: ExportFile): Prefs {
     ...(file.people ? { people: file.people } : {}),
     ...(file.recent ? { recent: file.recent } : {}),
     ...(file.boards ? { boards: file.boards, boardsReady: true } : {}),
+    ...(file.confirmAgent !== undefined ? { confirmAgent: file.confirmAgent } : {}),
   });
 }
 export type Source = z.infer<typeof sourceSchema>;

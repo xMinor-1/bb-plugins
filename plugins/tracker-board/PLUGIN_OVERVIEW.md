@@ -1,6 +1,6 @@
 Work with your team's task tracker from bb: a board of cards, child tasks from
-templates, bulk edits, and an agent next to the board that changes tasks only after
-you confirm.
+templates, bulk edits, and an agent next to the board that changes tasks after you
+confirm, or at once with Undo if you prefer.
 
 ## What you get
 
@@ -20,7 +20,8 @@ you confirm.
   what is skipped.
 - One chat beside the board or below it. Select tasks, press "To chat", say what to do: the agent
   proposes, a form above the composer lists each change, and only what you approve
-  is applied.
+  is applied. Turn confirmation off and the agent changes tasks at once; its reply
+  lists what changed, with Undo.
 - Export and import of your settings as JSON. English and Russian interface.
 
 ## Configure, don't code
@@ -33,8 +34,9 @@ configuration. Any tracker with a JSON REST API and a key per person fits.
 
 - The API key stays in the OS credential store on your machine and goes only to the
   tracker's address; redirects are not followed.
-- Agents have no tool that changes a task directly: every change goes through your
-  confirmation.
+- Agent changes go through your confirmation unless you turn it off. Without it, the
+  agent's reply lists every change with Undo, which puts back only what nobody has
+  changed since.
 - Only the models you list get the tools, and a thread that read tracker data cannot
   move to another model.
 

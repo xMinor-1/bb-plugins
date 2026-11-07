@@ -64,6 +64,8 @@ export interface PlannedChange {
   skip: SkipReason | null;
   from: string | null;
   to: string | null;
+  /** The change that puts the issue back as it was; null when there is none (a comment, a new issue). */
+  undo?: Change | null;
 }
 
 export interface ChangeResult {

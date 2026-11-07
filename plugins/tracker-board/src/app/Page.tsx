@@ -316,7 +316,7 @@ export function BoardPage() {
       <div className={`tb-pb${chatBelow ? " tb-pb-vert" : ""}`} style={chatBelow ? { ["--tb-chat-h" as string]: `${prefs.display.chatHeight}%` } : undefined}>
         <div className={`tb-work${selection.size > 0 ? " tb-selecting" : ""}`}>{data ? <ViewContext.Provider value={data}>{work}</ViewContext.Provider> : work}</div>
         {chatShown && chatBelow ? <ChatSplitter t={t} height={prefs.display.chatHeight} onResize={(chatHeight) => void savePrefs(rpc, { display: { ...prefs.display, chatHeight } })} /> : null}
-        {chatShown ? <ChatColumn t={t} rpc={rpc} agentsAllowed={config.agentsAllowed} place={prefs.display.chat} onPlace={(chat) => void savePrefs(rpc, { display: { ...prefs.display, chat } })} /> : null}
+        {chatShown ? <ChatColumn t={t} rpc={rpc} agentsAllowed={config.agentsAllowed} confirm={prefs.confirmAgent ?? config.confirmDefault} place={prefs.display.chat} onPlace={(chat) => void savePrefs(rpc, { display: { ...prefs.display, chat } })} /> : null}
       </div>
       {bulk && data ? (
         <ViewContext.Provider value={data}>
