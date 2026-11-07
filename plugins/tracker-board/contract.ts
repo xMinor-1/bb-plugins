@@ -63,7 +63,7 @@ export const requestInputSchema = z
   .object({
     baseUrl,
     auth: authSchema,
-    method: z.enum(["GET", "POST", "PATCH", "PUT"]),
+    method: z.enum(["GET", "POST", "PATCH", "PUT", "DELETE"]),
     path: z.string().min(1).max(2000),
     query: z.record(z.string().max(100), z.string().max(LIMITS.queryValue)),
     /** JSON text, already built from the configuration. */

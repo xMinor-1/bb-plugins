@@ -57,7 +57,7 @@ function failureOfStatus(status: number): FailureCode {
 
 export interface HttpRequest {
   url: string;
-  method: "GET" | "POST" | "PATCH" | "PUT";
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   headers: Record<string, string>;
   body: string | null;
   exposeHeaders: readonly string[];

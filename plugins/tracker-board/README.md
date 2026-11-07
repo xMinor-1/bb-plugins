@@ -66,7 +66,8 @@ and reads the rest with the tools.
 
 ### API profile
 
-Every request is a template. `{name}` alone as a JSON value keeps the variable's type (a list
+Every request is a template: `method` (`GET`, `POST`, `PATCH`, `PUT` or `DELETE`), `path`,
+optional `query` and `body`. `{name}` alone as a JSON value keeps the variable's type (a list
 stays a list, `null` stays `null`); inside a longer string it is text. A key whose variable is
 missing is dropped from the body. Variables in a path are URL-encoded.
 
@@ -84,7 +85,7 @@ missing is dropped from the body. Variables in a path are URL-encoded.
     "update": { "method": "PATCH", "path": "/issues/{key}", "body": { "summary": "{summary}", "description": "{description}", "priority": "{priority}", "labels": "{labels}" } },
     "transition": { "method": "POST", "path": "/issues/{key}/transitions", "body": { "to_status_code": "{status}" } },
     "setParent": { "method": "PUT", "path": "/issues/{key}/parent", "body": { "parent_issue_key": "{parent}" } },
-    "clearParent": { "method": "PUT", "path": "/issues/{key}/parent", "body": { "parent_issue_key": null } },
+    "clearParent": { "method": "DELETE", "path": "/issues/{key}/parent" },
     "assign": { "method": "POST", "path": "/issues/{key}/assign", "body": { "assignee": "{assignee}" } },
     "unassign": { "method": "POST", "path": "/issues/{key}/unassign" },
     "comments": { "method": "GET", "path": "/issues/{key}/comments" },

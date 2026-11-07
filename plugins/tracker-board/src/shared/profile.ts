@@ -10,7 +10,7 @@ const jsonSchema: z.ZodType<Json> = z.lazy(() =>
 
 const requestSchema = z
   .object({
-    method: z.enum(["GET", "POST", "PATCH", "PUT"]).default("GET"),
+    method: z.enum(["GET", "POST", "PATCH", "PUT", "DELETE"]).default("GET"),
     path: z.string().min(1).max(500).startsWith("/"),
     query: z.record(z.string().max(100), z.string().max(2000)).optional(),
     body: jsonSchema.optional(),

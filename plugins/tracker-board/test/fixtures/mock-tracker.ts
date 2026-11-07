@@ -231,6 +231,14 @@ export function startMockTracker(port = 0): Promise<{ url: string; state: MockSt
       touch(issue);
       return send(res, 200, { data: {} });
     }
+    if (req.method === "DELETE" && (m = /^\/issues\/([^/]+)\/parent$/.exec(p))) {
+      const issue = find(m[1]!);
+      if (!issue) return send(res, 404, { error: "no such issue" });
+      issue.parent_key = null;
+      touch(issue);
+      res.writeHead(204).end();
+      return;
+    }
     if (req.method === "POST" && (m = /^\/issues\/([^/]+)\/(assign|unassign)$/.exec(p))) {
       const issue = find(m[1]!);
       if (!issue) return send(res, 404, { error: "no such issue" });
@@ -283,7 +291,7 @@ export const MOCK_PROFILE = {
     update: { method: "PATCH", path: "/issues/{key}", body: { summary: "{summary}", description: "{description}", priority: "{priority}", labels: "{labels}" } },
     transition: { method: "POST", path: "/issues/{key}/transitions", body: { to_status_code: "{status}" } },
     setParent: { method: "PUT", path: "/issues/{key}/parent", body: { parent_issue_key: "{parent}" } },
-    clearParent: { method: "PUT", path: "/issues/{key}/parent", body: { parent_issue_key: null } },
+    clearParent: { method: "DELETE", path: "/issues/{key}/parent" },
     assign: { method: "POST", path: "/issues/{key}/assign", body: { assignee: "{assignee}" } },
     unassign: { method: "POST", path: "/issues/{key}/unassign" },
     comments: { method: "GET", path: "/issues/{key}/comments" },

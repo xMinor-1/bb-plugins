@@ -169,6 +169,17 @@ describe("changes from the panel", () => {
     expect(harness.inspection.realtimeSignals.at(-1)?.channel).toBe("changed");
   });
 
+  it("removes a parent with the profile's DELETE request", async () => {
+    const { rpc } = await setup();
+    const changes = [{ kind: "parent", key: "PAY-113", to: null }];
+    const planned = await rpc<{ id: string; ok: boolean }[]>("preview", { changes });
+    expect(planned[0]?.ok).toBe(true);
+    const { results } = await rpc<{ results: { ok: boolean }[] }>("apply", { changes, approve: [planned[0]!.id] });
+    expect(results[0]?.ok).toBe(true);
+    expect(issue("PAY-113").parent_key).toBeNull();
+    expect(mock.state.requests.some((request) => request.method === "DELETE" && request.path.endsWith("/issues/PAY-113/parent"))).toBe(true);
+  });
+
   it("refuses a parent below the issue itself", async () => {
     const { rpc } = await setup();
     const planned = await rpc<{ ok: boolean; skip: string | null }[]>("preview", { changes: [{ kind: "parent", key: "PAY-101", to: "PAY-110" }, { kind: "parent", key: "PAY-110", to: "PAY-110" }] });
