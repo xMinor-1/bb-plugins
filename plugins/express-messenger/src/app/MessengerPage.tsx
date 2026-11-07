@@ -111,12 +111,12 @@ export function MessengerPage() {
   useEffect(loadRules, [loadRules]);
   useRealtime(RULES_CHANGED, loadRules);
 
-  const act = async (kind: NonNullable<typeof busy>, work: () => Promise<{ ok: boolean; message: string }>) => {
+  const act = async <R extends { ok: boolean; message: string }>(kind: NonNullable<typeof busy>, work: () => Promise<R>, say?: (result: R) => string) => {
     setBusy(kind);
     setNote(null);
     try {
       const result = await work();
-      setNote({ tone: result.ok ? "ok" : "error", text: hostError(result.message) });
+      setNote({ tone: result.ok ? "ok" : "error", text: result.ok && say ? say(result) : hostError(result.message) });
     } catch (cause) {
       setNote({ tone: "error", text: errorText(cause) });
     } finally {
@@ -186,10 +186,14 @@ export function MessengerPage() {
             <p className="text-sm text-muted-foreground">{t.loading}</p>
           ) : null}
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("signIn", () => rpc.call("signIn", { hostId: hostId! }))}>
+            <Button size="sm" disabled={!ready || busy !== null || status?.browser === null} onClick={() =>
+                act("signIn", () => rpc.call("signIn", { hostId: hostId! }), (result) =>
+                  result.chats > 0 ? t.signedInDirectory(result.chats, result.people) : t.signedInNoDirectory(hostError(result.message)),
+                )
+              }>
               {busy === "signIn" ? t.signingIn : t.signIn}
             </Button>
-            <Button size="sm" variant="outline" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("sync", () => rpc.call("sync", { hostId: hostId! }))}>
+            <Button size="sm" variant="outline" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("sync", () => rpc.call("sync", { hostId: hostId! }), (result) => t.directoryBuilt(result.chats, result.people))}>
               {busy === "sync" ? t.syncing : t.sync}
             </Button>
             <Button

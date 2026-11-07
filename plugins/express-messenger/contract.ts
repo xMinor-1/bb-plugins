@@ -121,7 +121,7 @@ export type RuleDraft = z.infer<typeof ruleDraftSchema>;
 export const hostContract = defineRpcContract({
   status: { input: withUrl, output: statusSchema, experimental_retryable: true },
   /** Opens a browser window to sign in; answers once the client has loaded the chats, or the window closed. */
-  signIn: { input: withUrl, output: outcome },
+  signIn: { input: withUrl, output: outcome.extend({ chats: z.number().int(), people: z.number().int() }).strict() },
   /** Rebuilds the directory: chats, and the people of personal chats with their names in other alphabets. */
   sync: { input: withUrl, output: outcome.extend({ chats: z.number().int(), people: z.number().int() }).strict() },
   findChats: { input: withUrl.extend({ query: z.string().min(1).max(200), limit: z.number().int().min(1).max(10).optional() }).strict(), output: matchesSchema },

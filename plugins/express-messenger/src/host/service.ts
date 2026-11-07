@@ -33,6 +33,8 @@ export interface ServiceOptions {
   readonly directoryFreshMs?: number;
   /** How long the sign-in screen may show before a call gives up and asks to sign in. */
   readonly signInGraceMs?: number;
+  /** Tests only: the sign-in "window" without a window, on a machine without a desktop. */
+  readonly signInHeadless?: boolean;
 }
 
 const READY_TIMEOUT_MS = 90_000;
@@ -248,15 +250,28 @@ export class MessengerService {
     };
   }
 
-  /** A window for the person to sign in; closed again once the client has loaded the chats. */
-  async signIn(url: string): Promise<{ ok: boolean; message: string }> {
+  /**
+   * A window for the person to sign in, closed again once the client has loaded the chats; then
+   * the directory is built without a window, so search works right after signing in. `chats` and
+   * `people` are zero when the directory could not be built: the sign-in still counts, and the
+   * message says why the directory is missing.
+   */
+  async signIn(url: string): Promise<{ ok: boolean; message: string; chats: number; people: number }> {
+    const signedIn = await this.signInWindow(url);
+    if (!signedIn.ok) return { ...signedIn, chats: 0, people: 0 };
+    const sync = await this.sync(url);
+    if (sync.ok) return { ok: true, message: `Signed in. ${sync.message}`, chats: sync.chats, people: sync.people };
+    return { ok: true, message: sync.message, chats: 0, people: 0 };
+  }
+
+  private async signInWindow(url: string): Promise<{ ok: boolean; message: string }> {
     if (this.signingIn) return { ok: false, message: "A sign-in window is already open on this machine." };
     // Refuses new operations from here on, so none slips in while the one in progress finishes.
     this.signingIn = true;
     try {
       await this.chain;
       await this.closePage();
-      const page = await Page.open({ browserPath: this.browserPath(), profileDir: this.profileDir, url, headless: false });
+      const page = await Page.open({ browserPath: this.browserPath(), profileDir: this.profileDir, url, headless: this.options.signInHeadless ?? false });
       try {
         const closed = page.exited().then(() => "closed" as const);
         // A failure is kept as a value: once the window is closed, nobody waits for this promise.

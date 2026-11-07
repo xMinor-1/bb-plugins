@@ -46,11 +46,15 @@ Chromium (Yandex Browser works too). bb must run on Node.js 22 or newer.
      locked as shown in [Digest threads](#digest-threads).
 2. Open **Messenger** in the sidebar, choose the machine and press **Sign in**.
    A browser window opens on that machine; sign in as you usually do. The
-   sign-in is kept in the plugin's own browser profile, separate from your
-   everyday browser.
-3. Press **Update directory** once: it collects your chats and the people of
+   window closes by itself once the chats have loaded, and the plugin builds
+   the directory right away without a window: your chats and the people of
    personal chats with the other spellings of their names (about a minute for
-   a thousand chats). After that, searches do not need the browser.
+   a thousand chats). The page then says how many chats and people it holds.
+   The sign-in is kept in the plugin's own browser profile, separate from your
+   everyday browser. After that, searches do not need the browser.
+3. **Update directory** collects the chats again, for example after you have
+   joined new ones. If the directory could not be built right after signing
+   in, the page says why, and this button tries again.
 
 ## Agent tools
 
