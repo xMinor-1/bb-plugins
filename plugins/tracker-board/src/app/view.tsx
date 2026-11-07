@@ -3,7 +3,7 @@ import { createContext, useContext } from "react";
 import type { Lang } from "@/lib/i18n";
 import { splitPrefix, type Issue } from "../shared/model";
 import type { Display } from "../shared/prefs";
-import { prefixId, type Template } from "../shared/templates";
+import { mergeTemplates, prefixId, type Template } from "../shared/templates";
 import type { BoardView, ConfigView, StatusView } from "../server/rpc-contract";
 import type { Messages } from "./messages";
 
@@ -66,6 +66,19 @@ export interface RoleCount {
  * A story's tasks counted by template part (by title prefix: every [BE] task counts for
  * BE), and everything else together. A part with no task is missing.
  */
+/** The templates a person works with: their own over the build's shared ones. */
+export function personTemplates(config: Pick<ConfigView, "templates">, own: readonly Template[]): Template[] {
+  return mergeTemplates(
+    config.templates.filter((template) => !template.own),
+    own,
+  );
+}
+
+/** The parts of a story's composition row, in the build's order. */
+export function compositionParts(config: Pick<ConfigView, "composition">, templates: readonly Template[]): Template[] {
+  return config.composition.map((id) => templates.find((template) => template.id === id)).filter((template): template is Template => Boolean(template));
+}
+
 export function composition(story: Issue, view: Pick<ViewData, "children" | "parts">) {
   const kids = view.children.get(story.key) ?? [];
   const count = (issues: Issue[]): RoleCount => ({ done: issues.filter((issue) => issue.category === "done").length, total: issues.length, issues });

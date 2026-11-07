@@ -1170,35 +1170,134 @@
   padding: 10px 18px 30px;
   min-height: 0;
 }
-.tb-crumbs {
+/* the parents of the task in view: one row each, a line down the left, this task last */
+.tb-pp {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-  font-size: 12.5px;
-  color: var(--tb-muted);
-  margin-bottom: 6px;
+  flex-direction: column;
+  margin: 0 0 14px;
 }
-.tb-crumb {
-  display: inline-flex;
+.tb-pp-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  column-gap: 10px;
+  padding: 8px 10px 9px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.tb-pp-row:hover {
+  background: var(--tb-hover);
+}
+.tb-pp-row:focus-visible {
+  outline: 2px solid var(--tb-fg);
+  outline-offset: -2px;
+}
+.tb-pp-me {
+  cursor: default;
+  background: var(--tb-active);
+}
+.tb-pp-me:hover {
+  background: var(--tb-active);
+}
+.tb-pp-l {
+  display: flex;
+  flex-direction: column;
   align-items: center;
+  padding-top: 1px;
+}
+.tb-pp-l .tb-ty {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+.tb-pp-l .tb-ty svg {
+  width: 11px;
+  height: 11px;
+}
+.tb-pp-row:not(.tb-pp-me) .tb-pp-l::after {
+  content: "";
+  flex: 1;
+  width: 2px;
+  min-height: 8px;
+  margin: 5px 0 -14px;
+  border-radius: 1px;
+  background: color-mix(in oklab, var(--tb-fg) 28%, transparent);
+}
+.tb-pp-r {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+}
+.tb-pp-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
-.tb-crumb button {
-  border: 0;
-  background: transparent;
-  padding: 0;
+.tb-pp-kind {
+  font-size: 11px;
   color: var(--tb-muted);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: none;
 }
-.tb-crumb button:hover {
-  color: var(--tb-fg);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+.tb-pp-h .tb-key {
+  flex: none;
+}
+.tb-pp-h .tb-pill {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-pp-t {
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.tb-pp-wait {
+  height: 32px;
+  border-radius: 8px;
+  background: var(--tb-hover);
+  animation: tb-pp-pulse 1.2s ease-in-out infinite alternate;
+}
+@keyframes tb-pp-pulse {
+  to {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tb-pp-wait {
+    animation: none;
+  }
+}
+.tb-prog {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--tb-muted);
+  min-width: 0;
+}
+.tb-prog > span:first-child {
+  flex: none;
+}
+.tb-prog-bar {
+  flex: 1;
+  min-width: 40px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--tb-hover);
+  overflow: hidden;
+  display: flex;
+}
+.tb-prog-bar i {
+  display: block;
+  height: 100%;
+  background: var(--tb-line-strong);
+}
+.tb-d-extra {
+  margin: -4px 0 14px;
 }
 .tb-d-title {
   font-size: 18px;

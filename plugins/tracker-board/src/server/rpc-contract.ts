@@ -143,6 +143,8 @@ export const rpcContract = defineRpcContract({
   importPrefs: { input: z.object({ file: exportSchema }).strict(), output: custom<Prefs>() },
   board: { input: z.object({ source: sourceSchema }).strict(), output: custom<BoardView>() },
   issue: { input: z.object({ key: z.string().min(1).max(60) }).strict(), output: custom<IssueView>() },
+  /** An issue with everything under it, for a parent's composition in the task panel. Saves nothing. */
+  tree: { input: z.object({ key: z.string().min(1).max(60) }).strict(), output: custom<{ issues: Issue[]; truncated: boolean }>() },
   find: { input: z.object({ text: z.string().max(300) }).strict(), output: custom<{ issues: Issue[] }>() },
   people: { input: z.object({ text: z.string().max(200) }).strict(), output: custom<Person[]>() },
   queues: { input: z.object({ text: z.string().max(200) }).strict(), output: custom<{ queues: QueueView[] }>() },

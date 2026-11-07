@@ -328,6 +328,10 @@ export const messages = defineMessages(
     confirmBuild: (on: boolean) => `Default in this build: ${on ? "on" : "off"}.`,
     followBuild: "As in the build",
     chatIntro2Direct: "Select tasks and press “To chat”, or type @ and a task key. Confirmation is off: the agent changes tasks at once, and its reply has Undo.",
+    parentsLabel: "Parents",
+    thisTask: "This task",
+    openParent: (key: string) => `Open ${key}`,
+    noTasksYet: "No tasks yet",
   },
   {
     panelTitle: "Задачи",
@@ -651,6 +655,10 @@ export const messages = defineMessages(
     confirmBuild: (on) => `По умолчанию в сборке: ${on ? "включено" : "выключено"}.`,
     followBuild: "Как в сборке",
     chatIntro2Direct: "Выберите задачи и нажмите «В чат» или напишите @ и ключ задачи. Подтверждение выключено: агент меняет задачи сразу, а в ответе есть «Отменить».",
+    parentsLabel: "Родители",
+    thisTask: "Эта задача",
+    openParent: (key) => `Открыть ${key}`,
+    noTasksYet: "Задач пока нет",
   },
 );
 

@@ -39,8 +39,7 @@ import {
 import { TemplatesDialog } from "./Templates";
 import { applyFilters, NO_FILTERS, Toolbar, type Filters } from "./Toolbar";
 import { Spinner } from "./ui";
-import { childrenOf, ViewContext, type ViewData } from "./view";
-import { mergeTemplates } from "../shared/templates";
+import { childrenOf, compositionParts, personTemplates, ViewContext, type ViewData } from "./view";
 
 let started = false;
 
@@ -220,11 +219,8 @@ export function BoardPage() {
   if (board) {
     const byKey = new Map(board.issues.map((issue) => [issue.key, issue]));
     const children = childrenOf(board.issues);
-    const templates = mergeTemplates(
-      config.templates.filter((template) => !template.own),
-      prefs.templates,
-    );
-    const parts = config.composition.map((id) => templates.find((template) => template.id === id)).filter((template): template is (typeof templates)[number] => Boolean(template));
+    const templates = personTemplates(config, prefs.templates);
+    const parts = compositionParts(config, templates);
     const names = new Map(people.map((person) => [person.id, person.name]));
     data = {
       t,

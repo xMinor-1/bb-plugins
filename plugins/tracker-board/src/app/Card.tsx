@@ -28,11 +28,10 @@ function cellTitle(head: string, count: RoleCount, statusName: (key: string) => 
   return [head, ...lines].join("\n");
 }
 
-function RoleCell({ label, count, head, other }: { label: string; count: RoleCount; head: string; other?: boolean }) {
-  const view = useView();
+function RoleCell({ t, label, count, head, other, statusName }: { t: Messages; label: string; count: RoleCount; head: string; other?: boolean; statusName: (key: string) => string }) {
   const state = count.total === 0 ? "none" : count.done === count.total ? "done" : "work";
   return (
-    <span className={`tb-tile tb-tile-${state}${other ? " tb-tile-other" : ""}`} title={cellTitle(head, count, view.statusName, view.t)}>
+    <span className={`tb-tile tb-tile-${state}${other ? " tb-tile-other" : ""}`} title={cellTitle(head, count, statusName, t)}>
       <b>{label}</b>
       <i>{count.total > 0 ? `${count.done}/${count.total}` : "–"}</i>
     </span>
@@ -42,26 +41,28 @@ function RoleCell({ label, count, head, other }: { label: string; count: RoleCou
 /**
  * A story's composition: one cell per template part and one for the rest, each with
  * done of total. The row has a fixed number of cells, so every card keeps its size
- * however many tasks a story has.
+ * however many tasks a story has. The task panel shows the same row for a parent story.
  */
-export function Composition({ story }: { story: Issue }) {
-  const view = useView();
-  const { t } = view;
-  const c = composition(story, view);
+export function CompositionRow({ t, c, statusName }: { t: Messages; c: ReturnType<typeof composition>; statusName: (key: string) => string }) {
   if (c.parts.length === 0 && c.total === 0) return null;
   return (
     <div className="tb-comp">
       <div className="tb-comp-row" style={{ gridTemplateColumns: `repeat(${c.parts.length}, minmax(0, 1fr)) minmax(0, 1.45fr)` }}>
         {c.parts.map((part) => (
-          <RoleCell key={part.template.id} label={part.template.id} count={part} head={part.total > 0 ? t.roleDone(part.template.title, part.done, part.total) : t.noTaskYet(part.template.title)} />
+          <RoleCell key={part.template.id} t={t} statusName={statusName} label={part.template.id} count={part} head={part.total > 0 ? t.roleDone(part.template.title, part.done, part.total) : t.noTaskYet(part.template.title)} />
         ))}
-        <RoleCell label={t.otherShort} count={c.other} head={c.other.total > 0 ? t.roleDone(t.otherTasksTitle, c.other.done, c.other.total) : t.noOtherTasks} other />
+        <RoleCell t={t} statusName={statusName} label={t.otherShort} count={c.other} head={c.other.total > 0 ? t.roleDone(t.otherTasksTitle, c.other.done, c.other.total) : t.noOtherTasks} other />
       </div>
       <div className="tb-comp-cap">
         <span>{t.doneOf(c.done, c.total)}</span>
       </div>
     </div>
   );
+}
+
+export function Composition({ story }: { story: Issue }) {
+  const view = useView();
+  return <CompositionRow t={view.t} c={composition(story, view)} statusName={view.statusName} />;
 }
 
 export function ProgressBar({ issueKey }: { issueKey: string }) {

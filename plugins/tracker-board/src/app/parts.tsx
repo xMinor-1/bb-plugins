@@ -198,7 +198,7 @@ export function EpicTag({ epic, t, onOpen }: { epic: Issue; t: Messages; onOpen:
 }
 
 /** Epic › story › …: every parent with its title, each opens on click. */
-export function ParentPath({ issue, byKey, t, onOpen }: { issue: Issue; byKey: ReadonlyMap<string, Issue>; t: Messages; onOpen: (key: string) => void }) {
+export function ParentTrail({ issue, byKey, t, onOpen }: { issue: Issue; byKey: ReadonlyMap<string, Issue>; t: Messages; onOpen: (key: string) => void }) {
   const up = ancestors(issue, byKey);
   if (up.length === 0) return issue.parent ? <span className="tb-key">{issue.parent}</span> : null;
   return (

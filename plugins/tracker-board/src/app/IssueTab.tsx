@@ -14,6 +14,8 @@ import { Avatar, Dot, formatDate, Icons, Priority, StatusPill, statusColors, Tit
 import { applyNow, boardStore, chatOpenStore, configStore, errorText, failureText, openKeyStore, patchIssue, pendingPillsStore, prefsStore, reloadBoard, useStore } from "./store";
 import { templatesRequestStore, useOpenIssue } from "./requests";
 import { Popover, Spinner } from "./ui";
+import { ParentExtra, ParentPath, useTree, type PathData } from "./ParentPath";
+import { childrenOf, compositionParts, personTemplates } from "./view";
 
 export function IssueTab({ params }: { params: unknown }) {
   const key = params && typeof params === "object" && "key" in params && typeof (params as { key: unknown }).key === "string" ? (params as { key: string }).key : null;
@@ -62,6 +64,14 @@ export function IssueTab({ params }: { params: unknown }) {
     if (key && Array.isArray(keys) && keys.includes(key)) load();
   });
 
+  // The top parent's whole tree, for the parents' composition and progress. The board in
+  // view already holds it when it is that parent's own tree.
+  const shown = view && view.issue.key === key ? view.issue : null;
+  const pathMap = new Map([...(board?.parents ?? []), ...(view?.parents ?? []), ...(board?.issues ?? [])].map((item) => [item.key, item]));
+  const top = shown ? (ancestors(shown, pathMap)[0] ?? (shown.kind === "story" || shown.kind === "epic" ? shown : null)) : null;
+  const boardHasTree = Boolean(top && board && board.source.kind === "issue" && !board.truncated && board.issues.some((item) => item.key === top.key));
+  const tree = useTree(rpc, top?.key ?? null, Boolean(top) && !boardHasTree);
+
   if (!key) return <p className="tb-pad tb-hint">—</p>;
   if (error && !view) return <p className="tb-pad tb-error">{error}</p>;
   if (!view || !config) {
@@ -77,7 +87,9 @@ export function IssueTab({ params }: { params: unknown }) {
   const statusName = (status: string) => statuses.find((item) => item.key === status)?.name ?? status;
   const byKey = new Map([...(board?.parents ?? []), ...(view.parents ?? []), ...(board?.issues ?? [])].map((item) => [item.key, item]));
   const chain = ancestors(issue, byKey);
-  const kids: Issue[] = view.children ?? (board?.issues ?? []).filter((item) => item.parent === issue.key);
+  const treeIssues = boardHasTree ? board!.issues : tree.issues;
+  const treeKids = treeIssues ? childrenOf(treeIssues) : null;
+  const kids: Issue[] = view.children ?? treeKids?.get(issue.key) ?? (board?.issues ?? []).filter((item) => item.parent === issue.key);
   const templates = config.templates;
   const parts = compositionOf({ templates: templates.filter((template) => !template.own), bundles: config.bundles, composition: config.composition });
   const missing =
@@ -87,6 +99,15 @@ export function IssueTab({ params }: { params: unknown }) {
           return template && !kids.some((kid) => splitPrefix(kid.summary).prefix.toLowerCase() === id.toLowerCase());
         })
       : [];
+  const pathData: PathData = {
+    t,
+    children: treeKids,
+    loading: tree.loading,
+    parts: compositionParts(config, personTemplates(config, prefs?.templates ?? [])),
+    statuses,
+    colors,
+    statusName,
+  };
   const people = [...(prefs?.people ?? []), ...(board?.people ?? []).filter((person) => !(prefs?.people ?? []).some((known) => known.id === person.id))];
   const webUrl = config.webUrl ? config.webUrl.replace("{key}", encodeURIComponent(issue.key)) : null;
 
@@ -130,22 +151,15 @@ export function IssueTab({ params }: { params: unknown }) {
         ) : null}
       </div>
       <div className="tb-tab-b">
-        {chain.length > 0 ? (
-          <div className="tb-crumbs">
-            {chain.map((parent) => (
-              <span key={parent.key} className="tb-crumb">
-                <button type="button" onClick={() => openIssueTab(parent.key)}>
-                  <TypeTile kind={parent.kind} t={t} small />
-                  {parent.key} {splitPrefix(parent.summary).rest}
-                </button>
-                <span>/</span>
-              </span>
-            ))}
-          </div>
-        ) : null}
+        <ParentPath issue={issue} chain={chain} data={pathData} onOpen={openIssueTab} />
         <h1 className="tb-d-title">
           <TitleText issue={issue} />
         </h1>
+        {issue.kind === "story" || issue.kind === "epic" ? (
+          <div className="tb-d-extra">
+            <ParentExtra issue={issue} data={pathData} />
+          </div>
+        ) : null}
         <div className="tb-d-ctl">
           <label className="tb-ctl">
             <Dot color={colors.get(issue.status)} />

@@ -31,8 +31,11 @@ The interface is in English and Russian.
   each with done of total, however many tasks the story has.
 - **List.** The same tasks as a tree under their parents; the Parent column shows the path with
   titles. Parents that live on another board load too.
-- **A task in bb's side panel.** Click a card: path to the epic, status, assignee, priority,
-  description, child tasks and missing template parts, comments, labels.
+- **A task in bb's side panel.** Click a card. The parents come first, one row each down to
+  "This task": type, key, status and title, the story with its composition row, the epic with
+  done of total and a bar by status; a click opens the parent. A parent from another board looks
+  the same: its tasks load from the tracker and stay cached for two minutes. Below: status,
+  assignee, priority, description, child tasks and missing template parts, comments, labels.
 - **Child tasks from templates.** Under an epic or a story: the missing parts, all parts, a
   bundle (a story with its tasks), or the person's own templates. Rows can be edited before
   creating.

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { splitPrefix, type Issue } from "../shared/model";
 import type { StatusView } from "../server/rpc-contract";
 import { Card, ProgressBar } from "./Card";
-import { Avatar, Dot, Icons, ParentPath, StatusPill, TitleText, TypeTile } from "./parts";
+import { Avatar, Dot, Icons, ParentTrail, StatusPill, TitleText, TypeTile } from "./parts";
 import { composition, useView } from "./view";
 
 const RANK = { todo: 0, progress: 1, done: 2 } as const;
@@ -301,7 +301,7 @@ export function ListView({ visible, rootKey }: { visible: Issue[]; rootKey: stri
           </span>
         );
       case "parent":
-        return <ParentPath issue={issue} byKey={view.chain} t={t} onOpen={view.open} />;
+        return <ParentTrail issue={issue} byKey={view.chain} t={t} onOpen={view.open} />;
       case "due":
         return <span className="tb-due">{issue.due ? issue.due.slice(0, 10) : ""}</span>;
     }

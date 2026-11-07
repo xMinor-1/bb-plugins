@@ -12,7 +12,8 @@ confirm, or at once with Undo if you prefer.
 - Cards you set up yourself: which fields they show and how many lines of
   description. The epic is a coloured tag; a story's card has one row of done-of-total
   cells by role, however many tasks the story has.
-- A task opens in bb's side panel: status, assignee, priority, description, child
+- A task opens in bb's side panel with its parents on top: the epic with how much is
+  done, the story with its composition row. Then status, assignee, priority, description, child
   tasks, comments and labels.
 - Templates that create the usual child tasks of an epic or a story in one go, with
   labels for the current quarter. Your own templates sit on top of the shared ones.

@@ -7,6 +7,7 @@ import { createFakePluginHost, makeMessageDispatchHookContext, makePluginAgentCo
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import plugin from "../server";
 import type { BoardView, IssueView } from "../src/server/rpc-contract";
+import type { Issue } from "../src/shared/model";
 import { messages } from "../src/app/messages";
 import { errorText } from "../src/app/store";
 import { TrackerHost } from "../src/host/service";
@@ -126,6 +127,21 @@ describe("the board", () => {
     expect(board.parents.map((item) => item.key)).toEqual(["PAY-130"]);
     const view = await rpc<IssueView>("issue", { key: "PAY-112" });
     expect(view.parents.map((item) => item.key)).toEqual(["PAY-110", "PAY-101"]);
+  });
+
+  it("gives a parent's whole tree for the side panel without changing the board in view", async () => {
+    const { rpc } = await setup();
+    await rpc("board", { source: { kind: "mine" } });
+    const before = await rpc<{ source: unknown; recent: unknown[] }>("prefs");
+    const tree = await rpc<{ issues: Issue[]; truncated: boolean }>("tree", { key: "PAY-101" });
+    const keys = tree.issues.map((item) => item.key);
+    expect(keys[0]).toBe("PAY-101");
+    expect(keys).toEqual(expect.arrayContaining(["PAY-110", "PAY-115", "PAY-130", "PAY-140", "PAY-150"]));
+    expect(keys).not.toContain("OPS-1");
+    expect(tree.truncated).toBe(false);
+    const after = await rpc<{ source: unknown; recent: unknown[] }>("prefs");
+    expect(after.source).toEqual(before.source);
+    expect(after.recent).toEqual(before.recent);
   });
 
   it("finds queues by name, without archived ones", async () => {
@@ -275,7 +291,7 @@ describe("changes from the panel", () => {
   });
 
   it("creates a story with tasks under it, in order, with labels, assignee and parent", async () => {
-    const { rpc } = await setup();
+    const { rpc, harness } = await setup();
     const changes = [
       { kind: "create", ref: "r1", parentKey: "PAY-101", summary: "[S] Apple Pay", type: "story", assignee: "@me", labels: [] },
       { kind: "create", ref: "r2", parentRef: "r1", summary: "[BE] Apple Pay", type: "task", labels: ["TEAM-BACKEND-Q426"], components: ["Backend"], assignee: "u2" },
@@ -287,6 +303,8 @@ describe("changes from the panel", () => {
     expect(story).toMatchObject({ summary: "[S] Apple Pay", type: "story", parent_key: "PAY-101", assignee_id: "u1", queue_key: "PAY" });
     expect(task).toMatchObject({ parent_key: story.key, assignee_id: "u2", labels: ["TEAM-BACKEND-Q426"] });
     expect(mock.state.requests.some((request) => request.path.endsWith(`/issues/${task.id}/components`) && (request.body as { component_id: string }).component_id === "comp-1")).toBe(true);
+    // The epic's open panel and the parents' trees read their children again.
+    expect((harness.inspection.realtimeSignals.at(-1)?.payload as { keys: string[] }).keys).toEqual(expect.arrayContaining([story.key, task.key, "PAY-101"]));
   });
 
   it("fills create variables nobody gave from the profile's createDefaults", async () => {

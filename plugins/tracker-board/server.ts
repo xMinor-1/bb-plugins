@@ -743,6 +743,8 @@ export default async function plugin(bb: BbPluginApi) {
       const change = byId.get(result.id)?.change;
       if (change && change.kind !== "create") keys.add(change.key);
       if (change?.kind === "parent" && change.to) keys.add(change.to);
+      // A new task changes its parent's children: an open panel of the parent reads them again.
+      if (change?.kind === "create" && change.parentKey) keys.add(change.parentKey);
     }
     if (keys.size > 0) bb.realtime.publish(CHANGED_CHANNEL, { keys: [...keys] });
   }
@@ -1134,6 +1136,14 @@ export default async function plugin(bb: BbPluginApi) {
         queues: top.map(([key, count], index) => ({ key, name: named[index] ?? key, count })),
         epics: [...epics.values()].sort((a, b) => b.count - a.count).slice(0, SUGGEST_EPICS),
       };
+    },
+    tree: async ({ key }) => {
+      const tracker = await trackerOn(await panelHost());
+      // Unlike `board`, this is a side look: neither the board in view nor recent boards change.
+      const tree = await loadBoard(tracker, { kind: "issue", key });
+      const root = tree.root;
+      const issues = root && !tree.issues.some((item) => item.key === root.key) ? [root, ...tree.issues] : tree.issues;
+      return { issues, truncated: tree.truncated };
     },
     appliedChanges: async ({ id, threadId }) => appliedView(await appliedRecord(id, threadId)),
     undoApplied: async ({ id, threadId }) => {
