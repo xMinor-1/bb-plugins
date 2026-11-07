@@ -505,22 +505,30 @@ describe("dropping files (§8.4 → §8.7)", () => {
   });
 });
 
-describe("sidebar accessory (§10)", () => {
-  it("counts the uploads still in flight and disappears when they settle", async () => {
-    const Accessory = registration.experimental_sidebarAccessory!;
+describe("navigation badge (§10)", () => {
+  it("counts the uploads still in flight and clears when they settle", async () => {
+    const useBadge = registration.experimental_useBadge!;
+    function BadgeProbe() {
+      return <output data-testid="fm-badge">{JSON.stringify(useBadge())}</output>;
+    }
     const slot = renderSlot(
-      { component: Accessory },
-      { subPath: "" },
+      { component: BadgeProbe },
+      {},
       { rpc: baseRpc() as PluginRpcTestHandlers<FileManagerContract> },
     );
 
-    expect(slot.queryByTestId("fm-sidebar-accessory")).toBeNull();
+    expect(slot.getByTestId("fm-badge").textContent).toBe("null");
 
     const manager = getUploadManager();
     await act(async () => {
       manager.enqueue([{ file: fileOf("one.txt", 10), dirPath: ROOT, relativeDir: "" }]);
     });
-    expect((await slot.findByTestId("fm-sidebar-accessory")).textContent).toBe("1");
+    await waitFor(() => {
+      expect(JSON.parse(slot.getByTestId("fm-badge").textContent ?? "null")).toEqual({
+        count: 1,
+        label: "1 uploading — 0%",
+      });
+    });
 
     const xhr = await nextXhr(0);
     await act(async () => {
@@ -529,7 +537,7 @@ describe("sidebar accessory (§10)", () => {
     });
 
     await waitFor(() => {
-      expect(slot.queryByTestId("fm-sidebar-accessory")).toBeNull();
+      expect(slot.getByTestId("fm-badge").textContent).toBe("null");
     });
   });
 });

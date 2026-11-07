@@ -34,7 +34,7 @@ import { FileLocationOpener, FilePreviewOpener } from "./components/FileLocation
 import { FileManagerNewThreadTab, FileManagerTab } from "./components/FileManagerTab";
 import { HeaderActions } from "./components/HeaderActions";
 import { SettingsSection } from "./components/SettingsSection";
-import { SidebarAccessory } from "./components/SidebarAccessory";
+import { useUploadBadge } from "./hooks/useUploadBadge";
 import { defineMessages, messagesNow } from "./lib/i18n";
 
 // Registered once at load, so these follow the language of that moment; a
@@ -69,7 +69,7 @@ export default definePluginApp((app) => {
     path: PANEL_PATH, // "files" → /plugins/file-manager/files/*
     component: FileManagerPanel,
     headerContent: HeaderActions,
-    experimental_sidebarAccessory: SidebarAccessory,
+    experimental_useBadge: useUploadBadge,
   });
 
   // Rendered on the plugin's detail page, below the host-rendered descriptor
@@ -84,8 +84,10 @@ export default definePluginApp((app) => {
 
   // The thread panel's launcher. `run` is omitted on purpose: there is nothing
   // to resolve before opening, so the host opens the tab with the defaults.
-  app.slots.threadPanelAction({
+  app.slots.experimental_tab({
     id: "file-manager",
+    context: { kind: "thread" },
+    availability: "action",
     title: t.fileManager,
     icon: "FolderOpen",
     layout: "flush",

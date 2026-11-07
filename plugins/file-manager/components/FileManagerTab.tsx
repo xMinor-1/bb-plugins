@@ -12,7 +12,7 @@
 // the user's home folder rather than at a thread, so the only thing `threadId`
 // buys is the toolbar's jump into that thread's checkout (§10.3) — which is
 // why the thread wrapper forwards it and the New thread wrapper cannot.
-import type { PluginNewThreadPanelProps, PluginThreadPanelProps } from "@get-bb/plugin-sdk/app";
+import type { ExperimentalThreadTabProps, PluginNewThreadPanelProps } from "@get-bb/plugin-sdk/app";
 
 import { useLocalLocation } from "../hooks/useFmLocation";
 import { FileManagerSurface } from "./FileManagerPanel";
@@ -24,8 +24,8 @@ function FileManagerTabBody({ threadId = null }: { threadId?: string | null }) {
   return <FileManagerSurface location={location} chrome="inline" threadId={threadId} />;
 }
 
-/** `threadPanelAction`: the panel launcher of an existing thread. */
-export function FileManagerTab({ threadId }: PluginThreadPanelProps) {
+/** `experimental_tab` (thread action): the panel launcher of an existing thread. */
+export function FileManagerTab({ threadId }: ExperimentalThreadTabProps) {
   return <FileManagerTabBody threadId={threadId} />;
 }
 

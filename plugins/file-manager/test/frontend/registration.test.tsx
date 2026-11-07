@@ -4,9 +4,9 @@
 // /^[a-zA-Z0-9_-]+$/ or the whole frontend fails to register, and `icon` must
 // agree with `bb.branding.icon` in package.json (which overrides it on compact
 // surfaces). This suite is the only guard against a silent rename.
-import { cleanup, waitFor } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
+import { loadPluginApp } from "@get-bb/plugin-sdk/testing/app";
 
 import { PANEL_PATH } from "../../contract";
 
@@ -52,11 +52,11 @@ describe("nav panel registration (§10)", () => {
     expect(panel?.path).toMatch(/^[a-zA-Z0-9_-]+$/u);
   });
 
-  it("wires the panel body, the title-bar slot and the sidebar accessory", () => {
+  it("wires the panel body, the title-bar slot and the upload badge", () => {
     const panel = app.navPanels[0];
     expect(panel?.component).toBeTypeOf("function");
     expect(panel?.headerContent).toBeTypeOf("function");
-    expect(panel?.experimental_sidebarAccessory).toBeTypeOf("function");
+    expect(panel?.experimental_useBadge).toBeTypeOf("function");
   });
 
   it("does not register fixedTabs (§10: they strand tree state)", () => {
@@ -121,12 +121,4 @@ describe("nav panel registration (§10)", () => {
     expect(app.newThreadPanelActions[0]?.run).toBeUndefined();
   });
 
-  it("renders nothing in the sidebar accessory while no upload is running", async () => {
-    const Accessory = app.navPanels[0]?.experimental_sidebarAccessory;
-    const slot = renderSlot({ component: Accessory! }, {}, { rpc: {} });
-    await waitFor(() => {
-      expect(slot.container.textContent).toBe("");
-    });
-    expect(slot.queryByTestId("fm-sidebar-accessory")).toBeNull();
-  });
 });

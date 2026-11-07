@@ -28,6 +28,7 @@ import type {
   RenderedSlot,
   RpcCall,
 } from "@get-bb/plugin-sdk/testing/app";
+import type { PluginSettingsSectionProps } from "@get-bb/plugin-sdk/app";
 
 import type { FileEntry, FileManagerContract, Preferences } from "../../contract";
 
@@ -152,7 +153,7 @@ function renderSection(
   handlers: Handlers = baseRpc(),
   settings?: Record<string, string | boolean>,
 ): RenderedSlot {
-  return renderSlot<Record<string, never>, FileManagerContract>(
+  return renderSlot<PluginSettingsSectionProps, FileManagerContract>(
     { component: section.component },
     {},
     {
