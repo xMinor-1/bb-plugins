@@ -18,6 +18,14 @@ function plain(text: string | null): string {
   return out.replace(/[#*_`>|~]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
 }
 
+const EXTRA_LISTED = 12;
+
+function extraTitle(t: ReturnType<typeof useView>["t"], extra: readonly Issue[], statusName: (key: string) => string): string {
+  const lines = extra.slice(0, EXTRA_LISTED).map((issue) => `${issue.key} ${issue.summary}: ${statusName(issue.status)}`);
+  if (extra.length > EXTRA_LISTED) lines.push(t.andMore(extra.length - EXTRA_LISTED));
+  return [t.otherTasks(extra.length), ...lines].join("\n");
+}
+
 export function Composition({ story }: { story: Issue }) {
   const view = useView();
   const { t } = view;
@@ -37,11 +45,13 @@ export function Composition({ story }: { story: Issue }) {
             </span>
           ),
         )}
-        {c.extra.map((issue) => (
-          <span key={issue.key} className="tb-tile tb-tile-extra" style={{ background: view.colors.get(issue.status) }} title={`${issue.key} ${issue.summary}: ${view.statusName(issue.status)}`}>
-            {issue.kind === "bug" ? "!" : "+"}
+        {c.extra.length > 0 ? (
+          // Every task outside the template parts shares one cell: a story with dozens of tasks
+          // keeps the card's width (one tile per task ran past the card's right edge).
+          <span className="tb-tile tb-tile-extra" title={extraTitle(t, c.extra, view.statusName)}>
+            +{c.extra.length}
           </span>
-        ))}
+        ) : null}
       </div>
       <div className="tb-comp-cap">
         <span>{t.doneOf(c.done, c.total)}</span>

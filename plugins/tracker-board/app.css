@@ -844,6 +844,8 @@
 .tb-comp-row {
   display: flex;
   gap: 3px;
+  min-width: 0;
+  overflow: hidden;
 }
 .tb-tile {
   flex: 1 1 0;
@@ -863,7 +865,11 @@
   border: 1.5px dashed var(--tb-line-strong);
 }
 .tb-tile-extra {
-  flex: 0 0 21px;
+  flex: 0 0 auto;
+  min-width: 26px;
+  padding: 0 5px;
+  background: var(--tb-hover);
+  color: var(--tb-muted);
 }
 .tb-comp-cap {
   display: flex;
