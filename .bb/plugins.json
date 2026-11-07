@@ -48,6 +48,10 @@
       "source": "./plugins/mcp-catalog"
     },
     {
+      "name": "model-usage",
+      "source": "./plugins/model-usage"
+    },
+    {
       "name": "qlik-sense",
       "source": "./plugins/qlik-sense"
     },
