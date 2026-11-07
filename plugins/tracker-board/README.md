@@ -40,6 +40,8 @@ The interface is in English and Russian.
   done of total and a bar by status; a click opens the parent. A parent from another board looks
   the same: its tasks load from the tracker and stay cached for two minutes. Below: status,
   assignee, priority, description, child tasks and missing template parts, comments, labels.
+  "Open in the tracker" uses the person's own browser, where they are signed in, even when bb
+  opens other links in its built-in browser.
 - **Child tasks from templates.** Under an epic or a story: the missing parts, all parts, a
   bundle (a story with its tasks), or the person's own templates. Rows can be edited before
   creating.

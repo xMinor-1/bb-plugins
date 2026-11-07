@@ -16,6 +16,7 @@ import { templatesRequestStore, useOpenIssue } from "./requests";
 import { Popover, Spinner } from "./ui";
 import { ParentExtra, ParentPath, useTree, type PathData } from "./ParentPath";
 import { childrenOf, compositionParts, personTemplates } from "./view";
+import { openInOwnBrowser } from "./links";
 
 export function IssueTab({ params }: { params: unknown }) {
   const key = params && typeof params === "object" && "key" in params && typeof (params as { key: unknown }).key === "string" ? (params as { key: string }).key : null;
@@ -144,7 +145,7 @@ export function IssueTab({ params }: { params: unknown }) {
             >
               <Icons.link />
             </button>
-            <button className="tb-ib" type="button" title={t.openInTracker} aria-label={t.openInTracker} onClick={() => navigate.openUrl(webUrl)}>
+            <button className="tb-ib" type="button" title={t.openInTracker} aria-label={t.openInTracker} onClick={() => openInOwnBrowser(webUrl, navigate.openUrl)}>
               <Icons.ext />
             </button>
           </>
