@@ -56,3 +56,7 @@
   border: 2px dashed var(--brb-accent); border-radius: 12px; color: var(--brb-accent);
   background: color-mix(in oklab, var(--brb-bg) 82%, transparent);
 }
+.brb-key { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.brb-key input { flex: 1 1 260px; font: inherit; color: inherit; background: transparent; border: 1px solid var(--brb-border); border-radius: 8px; padding: 8px 10px; }
+.brb-link { font: inherit; font-size: 13px; background: none; border: none; padding: 0; color: var(--brb-accent); cursor: pointer; text-decoration: underline; }
+.brb-link:disabled { opacity: 0.6; cursor: default; }

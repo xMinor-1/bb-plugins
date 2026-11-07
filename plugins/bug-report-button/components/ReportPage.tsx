@@ -18,9 +18,21 @@ import {
   type ImageType,
 } from "../src/report";
 
-type PageConfig = { label: string; formUrl: string; canSend: boolean; canAttach: boolean; combine: boolean; problem: string | null };
+type KeyStatus = { hasKey: boolean; source: "own" | "shared" | null; keyStore: "keychain" | "credential-manager" | "file" | null };
+type PageConfig = {
+  label: string;
+  formUrl: string;
+  canSend: boolean;
+  canAttach: boolean;
+  combine: boolean;
+  problem: string | null;
+  mode: "form" | "rest";
+  key: KeyStatus | null;
+  keyHelp: string;
+  keyProblem: string | null;
+};
 type Attached = { id: string; name: string; type: ImageType; size: number; blob: Blob; preview: string };
-type Sent = { key: string | null; url: string | null };
+type Sent = { key: string | null; url: string | null; warning: string | null };
 
 let nextId = 0;
 
@@ -55,6 +67,80 @@ function hasFiles(event: DragEvent) {
 
 function clientLine() {
   return `${navigator.userAgent}; window ${window.innerWidth}x${window.innerHeight}`;
+}
+
+const STORE_NAMES = { keychain: "Keychain", "credential-manager": "Credential Manager", file: "a file only you can read" } as const;
+
+/** The person's own API key for the REST mode: it is saved in this computer's key store and sent only to the tracker. */
+function ApiKey({ status, help, problem, disabled, onChange }: { status: KeyStatus | null; help: string; problem: string | null; disabled: boolean; onChange: (status: KeyStatus) => void }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const run = async (action: () => Promise<KeyStatus>) => {
+    setBusy(true);
+    setFailure(null);
+    try {
+      onChange(await action());
+      setValue("");
+      setEditing(false);
+    } catch (reason) {
+      setFailure(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (problem) return <p className="brb-error" role="alert">{problem}</p>;
+  if (!status) return null;
+  const where = status.keyStore ? STORE_NAMES[status.keyStore] : "";
+  if (status.hasKey && !editing) {
+    return (
+      <div className="brb-key" data-testid="brb-key">
+        <span className="brb-muted">
+          {status.source === "shared" ? `Sending with the API key you saved for the tracker board (${where}).` : `Sending with your API key, saved in ${where} on this computer.`}
+        </span>
+        <button type="button" className="brb-link" onClick={() => setEditing(true)} disabled={disabled || busy}>Change key</button>
+        {status.source === "own" ? (
+          <button type="button" className="brb-link" onClick={() => void run(() => rpc.call("key_forget", null))} disabled={disabled || busy}>Forget key</button>
+        ) : null}
+        {failure ? <p className="brb-error" role="alert">{failure}</p> : null}
+      </div>
+    );
+  }
+  return (
+    <div className="brb-field" data-testid="brb-key">
+      <span>Your API key</span>
+      <div className="brb-key">
+        <input
+          type="password"
+          name="api-key"
+          autoComplete="off"
+          value={value}
+          placeholder="Paste the key"
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter saves the key, not the report around it.
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            if (value.trim()) void run(() => rpc.call("key_save", { key: value.trim() }));
+          }}
+          disabled={disabled || busy}
+        />
+        <button
+          type="button"
+          className="brb-button"
+          onClick={() => void run(() => rpc.call("key_save", { key: value.trim() }))}
+          disabled={disabled || busy || !value.trim()}
+        >
+          {busy ? "Saving…" : "Save key"}
+        </button>
+        {status.hasKey ? <button type="button" className="brb-link" onClick={() => setEditing(false)}>Cancel</button> : null}
+      </div>
+      <span className="brb-muted">{help ? `${help} ` : ""}The key stays in this computer's key store and goes only to the tracker.</span>
+      {failure ? <p className="brb-error" role="alert">{failure}</p> : null}
+    </div>
+  );
 }
 
 /** The host draws the panel title; a caption of the build's own is the page heading. */
@@ -163,6 +249,10 @@ export function ReportPage() {
 
   const send = async () => {
     if (!config?.canSend || sending) return;
+    if (config.mode === "rest" && !config.key?.hasKey) {
+      setError("Save your API key first.");
+      return;
+    }
     if (!subject.trim()) {
       setError("Write a subject: a few words about what went wrong.");
       return;
@@ -188,7 +278,7 @@ export function ReportPage() {
       setSubject("");
       setDescription("");
       setNotices([]);
-      setSent({ key: result.key, url: result.url });
+      setSent({ key: result.key, url: result.url, warning: result.warning });
     } catch (reason) {
       setError(`The report was not sent: ${reason instanceof Error ? reason.message : String(reason)}. What you wrote is kept; send again.`);
     } finally {
@@ -315,6 +405,16 @@ export function ReportPage() {
             ) : null}
             {images.length ? <span className="brb-muted">{images.length} of {MAX_IMAGES}, {formatBytes(total)}</span> : null}
           </div>
+        ) : null}
+        {sent?.warning ? <p className="brb-error" role="alert">{sent.warning}</p> : null}
+        {config.mode === "rest" ? (
+          <ApiKey
+            status={config.key}
+            help={config.keyHelp}
+            problem={config.keyProblem}
+            disabled={sending}
+            onChange={(key) => setConfig({ ...config, key })}
+          />
         ) : null}
         {error ? <p className="brb-error" role="alert">{error}</p> : null}
         <div className="brb-actions">
