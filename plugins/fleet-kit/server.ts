@@ -18,6 +18,9 @@ import { lockState, resetStuckLock } from "./src/host/lock-state.js";
 import { collectSetup, markProblem, SetupAsker, type StoredOnboarding } from "./src/setup.js";
 import { createChoiceQueue } from "./src/choice-store.js";
 import { chooseBranch, noBranchState, togglePlugin, turnsOff, type BranchChoice, type BranchState } from "./src/branches.js";
+import { agentBuildOf, emptyAgentBuild, ownAgentsOn, skillInstructions, skillsFor, SKILL_TOOL, type AgentBuild, type OwnAgentsChoice } from "./src/own-agents.js";
+import { oneAtATime, systemConfirmWindow, type ConfirmWindow, type WindowText } from "./src/host/confirm-window.js";
+import type { OwnAgentsOutcome } from "./contract.js";
 
 export { rpcContract };
 
@@ -42,7 +45,29 @@ function setupNote(step: Setup["steps"][number], shown: string): string {
   return step.reason ?? "";
 }
 
-export default async function plugin(bb: BbPluginApi) {
+/** The window's fixed words; the warning itself is the build's (manifest `ownAgents.warning`). */
+function ownAgentsWindow(lang: "en" | "ru", warning: string, agents: string): WindowText {
+  return lang === "ru"
+    ? {
+        title: "Fleet Kit: включить своих агентов?",
+        message: `${warning}\n\nВключить: ${agents}.\nВыключить можно в любой момент в панели Fleet Kit.`,
+        yes: "Включить",
+        no: "Отмена",
+      }
+    : {
+        title: "Fleet Kit: turn on your own agents?",
+        message: `${warning}\n\nTurns on: ${agents}.\nYou can turn them off at any time in the Fleet Kit panel.`,
+        yes: "Turn on",
+        no: "Cancel",
+      };
+}
+
+export interface PluginOptions {
+  /** The system window that confirms "Own agents"; tests pass their own. */
+  confirmWindow?: ConfirmWindow;
+}
+
+export default async function plugin(bb: BbPluginApi, options: PluginOptions = {}) {
   const settings = bb.settings.define({
     manifestUrl: {
       type: "string",
@@ -127,6 +152,13 @@ export default async function plugin(bb: BbPluginApi) {
     return { ...noBranchState(), ...(saved ?? {}), choice: await readChoice() };
   };
 
+  /** What configure() reads on every thread start: it must answer synchronously, so it reads these copies. */
+  let agentBuild: AgentBuild = (await kv.get<AgentBuild>("agentBuild")) ?? emptyAgentBuild();
+  let ownChoice: OwnAgentsChoice | null = (await kv.get<OwnAgentsChoice>("ownAgents")) ?? null;
+  const confirmWindow = oneAtATime(options.confirmWindow ?? systemConfirmWindow());
+  /** The agent of each thread configure() answered for: build_skill gives a thread only its own skills. */
+  const threadAgents = new Map<string, string>();
+
   const setupAnswers = new Map<"en" | "ru", { at: number; answer: Promise<Setup> }>();
 
   function publish() {
@@ -199,7 +231,48 @@ export default async function plugin(bb: BbPluginApi) {
       secrets: await secretsStatus(),
       opencode,
       notices: (await kv.get<Notice[]>("notices")) ?? [],
+      ownAgents: await ownAgentsStatus(),
     };
+  }
+
+  async function ownAgentsStatus(): Promise<Status["ownAgents"]> {
+    const own = agentBuild.own;
+    if (own === null) return null;
+    let names = new Map<string, string>();
+    try {
+      names = new Map((await bb.sdk.providers.catalog()).map((entry) => [entry.id, entry.displayName]));
+    } catch {
+      // The ids are shown instead.
+    }
+    return {
+      title: own.title ?? null,
+      warning: own.warning,
+      providers: own.providers.map((id) => ({ id, name: names.get(id) ?? id })),
+      delegate: own.delegate ?? null,
+      on: ownAgentsOn(own, ownChoice),
+      at: ownChoice?.at ?? null,
+    };
+  }
+
+  /**
+   * Turn "Own agents" on or off. On takes a press in a system window: bb
+   * shows the panel, the CLI and agents as the same caller, so an agent's
+   * call alone never turns its own kind on. Off needs no window.
+   */
+  async function setOwnAgents(on: boolean, lang: "en" | "ru"): Promise<{ on: boolean; outcome: OwnAgentsOutcome }> {
+    const own = agentBuild.own;
+    if (own === null) return { on: false, outcome: "not-offered" };
+    if (on && !ownAgentsOn(own, ownChoice)) {
+      const names = (await ownAgentsStatus())?.providers.map((entry) => entry.name).join(", ") ?? own.providers.join(", ");
+      const answer = await confirmWindow.confirm(ownAgentsWindow(lang, own.warning, names), controller.signal);
+      if (!answer.ok) return { on: false, outcome: answer.reason };
+    }
+    if (on === ownAgentsOn(own, ownChoice)) return { on, outcome: on ? "on" : "off" };
+    ownChoice = { on, at: new Date().toISOString() };
+    await kv.set("ownAgents", ownChoice);
+    publish();
+    void requestSync("manual");
+    return { on, outcome: on ? "on" : "off" };
   }
 
   async function syncOnce(trigger: SyncReport["trigger"]): Promise<void> {
@@ -221,6 +294,7 @@ export default async function plugin(bb: BbPluginApi) {
         bbConfigDir: process.env.OPENCODE_CONFIG_DIR,
         selfUpdateStartedAt,
         choice: await readChoice(),
+        ownAgents: ownChoice,
         onOpenCode: async (value) => {
           await kv.set("opencode", value);
           publish();
@@ -359,7 +433,36 @@ export default async function plugin(bb: BbPluginApi) {
       planned: manifest.plugins.filter((entry) => entry.status === "planned").map((entry) => entry.id),
       branches: manifest.branches ?? null,
     } satisfies StoredOnboarding);
+    agentBuild = agentBuildOf(manifest);
+    await kv.set("agentBuild", agentBuild);
   }
+
+  // The build's skills, each to the agents of its audience; the person's own agents only once turned on.
+  bb.agents.configure((ctx) => {
+    threadAgents.delete(ctx.thread.id);
+    threadAgents.set(ctx.thread.id, ctx.provider.id);
+    if (threadAgents.size > 2000) threadAgents.delete(threadAgents.keys().next().value!);
+    const skills = skillsFor(agentBuild, ownChoice, ctx.provider.id);
+    const instructions = skillInstructions(skills);
+    return { tools: skills.length > 0 ? [SKILL_TOOL] : [], skills: ["fleet-kit"], ...(instructions !== undefined ? { instructions } : {}) };
+  });
+
+  bb.agents.registerTool({
+    name: SKILL_TOOL,
+    description: "Read one of this build's skills in full: the instructions for a task the build's skill list describes.",
+    presentation: { label: { pending: "Reading a build skill", completed: "Read a build skill" } },
+    parameters: z.object({ name: z.string().min(1).max(64).describe("The skill's name from the Build skills list in your instructions") }),
+    execute: async ({ name }, ctx) => {
+      const provider = threadAgents.get(ctx.threadId);
+      const skills = provider === undefined ? [] : skillsFor(agentBuild, ownChoice, provider);
+      const skill = skills.find((entry) => entry.name === name);
+      if (skill === undefined) {
+        const known = skills.map((entry) => entry.name).join(", ");
+        return { content: [{ type: "text" as const, text: known ? `No build skill named ${name}. This agent has: ${known}.` : "This agent has no build skills." }], isError: true };
+      }
+      return { content: [{ type: "text" as const, text: skill.body }] };
+    },
+  });
 
   async function storedBranches() {
     const branches = (await kv.get<StoredOnboarding>("onboarding"))?.branches ?? null;
@@ -448,6 +551,7 @@ export default async function plugin(bb: BbPluginApi) {
       await switchPlugin(id, on).catch(refuse);
       return { on };
     },
+    own_agents_set: ({ on, lang }) => setOwnAgents(on, lang ?? "en"),
     setup_mark: async ({ id, mark }) => {
       const onboarding = (await kv.get<StoredOnboarding>("onboarding")) ?? null;
       const step = onboarding?.steps.find((candidate) => candidate.id === id);
@@ -565,6 +669,31 @@ export default async function plugin(bb: BbPluginApi) {
               throw new PluginCliError(error instanceof Error ? error.message : String(error), { code: "not_switched" });
             }
             return { exitCode: 0, stdout: `${input.positionals.id} ${state}; syncing.` };
+          },
+        }),
+        "own-agents": cliCommand({
+          summary: "Show whether your own agents (such as Claude Code or Codex) are turned on, or turn them on or off: bb fleet-kit own-agents [on|off]",
+          positionals: [{ name: "state", description: "on or off; empty shows the state" }],
+          async run(input) {
+            const state = input.positionals.state;
+            if (state !== undefined && state !== "on" && state !== "off") throw new PluginCliError("use on or off", { code: "invalid_state" });
+            if (state === undefined) {
+              const value = await ownAgentsStatus();
+              if (value === null || value === undefined) return { exitCode: 0, stdout: "This build does not offer your own agents." };
+              const names = value.providers.map((entry) => entry.name).join(", ");
+              return { exitCode: 0, stdout: `Own agents (${names}): ${value.on ? "on" : "off"}.\n\n${value.warning}` };
+            }
+            const answer = await setOwnAgents(state === "on", "en");
+            const text: Record<OwnAgentsOutcome, string> = {
+              on: "Own agents are on; syncing.",
+              off: "Own agents are off; syncing.",
+              cancelled: "Not turned on: the system window was cancelled.",
+              timeout: "Not turned on: nobody answered the system window.",
+              unavailable: "Not turned on: this machine cannot show a system window to confirm it.",
+              busy: "Not turned on: another confirmation window is open.",
+              "not-offered": "This build does not offer your own agents.",
+            };
+            return { exitCode: answer.outcome === "on" || answer.outcome === "off" ? 0 : 1, stdout: text[answer.outcome] };
           },
         }),
         sync: cliCommand({

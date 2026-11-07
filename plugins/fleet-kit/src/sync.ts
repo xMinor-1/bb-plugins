@@ -27,6 +27,7 @@ import {
   type Manifest,
   type ManifestPlugin,
 } from "./manifest.js";
+import { keptAgents, type OwnAgentsChoice } from "./own-agents.js";
 import { appliedNow, picked, pluginWanted, type BranchChoice, type BranchStart, type BranchState } from "./branches.js";
 import { fetchManifestText, parseManifestJson, parseManifestLocation } from "./fetch-manifest.js";
 import type { SecretStore } from "./secret-store.js";
@@ -166,6 +167,8 @@ export interface SyncDeps {
   onManifest?: ((manifest: Manifest, branches: BranchState) => Promise<void>) | undefined;
   /** The person's branch and plugin switches; null before a choice. */
   choice?: BranchChoice | null;
+  /** The person's "Own agents" switch; null or off keeps only the build's agents. */
+  ownAgents?: OwnAgentsChoice | null;
   /** For tests. */
   now?: () => number;
   /** For tests. */
@@ -971,10 +974,12 @@ async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedS
     return; // keep managed.agents: a later sync still knows which agents it turned off
   }
 
+  // The person's own agents, once turned on, are theirs to switch: Fleet Kit neither turns them on nor off.
+  const kept = new Set(keptAgents(policy.allowed, manifest.ownAgents, deps.ownAgents));
   const disabledBefore = new Set(managed.agents.disabled);
   const disabled: string[] = [];
   for (const entry of catalog) {
-    if (allowed.has(entry.id)) continue;
+    if (kept.has(entry.id)) continue;
     if (!entry.enabled) {
       disabled.push(entry.id);
       continue;
