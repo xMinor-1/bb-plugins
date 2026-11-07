@@ -33,6 +33,8 @@ The interface is in English and Russian.
   "+" starts a new chat; the thread can also be opened in full.
 - **Settings.** The machine that talks to the tracker, the API key, the person's own templates
   and people list, card appearance, export and import of these settings as JSON, language.
+- **An onboarding step for a build's setup page.** The `setupStatus` RPC answers `done`, `todo`
+  or `problem` from the saved key state, without calling the tracker.
 
 ## What agents get
 

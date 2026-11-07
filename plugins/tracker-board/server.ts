@@ -29,6 +29,7 @@ import { findKey, KEY_PATTERN, splitPrefix, type Issue, type Person } from "./sr
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
 import { fromExport, prefsSchema, type Prefs } from "./src/shared/prefs";
 import { categoryOf, normalizeBaseUrl, parseProfile, ProfileError, type Profile } from "./src/shared/profile";
+import { setupFromStatus, setupStatusContract, setupStep, type SetupLang } from "./src/shared/setup";
 import { compositionOf, mergeTemplates, parseTemplates, TemplatesError, type TemplatesConfig } from "./src/shared/templates";
 
 const SKILL = "tracker-board";
@@ -963,4 +964,43 @@ export default async function plugin(bb: BbPluginApi) {
     },
   };
   bb.rpc.register(rpcContract, ownCallers(handlers));
+
+  // ---------- Onboarding step for a build's setup page ----------
+
+  /** Recent host answers, by machine: a setup page asks again every few seconds. */
+  const setupAnswers = new Map<string, { at: number; status: Promise<KeyStatus> }>();
+
+  async function setupOn(machine: string, lang: SetupLang) {
+    const found = (await liveHosts()).find((candidate) => candidate.id === machine);
+    if (!found || found.status !== "connected") return setupStep("problem", "offline", lang);
+    let cached = setupAnswers.get(machine);
+    if (!cached || Date.now() - cached.at > 15_000) {
+      const status = host.call("status", { baseUrl: config.baseUrl }, { hostId: machine, timeoutMs: 10_000 });
+      cached = { at: Date.now(), status };
+      setupAnswers.set(machine, cached);
+      status.catch(() => setupAnswers.delete(machine));
+    }
+    try {
+      return setupFromStatus(await cached.status, lang);
+    } catch (error) {
+      bb.log.info(`setupStatus: ${machine} could not read its state: ${error instanceof Error ? error.message : String(error)}`);
+      return setupStep("problem", "unreadable", lang);
+    }
+  }
+
+  bb.rpc.register(
+    setupStatusContract,
+    {
+      setupStatus: async ({ lang = "en", hostId: requested }) => {
+        if (config.problem || !config.baseUrl) return setupStep("problem", "notConfigured", lang);
+        if (requested) return setupOn(requested, lang);
+        try {
+          return await setupOn(await panelHost(), lang);
+        } catch {
+          return setupStep("problem", "noMachine", lang);
+        }
+      },
+    },
+    { experimental_discoverable: true, experimental_description: "Tracker API key state for a bb build's onboarding page." },
+  );
 }

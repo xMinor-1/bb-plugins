@@ -140,6 +140,17 @@ describe("the board", () => {
     await expect(rpc("board", { source: { kind: "queue", queue: "PAY" } })).rejects.toThrow(/tracker-board:unauthorized/);
   });
 
+  it("tells a build's setup page whether the key works, from the saved state", async () => {
+    const { rpc, harness } = await setup();
+    await rpc("checkKey");
+    const asPlugin = { experimental_caller: { kind: "plugin" as const, pluginId: "fleet-kit" } };
+    expect(await harness.behavior.callRpc("setupStatus", { lang: "ru" }, asPlugin)).toEqual({ state: "done", summary: "Ключ API работает", path: "/plugins/tracker-board/board" });
+    const unchecked = await setup();
+    expect(await unchecked.harness.behavior.callRpc("setupStatus", {}, asPlugin)).toMatchObject({ state: "todo", summary: "The key is saved but not checked yet" });
+    const fresh = await setup({ baseUrl: "" });
+    expect(await fresh.harness.behavior.callRpc("setupStatus", {}, asPlugin)).toMatchObject({ state: "problem", summary: "This build does not set up the tracker yet" });
+  });
+
   it("answers no other plugin", async () => {
     const { harness } = await setup();
     await expect(harness.behavior.callRpc("board", { source: { kind: "queue", queue: "PAY" } }, { experimental_caller: { kind: "plugin", pluginId: "other" } })).rejects.toThrow(/other plugins/);
