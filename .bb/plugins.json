@@ -48,6 +48,10 @@
       "source": "./plugins/mcp-catalog"
     },
     {
+      "name": "obfuscation-proxy",
+      "source": "./plugins/obfuscation-proxy"
+    },
+    {
       "name": "qlik-sense",
       "source": "./plugins/qlik-sense"
     },

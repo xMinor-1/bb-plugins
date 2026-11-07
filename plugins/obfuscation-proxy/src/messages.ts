@@ -1,0 +1,91 @@
+import { defineMessages, pluralRu } from "@/lib/i18n";
+
+/** A detector category name for people; unknown ones show their own id. */
+function label(key: string, names: Record<string, string>): string {
+  return names[key] ?? (key.includes(":") ? key.slice(key.indexOf(":") + 1) : key);
+}
+
+export const messages = defineMessages(
+  {
+    title: "Masking",
+    on: "Masking on",
+    off: "Masking off",
+    unsupported: "Masking is not available for this agent",
+    starting: "proxy is starting",
+    down: "proxy is down, nothing is sent",
+    notConfigured: "proxy is not set up, nothing is sent",
+    noRequests: "no requests yet",
+    counts: (requests: number, masked: number) =>
+      `${requests} ${requests === 1 ? "request" : "requests"}, ${masked} masked`,
+    turnOff: "Turn masking off for this thread",
+    turnOn: "Turn masking on for this thread",
+    proxyRunning: "Masking proxy is running.",
+    proxyStarting: "Masking proxy is starting.",
+    proxyDown: (detail: string) => `Masking proxy is not running: ${detail}`,
+    proxyNotConfigured: (detail: string) => `Masking proxy is not set up: ${detail}`,
+    offHint: "Requests from this thread go to the model provider unmasked.",
+    empty: "No requests in this thread yet.",
+    emptyHint:
+      "Requests show up here as the agent works. A session that started before this plugin was installed goes direct: restart it.",
+    viaProxy: "masked",
+    viaDirect: "unmasked",
+    viaBlocked: "not sent",
+    maskedUnknown: "no report",
+    maskedNone: "nothing to mask",
+    countTokens: "token count",
+    seconds: (value: string) => `${value} s`,
+    category: (key: string) => label(key, {
+      secrets: "secrets",
+      assignments: "keys in code",
+      structured_pii: "personal data",
+      national_ids: "ID numbers",
+      internal_hosts: "internal hosts",
+      terms: "terms",
+      addresses: "addresses",
+      "ner:ORG": "organizations",
+      "ner:PER": "names",
+      "ner:LOC": "places",
+    }),
+  },
+  {
+    title: "Обфускация",
+    on: "Обфускация включена",
+    off: "Обфускация выключена",
+    unsupported: "Обфускация для этого агента недоступна",
+    starting: "прокси запускается",
+    down: "прокси не работает, запросы не уходят",
+    notConfigured: "прокси не настроен, запросы не уходят",
+    noRequests: "запросов пока не было",
+    counts: (requests: number, masked: number) =>
+      `${requests} ${pluralRu(requests, ["запрос", "запроса", "запросов"])}, скрыто ${masked}`,
+    turnOff: "Выключить обфускацию в этом треде",
+    turnOn: "Включить обфускацию в этом треде",
+    proxyRunning: "Прокси обфускации работает.",
+    proxyStarting: "Прокси обфускации запускается.",
+    proxyDown: (detail: string) => `Прокси обфускации не работает: ${detail}`,
+    proxyNotConfigured: (detail: string) => `Прокси обфускации не настроен: ${detail}`,
+    offHint: "Запросы этого треда уходят провайдеру модели без маскировки.",
+    empty: "В этом треде запросов пока не было.",
+    emptyHint:
+      "Запросы появятся здесь, когда агент начнёт работать. Сессия, начатая до установки плагина, идёт напрямую: перезапустите её.",
+    viaProxy: "замаскирован",
+    viaDirect: "без маскировки",
+    viaBlocked: "не отправлен",
+    maskedUnknown: "нет отчёта",
+    maskedNone: "нечего скрывать",
+    countTokens: "подсчёт токенов",
+    seconds: (value: string) => `${value} с`,
+    category: (key: string) => label(key, {
+      secrets: "секреты",
+      assignments: "ключи в коде",
+      structured_pii: "личные данные",
+      national_ids: "номера документов",
+      internal_hosts: "внутренние хосты",
+      terms: "термины",
+      addresses: "адреса",
+      "ner:ORG": "организации",
+      "ner:PER": "имена",
+      "ner:LOC": "места",
+    }),
+  },
+);
