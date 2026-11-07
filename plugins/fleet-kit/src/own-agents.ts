@@ -11,6 +11,7 @@
 // person's own agents once turned on, `all` — both. The agent sees the skill's
 // name and description in its instructions and reads the body with the
 // `build_skill` tool.
+import { createHash } from "node:crypto";
 import type { Manifest } from "./manifest.js";
 
 export type OwnAgentsBlock = NonNullable<Manifest["ownAgents"]>;
@@ -23,11 +24,53 @@ export interface AgentBuild {
   skills: BuildSkill[];
 }
 
-/** The person's switch, kept on this machine; a manifest update never resets it. */
+/**
+ * The person's switch, kept on this machine. A yes holds only for the warning
+ * and the agents the person saw: `key` is their hash, so a changed text, an
+ * added agent or a block the build dropped needs a new window.
+ */
 export interface OwnAgentsChoice {
   on: boolean;
   /** When the person last confirmed or turned it off. */
   at: string;
+  /** consentKey() of the block the person confirmed; absent when off. */
+  key?: string;
+}
+
+/** The hash a yes is bound to: the warning's text and the list of agents, as the manifest has them. */
+export function consentKey(own: OwnAgentsBlock): string {
+  return createHash("sha256").update(JSON.stringify({ warning: own.warning, providers: own.providers })).digest("hex");
+}
+
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/** A saved block that lost its agents or warning (an older or broken save) offers nothing. */
+function usableOwn(value: unknown): OwnAgentsBlock | null {
+  if (value === null || typeof value !== "object") return null;
+  const own = value as Record<string, unknown>;
+  if (!isStrings(own.providers) || own.providers.length === 0 || typeof own.warning !== "string" || own.warning === "") return null;
+  return value as OwnAgentsBlock;
+}
+
+/** What a sync saved, read back from storage: anything malformed counts as absent. */
+export function normalizeAgentBuild(value: unknown): AgentBuild {
+  if (value === null || typeof value !== "object") return emptyAgentBuild();
+  const saved = value as Record<string, unknown>;
+  const skills = Array.isArray(saved.skills)
+    ? (saved.skills as unknown[]).filter((entry): entry is BuildSkill => {
+        const skill = entry as Record<string, unknown> | null;
+        return skill !== null && typeof skill === "object" && ["id", "name", "description", "body"].every((key) => typeof skill[key] === "string") && ["allowed", "own", "all"].includes(skill.audience as string);
+      })
+    : [];
+  return { allowed: isStrings(saved.allowed) ? saved.allowed : [], own: usableOwn(saved.own), skills };
+}
+
+/** The saved switch, read back from storage: anything malformed counts as off. */
+export function normalizeChoice(value: unknown): OwnAgentsChoice | null {
+  if (value === null || typeof value !== "object") return null;
+  const saved = value as Record<string, unknown>;
+  if (typeof saved.on !== "boolean" || typeof saved.at !== "string") return null;
+  return { on: saved.on, at: saved.at, ...(typeof saved.key === "string" ? { key: saved.key } : {}) };
 }
 
 export const emptyAgentBuild = (): AgentBuild => ({ allowed: [], own: null, skills: [] });
@@ -41,9 +84,10 @@ export function agentBuildOf(manifest: Manifest): AgentBuild {
   return { allowed: manifest.agents?.allowed ?? [], own: manifest.ownAgents ?? null, skills };
 }
 
-/** Own agents are on only while the build offers them and the person said yes. */
+/** Own agents are on only while the build offers them and the person said yes to this very warning and list. */
 export function ownAgentsOn(own: OwnAgentsBlock | null | undefined, choice: OwnAgentsChoice | null | undefined): boolean {
-  return own !== null && own !== undefined && choice?.on === true;
+  const usable = usableOwn(own);
+  return usable !== null && choice?.on === true && choice.key === consentKey(usable);
 }
 
 /** The agents a sync keeps on: the build's, plus the person's own once turned on. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkManifest } from "../src/manifest.js";
-import { agentBuildOf, keptAgents, ownAgentsOn, skillInstructions, skillsFor, type AgentBuild } from "../src/own-agents.js";
+import { agentBuildOf, consentKey, keptAgents, normalizeAgentBuild, normalizeChoice, ownAgentsOn, skillInstructions, skillsFor, type AgentBuild } from "../src/own-agents.js";
 import { answerOf, macScript, oneAtATime, systemConfirmWindow, windowsScript, type ConfirmWindow } from "../src/host/confirm-window.js";
 import { clone, sampleManifest } from "./fixtures.js";
 
@@ -69,7 +69,7 @@ describe("own agents and build skills", () => {
     expect(result.errors).toEqual([]);
     return agentBuildOf(result.manifest!);
   };
-  const on = { on: true, at: "2026-11-07T10:00:00.000Z" };
+  const on = { on: true, at: "2026-11-07T10:00:00.000Z", key: consentKey(own) };
   const off = { on: false, at: "2026-11-07T11:00:00.000Z" };
 
   it("keeps only the build's agents until the person turns own agents on", () => {
@@ -82,9 +82,37 @@ describe("own agents and build skills", () => {
     expect(ownAgentsOn(null, on)).toBe(false);
   });
 
+  it("holds a yes only for the warning and agents the person saw", () => {
+    expect(ownAgentsOn(own, on)).toBe(true);
+    // The text changed.
+    expect(ownAgentsOn({ ...own, warning: `${own.warning} More.` }, on)).toBe(false);
+    // An agent was added.
+    expect(ownAgentsOn({ ...own, providers: [...own.providers, "cursor"] }, on)).toBe(false);
+    // A yes saved before the key existed, or with another key.
+    expect(ownAgentsOn(own, { on: true, at: on.at })).toBe(false);
+    expect(ownAgentsOn(own, { ...on, key: "0".repeat(64) })).toBe(false);
+    // The title and the delegate are not what the person agreed to: changing them keeps the yes.
+    expect(ownAgentsOn({ ...own, title: "Other", delegate: { provider: "acp-opencode", model: "corp/small-model" } }, on)).toBe(true);
+    expect(keptAgents(["acp-opencode"], { ...own, providers: [...own.providers, "cursor"] }, on)).toEqual(["acp-opencode"]);
+  });
+
+  it("reads broken storage as off and offers nothing from a block without agents", () => {
+    expect(normalizeAgentBuild(null)).toEqual({ allowed: [], own: null, skills: [] });
+    expect(normalizeAgentBuild("x").own).toBeNull();
+    expect(normalizeAgentBuild({ allowed: ["acp-opencode"], own: { warning: "w" }, skills: [] }).own).toBeNull();
+    expect(normalizeAgentBuild({ allowed: ["acp-opencode"], own: { providers: [], warning: "w" } }).own).toBeNull();
+    expect(normalizeAgentBuild({ allowed: ["acp-opencode"], own: { providers: ["codex"] } }).own).toBeNull();
+    expect(normalizeAgentBuild({ allowed: "acp-opencode", skills: [{ id: "a" }, null] })).toEqual({ allowed: [], own: null, skills: [] });
+    const broken = { providers: undefined, warning: "w" } as unknown as typeof own;
+    expect(ownAgentsOn(broken, on)).toBe(false);
+    expect(keptAgents(["acp-opencode"], broken, on)).toEqual(["acp-opencode"]);
+    expect(normalizeChoice({ on: "yes", at: 1 })).toBeNull();
+    expect(normalizeChoice({ on: true, at: on.at, key: on.key })).toEqual(on);
+  });
+
   it("gives each agent only its audience's skills; own agents get theirs only once turned on", () => {
     const value = build();
-    const names = (choice: typeof on | null, provider: string) => skillsFor(value, choice, provider).map((entry) => entry.name);
+    const names = (choice: { on: boolean; at: string; key?: string } | null, provider: string) => skillsFor(value, choice, provider).map((entry) => entry.name);
     expect(names(null, "acp-opencode")).toEqual(["tools", "shared"]);
     expect(names(on, "acp-opencode")).toEqual(["tools", "shared"]);
     expect(names(null, "claude-code")).toEqual([]);

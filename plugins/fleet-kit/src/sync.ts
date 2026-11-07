@@ -937,10 +937,11 @@ function agentReady(entry: AgentEntry): boolean {
 
 /**
  * Keep only the manifest's agents enabled. An allowlist, so a provider a
- * later bb adds is turned off as well. Nothing is turned off until one of the
- * allowed agents is on and ready: the person must never be left without a
- * working agent. An allowed agent that is not ready is not turned on either
- * (bb refuses it), so a sync never repeats a call bb already refused.
+ * later bb adds is turned off as well. Agents outside the list are turned off
+ * whatever the state of the allowed ones: a build agent that is missing or not
+ * ready is reported as an error, it never keeps another agent on. An allowed
+ * agent that is not ready is not turned on either (bb refuses it), so a sync
+ * never repeats a call bb already refused.
  */
 async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, notices: Notice[], options: { turnOn: boolean } = { turnOn: true }) {
   const policy = manifest.agents;
@@ -948,12 +949,9 @@ async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedS
   let catalog = await within(deps.sdk.providers.catalog(), CALL_MS, "Listing bb's agents");
   const allowed = new Set(policy.allowed);
   const present = catalog.filter((entry) => allowed.has(entry.id));
-  if (present.length === 0) {
-    steps.add("agent", "agents", "error", say("agentsNoneHere", { allowed: policy.allowed.join(", ") }));
-    return;
-  }
-  for (const id of policy.allowed) if (!catalog.some((entry) => entry.id === id)) steps.add("agent", id, "warning", say("agentAllowedMissing"));
-  const shown = present.map((entry) => entry.displayName).join(", ");
+  if (present.length === 0) steps.add("agent", "agents", "error", say("agentsNoneHere", { allowed: policy.allowed.join(", ") }));
+  for (const id of policy.allowed) if (present.length > 0 && !catalog.some((entry) => entry.id === id)) steps.add("agent", id, "warning", say("agentAllowedMissing"));
+  const shown = present.length > 0 ? present.map((entry) => entry.displayName).join(", ") : policy.allowed.join(", ");
 
   for (const entry of present) {
     if (!agentReady(entry)) {
@@ -969,10 +967,7 @@ async function applyAgents(deps: SyncDeps, manifest: Manifest, managed: ManagedS
     }
   }
   const working = catalog.filter((entry) => allowed.has(entry.id) && entry.enabled && agentReady(entry));
-  if (working.length === 0) {
-    steps.add("agent", "agents", "error", say("agentsNoneReady", { allowed: shown }));
-    return; // keep managed.agents: a later sync still knows which agents it turned off
-  }
+  if (present.length > 0 && working.length === 0) steps.add("agent", "agents", "error", say("agentsNoneReady", { allowed: shown }));
 
   // The person's own agents, once turned on, are theirs to switch: Fleet Kit neither turns them on nor off.
   const kept = new Set(keptAgents(policy.allowed, manifest.ownAgents, deps.ownAgents));

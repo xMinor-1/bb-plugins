@@ -10,8 +10,10 @@
 //   Windows  a WinForms window from Windows PowerShell in System32
 //   Linux    /usr/bin/zenity, when a desktop session is present
 //
-// Every tool is called by its absolute path, never looked up in PATH. The text
-// travels on stdin as ASCII-only source, never in process arguments.
+// Every tool is called by its absolute path, never looked up in PATH. On macOS
+// and Windows the text travels on stdin as ASCII-only source; zenity takes it
+// as an argument (see zenityArgs). In every window the default button is No:
+// Enter never turns own agents on.
 // The same approach as Exchange Mail's send window (plugins/exchange-mail).
 import { spawn } from "node:child_process";
 import { join } from "node:path";
@@ -167,6 +169,21 @@ try {
   return `& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))))\n`;
 }
 
+/** zenity's arguments: a question with No as the default button. */
+export function zenityArgs(text: WindowText): string[] {
+  return [
+    "--question",
+    "--default-cancel",
+    "--no-markup",
+    `--title=${text.title}`,
+    `--text=${text.message}`,
+    `--ok-label=${text.yes}`,
+    `--cancel-label=${text.no}`,
+    "--width=560",
+    `--timeout=${CONFIRM_TIMEOUT_S}`,
+  ];
+}
+
 export function systemConfirmWindow(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): ConfirmWindow {
   if (platform === "darwin") {
     return {
@@ -189,11 +206,13 @@ export function systemConfirmWindow(platform: NodeJS.Platform = process.platform
   return {
     async confirm(text, signal) {
       if (!env.DISPLAY && !env.WAYLAND_DISPLAY) return { ok: false, reason: "unavailable" };
-      // --text-info reads the text from stdin; only the title and button labels are arguments.
+      // --question with --default-cancel: Enter and Space answer No, turning on takes a click on Yes.
+      // (--text-info, which reads stdin, makes Enter answer Yes.) The text is an argument here: it is the
+      // build's warning, shown to the person anyway, not a secret. --no-markup keeps "<" and "&" as text.
       const result = await run(
         ZENITY,
-        ["--text-info", `--title=${text.title}`, `--ok-label=${text.yes}`, `--cancel-label=${text.no}`, "--width=560", "--height=360", `--timeout=${CONFIRM_TIMEOUT_S}`],
-        `${text.message}\n`,
+        zenityArgs(text),
+        "",
         RUN_LIMIT_MS,
         signal,
         env,

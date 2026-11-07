@@ -364,12 +364,12 @@ any other agent that is on is turned off. When an agent Fleet Kit already
 turned off is on again, the sync reports it and the panel shows one notice
 naming the agents the build allows.
 
-The person must never be left without a working agent. An allowed agent counts
-only when bb can run it (its program is found and its plugin is on). Until one
-allowed agent is on and ready, Fleet Kit turns nothing off and the sync reports
-an error; it does not ask bb to turn on an allowed agent bb cannot run, so it
-does not repeat a refused call on every sync. The same holds when none of the
-allowed agents is in this bb's catalog.
+An allowed agent counts only when bb can run it (its program is found and its
+plugin is on). When no allowed agent is on and ready, or none is in this bb's
+catalog, the sync reports an error and still turns off every agent outside the
+list: an agent the build does not allow never stays on because the build's own
+is broken. Fleet Kit does not ask bb to turn on an allowed agent bb cannot run,
+so it does not repeat a refused call on every sync.
 
 Removing the `agents` block from the manifest stops this check but does not
 turn the agents Fleet Kit turned off back on: turn them on in bb's settings or
@@ -381,23 +381,35 @@ A build can offer the person their own agents next to its own, such as Claude
 Code or Codex with their own account (`ownAgents`). They stay off until the
 person turns **Own agents** on in the panel or with `bb fleet-kit own-agents
 on`. Turning on shows the build's warning in a window drawn by the operating
-system (macOS `osascript`, Windows WinForms, Linux `zenity`), and only **Turn
+system (macOS `osascript`, Windows WinForms, Linux `zenity`); the default
+button is the one that cancels, so Enter does not turn them on. Only **Turn
 on** in that window saves the choice: bb shows the panel, the CLI and an agent
-with a shell as the same caller, so a call alone never turns them on. This
-raises the bar, it is not a wall: a program of the same user can press a
-button in another window. A machine with no desktop session cannot turn them
-on. Turning off needs no window.
+with a shell as the same caller, so a call alone never turns them on.
+
+The window is an obstacle, not a protection. A program that runs as the same
+user can press the button itself, and the settings of Fleet Kit and of every
+other plugin (`bb plugin config`, including `manifestUrl` and `allowedModels`)
+change with bb commands without any window. A machine with no desktop session
+cannot turn them on. Turning off needs no window.
+
+The yes covers the warning and the list of agents it was given for. When the
+build changes the warning, adds an agent, or drops the offer and brings it
+back, Own agents is off again until a new yes. After a cancelled or
+unanswered window the next one opens no sooner than 10 minutes later; the
+status counts these refusals.
 
 Once on, Fleet Kit neither turns the listed agents on nor off: the person
 turns them on in bb's settings. Every other agent is still turned off. When
 the person turns Own agents off, or the build stops offering them, the next
 sync turns them off again. The choice is kept on this machine; a manifest
-update does not reset it.
+update that leaves the warning and the agents as they were does not reset it.
 
 Turning them on does not change what other plugins give to agents: a plugin
 that limits its tools to some models keeps doing so. It does not stop an
-agent with a shell from running `bb` commands either, which is why the build
-writes its own warning.
+agent with a shell from running `bb` commands either: such an agent can read
+what plugins give through the CLI, past any limit by model, and everything
+else the person can reach on this computer. That is why the build writes its
+own warning.
 
 ### Build skills
 

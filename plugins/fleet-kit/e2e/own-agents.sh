@@ -18,7 +18,9 @@ manifest=$HOME/build/manifest.json
 enabled_agents() { bb provider list --json 2>/dev/null | jq -r '.[].id' | sort | paste -sd' '; }
 state() { bb fleet-kit status --json | jq -r '.ownAgents.on'; }
 notices() { bb fleet-kit status --json | jq '.notices | length'; }
-# Start `own-agents on` and answer its window: yes (click Turn on), no (Escape) or none (no display).
+refusals() { bb fleet-kit status --json | jq -r '.ownAgents.refusals // 0'; }
+# Start `own-agents on` and answer its window: yes (click Turn on), enter (press
+# Enter, the default button) or no (Escape). Prints the CLI's answer.
 turn_on() {
   local answer=$1 out=/tmp/own-agents-$RANDOM.txt window=""
   (bb fleet-kit own-agents on > "$out" 2>&1; echo "exit=$?" >> "$out") &
@@ -32,6 +34,9 @@ turn_on() {
   if [ "$answer" = yes ]; then
     eval "$(xdotool getwindowgeometry --shell "$window")"
     xdotool mousemove $((X + WIDTH - 50)) $((Y + HEIGHT - 25)) click 1
+  elif [ "$answer" = enter ]; then
+    xdotool windowfocus "$window" 2>/dev/null
+    xdotool key --window "$window" Return 2>/dev/null
   else
     xdotool windowfocus "$window" 2>/dev/null
     xdotool key --window "$window" Escape 2>/dev/null
@@ -43,7 +48,7 @@ project=$(bb project list --json | jq -r '(if type == "array" then . else .proje
 spawn() { bb thread spawn --project "$project" --environment ~/proj "$@" --prompt "Reply with one word." --json | jq -r .id; }
 
 # The build offers Codex as an own agent, a skill for the build's agents and one for own agents.
-jq '.ownAgents = { providers: ["codex"], warning: "E2E: your agent reads mail, Rooms, CRM and Qlik through bb commands.", delegate: { provider: "acp-opencode", model: "corp/model-large" } }
+jq '.ownAgents = { providers: ["codex"], warning: "E2E: your agent reads the data of plugins through bb commands.", delegate: { provider: "acp-opencode", model: "corp/model-large" } }
   | .skills = [
       { id: "tools", name: "tools", description: "Use the build tools.", body: "TOOLS-BODY" },
       { id: "corp-agent", name: "corp-agent", description: "Hand a step to the build agent.", audience: "own", body: "CORP-BODY" } ]' \
@@ -54,10 +59,6 @@ check "own agents are off by default" test "$(state)" = false
 bb provider enable codex >/dev/null 2>&1
 bb fleet-kit sync >/dev/null 2>&1
 check "codex turned on by hand while off is turned off again" test "$(enabled_agents)" = "acp-opencode"
-
-echo "-- cancel in the window"
-turn_on no | sed 's/^/   /'
-check "Escape leaves own agents off" test "$(state)" = false
 
 echo "-- yes in the window"
 turn_on yes | sed 's/^/   /'
@@ -120,6 +121,16 @@ check "the build's agent sent a request" test "$(ls ~/.fk-e2e/requests | wc -l)"
 check "the build's agent is told about its skill" opencode_has "- tools: Use the build tools."
 check "the build's agent is not told about the skill for own agents" bash -c "! grep -qF corp-agent ~/.fk-e2e/requests/$latest"
 
+echo "-- the build changes the warning"
+jq '.ownAgents.warning = "E2E: your agent reads the data of plugins through bb commands, and more."' "$manifest" > "$manifest.tmp" && mv "$manifest.tmp" "$manifest"
+bb fleet-kit sync >/dev/null 2>&1
+check "a changed warning turns own agents off" test "$(state)" = false
+check "codex is turned off after the warning changed" test "$(enabled_agents)" = "acp-opencode"
+out=$(turn_on yes)
+echo "$out" | sed 's/^/   /'
+check "the new window shows the new warning and turns them on" bash -c "echo \"\$1\" | grep -q '^window:' && test \"\$(bb fleet-kit status --json | jq -r .ownAgents.on)\" = true" _ "$out"
+bb provider enable codex >/dev/null 2>&1
+
 echo "-- turn off"
 notices_on=$(notices)
 bb fleet-kit own-agents off >/dev/null 2>&1
@@ -128,6 +139,19 @@ bb fleet-kit sync >/dev/null 2>&1
 check "own agents are off" test "$(state)" = false
 check "codex is turned off again" test "$(enabled_agents)" = "acp-opencode"
 check "no 'turned on by hand' notice for codex" test "$(notices)" = "$notices_on"
+
+echo "-- Enter in the window"
+out=$(turn_on enter)
+echo "$out" | sed 's/^/   /'
+check "a window opened" bash -c "echo \"\$1\" | grep -q '^window:'" _ "$out"
+check "Enter does not turn own agents on" test "$(state)" = false
+check "Enter counts as a refusal" test "$(refusals)" = 1
+echo "-- right after the refusal"
+out=$(timeout 20 bb fleet-kit own-agents on 2>&1)
+echo "$out" | sed 's/^/   /'
+check "no window for 10 minutes after a refusal" bash -c "echo \"\$1\" | grep -q 'try again in 10 minutes' && ! xdotool search --name 'Fleet Kit'" _ "$out"
+check "still off" test "$(state)" = false
+check "the status says when the next window may open" bash -c "bb fleet-kit status --json | jq -e '.ownAgents.retryAt | type == \"string\"'"
 
 for id in $(bb thread list --json 2>/dev/null | jq -r '(if type == "array" then . else .threads end)[].id'); do bb thread archive "$id" >/dev/null 2>&1; done
 echo "$failures failed"

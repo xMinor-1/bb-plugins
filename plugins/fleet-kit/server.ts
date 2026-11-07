@@ -18,7 +18,7 @@ import { lockState, resetStuckLock } from "./src/host/lock-state.js";
 import { collectSetup, markProblem, SetupAsker, type StoredOnboarding } from "./src/setup.js";
 import { createChoiceQueue } from "./src/choice-store.js";
 import { chooseBranch, noBranchState, togglePlugin, turnsOff, type BranchChoice, type BranchState } from "./src/branches.js";
-import { agentBuildOf, emptyAgentBuild, ownAgentsOn, skillInstructions, skillsFor, SKILL_TOOL, type AgentBuild, type OwnAgentsChoice } from "./src/own-agents.js";
+import { agentBuildOf, consentKey, emptyAgentBuild, normalizeAgentBuild, normalizeChoice, ownAgentsOn, skillInstructions, skillsFor, SKILL_TOOL, type AgentBuild, type OwnAgentsChoice } from "./src/own-agents.js";
 import { oneAtATime, systemConfirmWindow, type ConfirmWindow, type WindowText } from "./src/host/confirm-window.js";
 import type { OwnAgentsOutcome } from "./contract.js";
 
@@ -65,6 +65,17 @@ function ownAgentsWindow(lang: "en" | "ru", warning: string, agents: string): Wi
 export interface PluginOptions {
   /** The system window that confirms "Own agents"; tests pass their own. */
   confirmWindow?: ConfirmWindow;
+  /** The clock for the pause after a refused window; tests pass their own. */
+  now?: () => number;
+}
+
+/** After a Cancel or an unanswered window, the next one waits this long: a script cannot keep the window up until someone clicks. */
+export const OWN_AGENTS_PAUSE_MS = 10 * 60_000;
+
+interface OwnAgentsRefusals {
+  count: number;
+  /** When the last window was cancelled or left unanswered, ms. */
+  lastAt: number | null;
 }
 
 export default async function plugin(bb: BbPluginApi, options: PluginOptions = {}) {
@@ -153,8 +164,28 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
   };
 
   /** What configure() reads on every thread start: it must answer synchronously, so it reads these copies. */
-  let agentBuild: AgentBuild = (await kv.get<AgentBuild>("agentBuild")) ?? emptyAgentBuild();
-  let ownChoice: OwnAgentsChoice | null = (await kv.get<OwnAgentsChoice>("ownAgents")) ?? null;
+  // Unreadable or malformed storage counts as no offer and no yes: own agents stay off.
+  let agentBuild: AgentBuild = emptyAgentBuild();
+  let ownChoice: OwnAgentsChoice | null = null;
+  try {
+    agentBuild = normalizeAgentBuild(await kv.get<unknown>("agentBuild"));
+  } catch (error) {
+    bb.log.warn(`Fleet Kit could not read the saved agent configuration; own agents stay off: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    ownChoice = normalizeChoice(await kv.get<unknown>("ownAgents"));
+  } catch (error) {
+    bb.log.warn(`Fleet Kit could not read the own agents switch; it counts as off: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const now = options.now ?? Date.now;
+  const readRefusals = async (): Promise<OwnAgentsRefusals> => {
+    try {
+      const saved = await kv.get<OwnAgentsRefusals>("ownAgentsRefusals");
+      return { count: typeof saved?.count === "number" ? saved.count : 0, lastAt: typeof saved?.lastAt === "number" ? saved.lastAt : null };
+    } catch {
+      return { count: 0, lastAt: null };
+    }
+  };
   const confirmWindow = oneAtATime(options.confirmWindow ?? systemConfirmWindow());
   /** The agent of each thread configure() answered for: build_skill gives a thread only its own skills. */
   const threadAgents = new Map<string, string>();
@@ -238,6 +269,8 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
   async function ownAgentsStatus(): Promise<Status["ownAgents"]> {
     const own = agentBuild.own;
     if (own === null) return null;
+    const refusals = await readRefusals();
+    const retryAt = refusals.lastAt !== null && now() - refusals.lastAt < OWN_AGENTS_PAUSE_MS ? new Date(refusals.lastAt + OWN_AGENTS_PAUSE_MS).toISOString() : null;
     let names = new Map<string, string>();
     try {
       names = new Map((await bb.sdk.providers.catalog()).map((entry) => [entry.id, entry.displayName]));
@@ -251,7 +284,22 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
       delegate: own.delegate ?? null,
       on: ownAgentsOn(own, ownChoice),
       at: ownChoice?.at ?? null,
+      refusals: refusals.count,
+      retryAt,
     };
+  }
+
+  /** Save first, then believe it: a failed write leaves the switch as it was and says so. */
+  async function saveChoice(next: OwnAgentsChoice | null) {
+    try {
+      await kv.set("ownAgents", next);
+    } catch (error) {
+      throw new experimental_PluginRpcRefusal({
+        code: "conflict",
+        message: `Fleet Kit could not save the choice, so nothing changed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    ownChoice = next;
   }
 
   /**
@@ -263,13 +311,25 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
     const own = agentBuild.own;
     if (own === null) return { on: false, outcome: "not-offered" };
     if (on && !ownAgentsOn(own, ownChoice)) {
+      const refusals = await readRefusals();
+      if (refusals.lastAt !== null && now() - refusals.lastAt < OWN_AGENTS_PAUSE_MS) return { on: false, outcome: "paused" };
       const names = (await ownAgentsStatus())?.providers.map((entry) => entry.name).join(", ") ?? own.providers.join(", ");
       const answer = await confirmWindow.confirm(ownAgentsWindow(lang, own.warning, names), controller.signal);
-      if (!answer.ok) return { on: false, outcome: answer.reason };
+      if (!answer.ok) {
+        if (answer.reason === "cancelled" || answer.reason === "timeout") {
+          await kv.set("ownAgentsRefusals", { count: refusals.count + 1, lastAt: now() } satisfies OwnAgentsRefusals).catch(() => undefined);
+          publish();
+        }
+        return { on: false, outcome: answer.reason };
+      }
+      // The yes holds for what the window showed: the warning and agents of this block.
+      await saveChoice({ on: true, at: new Date(now()).toISOString(), key: consentKey(own) });
+      publish();
+      void requestSync("manual");
+      return { on: true, outcome: "on" };
     }
     if (on === ownAgentsOn(own, ownChoice)) return { on, outcome: on ? "on" : "off" };
-    ownChoice = { on, at: new Date().toISOString() };
-    await kv.set("ownAgents", ownChoice);
+    await saveChoice({ on: false, at: new Date(now()).toISOString() });
     publish();
     void requestSync("manual");
     return { on, outcome: on ? "on" : "off" };
@@ -435,6 +495,11 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
     } satisfies StoredOnboarding);
     agentBuild = agentBuildOf(manifest);
     await kv.set("agentBuild", agentBuild);
+    // A build that stops offering own agents takes the yes back: offered again, it takes a new window.
+    if (agentBuild.own === null && ownChoice !== null) {
+      await kv.set("ownAgents", null);
+      ownChoice = null;
+    }
   }
 
   // The build's skills, each to the agents of its audience; the person's own agents only once turned on.
@@ -683,7 +748,12 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
               const names = value.providers.map((entry) => entry.name).join(", ");
               return { exitCode: 0, stdout: `Own agents (${names}): ${value.on ? "on" : "off"}.\n\n${value.warning}` };
             }
-            const answer = await setOwnAgents(state === "on", "en");
+            let answer: { on: boolean; outcome: OwnAgentsOutcome };
+            try {
+              answer = await setOwnAgents(state === "on", "en");
+            } catch (error) {
+              throw new PluginCliError(error instanceof Error ? error.message : String(error), { code: "not_saved" });
+            }
             const text: Record<OwnAgentsOutcome, string> = {
               on: "Own agents are on; syncing.",
               off: "Own agents are off; syncing.",
@@ -691,6 +761,7 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
               timeout: "Not turned on: nobody answered the system window.",
               unavailable: "Not turned on: this machine cannot show a system window to confirm it.",
               busy: "Not turned on: another confirmation window is open.",
+              paused: "Not turned on: the last window was cancelled or left unanswered; try again in 10 minutes.",
               "not-offered": "This build does not offer your own agents.",
             };
             return { exitCode: answer.outcome === "on" || answer.outcome === "off" ? 0 : 1, stdout: text[answer.outcome] };

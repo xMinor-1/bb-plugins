@@ -63,6 +63,7 @@ const messages = defineMessages(
     ownTurnOn: "Turn on…",
     ownTurnOff: "Turn off",
     ownWaiting: "Confirm in the system window…",
+    ownRefused: (count: number, until: string | null) => `Windows cancelled or left unanswered: ${count}.${until ? ` The next one can open after ${until}.` : ""}`,
     ownOutcome: (outcome: OwnAgentsOutcome) =>
       ({
         on: "Turned on.",
@@ -71,6 +72,7 @@ const messages = defineMessages(
         timeout: "Not turned on: nobody answered the system window.",
         unavailable: "Not turned on: this computer could not show the confirmation window.",
         busy: "Another confirmation window is open. Answer it first.",
+        paused: "Not turned on: the last window was cancelled or left unanswered. Try again in 10 minutes.",
         "not-offered": "This build does not offer your own agents.",
       })[outcome],
   },
@@ -121,6 +123,7 @@ const messages = defineMessages(
     ownTurnOn: "Включить…",
     ownTurnOff: "Выключить",
     ownWaiting: "Подтвердите в системном окне…",
+    ownRefused: (count, until) => `Окон отменено или оставлено без ответа: ${count}.${until ? ` Следующее можно открыть после ${until}.` : ""}`,
     ownOutcome: (outcome) =>
       ({
         on: "Включено.",
@@ -129,6 +132,7 @@ const messages = defineMessages(
         timeout: "Не включено: системное окно осталось без ответа.",
         unavailable: "Не включено: этот компьютер не смог показать окно подтверждения.",
         busy: "Уже открыто другое окно подтверждения. Сначала ответьте в нём.",
+        paused: "Не включено: прошлое окно отменено или осталось без ответа. Повторить можно через 10 минут.",
         "not-offered": "Сборка не предлагает своих агентов.",
       })[outcome],
   },
@@ -278,6 +282,9 @@ function OwnAgentsSection({ own, onChange }: { own: NonNullable<Status["ownAgent
           <Icon name="AlertTriangle" className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
           <span>{own.warning}</span>
         </p>
+        {own.refusals ? (
+          <p className="text-muted-foreground">{t.ownRefused(own.refusals, own.retryAt ? new Date(own.retryAt).toLocaleTimeString(intlLocale(lang)) : null)}</p>
+        ) : null}
         {note ? <p role="status" className="text-muted-foreground">{note}</p> : null}
       </div>
     </Section>

@@ -91,6 +91,10 @@ export const statusSchema = z.object({
       delegate: z.object({ provider: z.string(), model: z.string() }).nullable(),
       on: z.boolean(),
       at: z.string().nullable(),
+      /** Windows cancelled or left unanswered on this machine. */
+      refusals: z.number().optional(),
+      /** Until when a new window waits after the last refusal; null when it can open now. */
+      retryAt: z.string().nullable().optional(),
     })
     .nullable()
     .optional(),
@@ -98,7 +102,7 @@ export const statusSchema = z.object({
 export type Status = z.infer<typeof statusSchema>;
 
 /** What turning "Own agents" on or off came to. Only `on` changed anything when turning on. */
-export const ownAgentsOutcomeSchema = z.enum(["on", "off", "cancelled", "timeout", "unavailable", "busy", "not-offered"]);
+export const ownAgentsOutcomeSchema = z.enum(["on", "off", "cancelled", "timeout", "unavailable", "busy", "paused", "not-offered"]);
 export type OwnAgentsOutcome = z.infer<typeof ownAgentsOutcomeSchema>;
 
 /** `checking`: the plugin has not answered within the page's wait; its answer comes with the next update. */
