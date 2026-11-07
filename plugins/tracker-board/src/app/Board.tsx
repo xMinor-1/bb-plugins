@@ -192,15 +192,18 @@ export function ListView({ visible, rootKey }: { visible: Issue[]; rootKey: stri
   };
   const tops = view.board.issues.filter((issue) => !issue.parent || !view.byKey.has(issue.parent));
   for (const top of tops) walk(top, 0);
+  // Fixed widths: the title takes what is left and cuts with an ellipsis, so a long
+  // title never pushes the status and the other columns off the screen.
   const columns = (
     [
-      ["priority", t.field_priority],
-      ["assignee", t.field_assignee],
-      ["labels", t.field_labels],
-      ["parent", t.field_parent],
-      ["due", t.field_due],
+      ["priority", t.field_priority, 110],
+      ["assignee", t.field_assignee, 170],
+      ["labels", t.field_labels, 150],
+      ["parent", t.field_parent, 200],
+      ["due", t.field_due, 100],
     ] as const
   ).filter(([field]) => has(field));
+  const longestKey = rows.reduce((max, row) => Math.max(max, row.issue.key.length), 6);
   const toggle = (key: string) =>
     setClosed((current) => {
       const next = new Set(current);
@@ -213,11 +216,13 @@ export function ListView({ visible, rootKey }: { visible: Issue[]; rootKey: stri
       <thead>
         <tr>
           <th style={{ width: 34 }} />
-          {has("key") ? <th style={{ width: 110 }}>{t.field_key}</th> : null}
+          {has("key") ? <th style={{ width: `calc(${(longestKey * 1.15).toFixed(1)}ch + ${has("type") ? 44 : 22}px)` }}>{t.field_key}</th> : null}
           <th>{t.title}</th>
-          <th>{t.status}</th>
-          {columns.map(([field, name]) => (
-            <th key={field}>{name}</th>
+          <th style={{ width: 170 }}>{t.status}</th>
+          {columns.map(([field, name, width]) => (
+            <th key={field} style={{ width }}>
+              {name}
+            </th>
           ))}
         </tr>
       </thead>
@@ -255,7 +260,7 @@ export function ListView({ visible, rootKey }: { visible: Issue[]; rootKey: stri
                   ) : (
                     <span className="tb-tw" />
                   )}
-                  <span className="tb-t">
+                  <span className="tb-t" title={issue.summary}>
                     <TitleText issue={issue} />
                   </span>
                   {kids > 0 ? (
@@ -265,7 +270,7 @@ export function ListView({ visible, rootKey }: { visible: Issue[]; rootKey: stri
                   ) : null}
                 </span>
               </td>
-              <td>
+              <td title={view.statusName(issue.status)}>
                 <StatusPill name={view.statusName(issue.status)} color={view.colors.get(issue.status)} />
               </td>
               {columns.map(([field]) => (

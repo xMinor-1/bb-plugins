@@ -1,8 +1,10 @@
 import { useState } from "react";
 import type { Issue, Kind } from "../shared/model";
+import type { Category } from "../shared/profile";
+import type { StatusView } from "../server/rpc-contract";
 import { CARD_FIELDS, DEFAULT_FIELDS, type CardField, type Display } from "../shared/prefs";
 import type { Messages } from "./messages";
-import { Avatar, Icons, TypeTile } from "./parts";
+import { Avatar, Dot, Icons, TypeTile } from "./parts";
 import { Popover } from "./ui";
 
 export interface Filters {
@@ -10,10 +12,41 @@ export interface Filters {
   assignee: string | null;
   /** A tracker type key, as the tracker reports it. */
   type: string | null;
+  /** Status keys to keep; none picked keeps all. */
+  statuses: string[];
+  /** Closed tasks stay out unless their status is picked. */
+  hideClosed: boolean;
   mine: boolean;
 }
 
-export const NO_FILTERS: Filters = { text: "", assignee: null, type: null, mine: false };
+export const NO_FILTERS: Filters = { text: "", assignee: null, type: null, statuses: [], hideClosed: true, mine: false };
+
+export interface StatusOption {
+  key: string;
+  name: string;
+  category: Category;
+  /** Tasks in this status on the board. */
+  count: number;
+}
+
+const RANK: Record<Category, number> = { todo: 0, progress: 1, done: 2 };
+
+/** The status filter's choices: the statuses the board's tasks are in, in board order. */
+export function statusOptions(statuses: readonly StatusView[], issues: readonly Issue[]): StatusOption[] {
+  const found = new Map<string, StatusOption>();
+  for (const issue of issues) {
+    const known = found.get(issue.status);
+    if (known) known.count += 1;
+    else found.set(issue.status, { key: issue.status, name: issue.statusName ?? issue.status, category: issue.category, count: 1 });
+  }
+  const listed = statuses.flatMap((status) => {
+    const hit = found.get(status.key);
+    return hit ? [{ ...hit, name: status.name, category: status.category }] : [];
+  });
+  const seen = new Set(listed.map((option) => option.key));
+  const rest = [...found.values()].filter((option) => !seen.has(option.key)).sort((a, b) => RANK[a.category] - RANK[b.category] || a.name.localeCompare(b.name));
+  return [...listed, ...rest];
+}
 
 export interface TypeOption {
   key: string;
@@ -52,6 +85,9 @@ export function applyFilters(issues: readonly Issue[], filters: Filters, me: str
     }
     if (filters.assignee === "_none" ? issue.assignee !== null : filters.assignee !== null && issue.assignee !== filters.assignee) return false;
     if (filters.type !== null && issue.type.toLowerCase() !== filters.type.toLowerCase()) return false;
+    const picked = filters.statuses.includes(issue.status);
+    if (filters.statuses.length > 0 && !picked) return false;
+    if (filters.hideClosed && issue.category === "done" && !picked) return false;
     if (filters.mine && (!me || issue.assignee !== me)) return false;
     return true;
   });
@@ -63,6 +99,9 @@ export function Toolbar({
   setFilters,
   people,
   types,
+  statuses,
+  colors,
+  closedCount,
   display,
   setDisplay,
 }: {
@@ -71,10 +110,14 @@ export function Toolbar({
   setFilters: (next: Filters) => void;
   people: { id: string; name: string }[];
   types: TypeOption[];
+  statuses: StatusOption[];
+  colors: ReadonlyMap<string, string>;
+  /** Closed tasks the other filters keep, which hiding closed takes away. */
+  closedCount: number;
   display: Display;
   setDisplay: (next: Display) => void;
 }) {
-  const [menu, setMenu] = useState<"assignee" | "type" | "display" | null>(null);
+  const [menu, setMenu] = useState<"assignee" | "status" | "type" | "display" | null>(null);
   const close = () => setMenu(null);
   const personName = (id: string) => people.find((person) => person.id === id)?.name ?? id;
   return (
@@ -109,6 +152,38 @@ export function Toolbar({
         </button>
       </Popover>
       <Popover
+        open={menu === "status"}
+        onClose={close}
+        trigger={
+          <button className={`tb-fchip${filters.statuses.length > 0 || !filters.hideClosed ? " tb-on" : ""}`} type="button" onClick={() => setMenu(menu === "status" ? null : "status")} aria-expanded={menu === "status"}>
+            {t.status}
+            {filters.statuses.length === 1 ? `: ${(statuses.find((status) => status.key === filters.statuses[0])?.name ?? filters.statuses[0]!).toLowerCase()}` : filters.statuses.length > 1 ? `: ${filters.statuses.length}` : !filters.hideClosed ? `: ${t.withClosed}` : ""}
+          </button>
+        }
+        className="tb-menu"
+      >
+        <label className="tb-mi">
+          <input className="tb-cb" type="checkbox" checked={filters.hideClosed} onChange={() => setFilters({ ...filters, hideClosed: !filters.hideClosed })} />
+          <span className="tb-mi-t">{t.hideClosed}</span>
+          <span className="tb-mi-n">{closedCount}</span>
+        </label>
+        <div className="tb-sep" role="separator" />
+        <button className="tb-mi" type="button" aria-pressed={filters.statuses.length === 0} onClick={() => setFilters({ ...filters, statuses: [] })}>
+          <span className="tb-mi-t">{t.allStatuses}</span>
+        </button>
+        {statuses.map((status) => {
+          const on = filters.statuses.includes(status.key);
+          return (
+            <label key={status.key} className="tb-mi">
+              <input className="tb-cb" type="checkbox" checked={on} onChange={() => setFilters({ ...filters, statuses: on ? filters.statuses.filter((key) => key !== status.key) : [...filters.statuses, status.key] })} />
+              <Dot color={colors.get(status.key)} />
+              <span className="tb-mi-t">{status.name}</span>
+              <span className="tb-mi-n">{status.count}</span>
+            </label>
+          );
+        })}
+      </Popover>
+      <Popover
         open={menu === "type"}
         onClose={close}
         trigger={
@@ -134,6 +209,11 @@ export function Toolbar({
         {t.mineFilter}
       </button>
       <span className="tb-grow" />
+      {filters.hideClosed && filters.statuses.length === 0 && closedCount > 0 ? (
+        <button className="tb-lnk tb-lt-hide" type="button" onClick={() => setFilters({ ...filters, hideClosed: false })} title={t.showClosed}>
+          {t.closedHidden(closedCount)}
+        </button>
+      ) : null}
       <Popover
         open={menu === "display"}
         onClose={close}

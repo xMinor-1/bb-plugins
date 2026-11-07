@@ -37,7 +37,7 @@ import {
   type Rpc,
 } from "./store";
 import { TemplatesDialog } from "./Templates";
-import { applyFilters, NO_FILTERS, Toolbar, typeOptions, type Filters } from "./Toolbar";
+import { applyFilters, NO_FILTERS, statusOptions, Toolbar, typeOptions, type Filters } from "./Toolbar";
 import { Spinner } from "./ui";
 import { childrenOf, compositionParts, personTemplates, ViewContext, type ViewData } from "./view";
 
@@ -216,6 +216,7 @@ export function BoardPage() {
   let body;
   let data: ViewData | null = null;
   let visible: Issue[] = [];
+  let closedCount = 0;
   if (board) {
     const byKey = new Map(board.issues.map((issue) => [issue.key, issue]));
     const children = childrenOf(board.issues);
@@ -249,6 +250,7 @@ export function BoardPage() {
       addFromTemplates: setTemplatesFor,
     };
     const filtered = applyFilters(board.issues, filters, board.me?.id ?? null, data.personName);
+    closedCount = applyFilters(board.issues, { ...filters, hideClosed: false }, board.me?.id ?? null, data.personName).filter((issue) => issue.category === "done" && !filters.statuses.includes(issue.status)).length;
     if (prefs.display.view === "list") {
       body = <ListView visible={filtered} rootKey={board.root?.key ?? null} />;
     } else {
@@ -274,7 +276,16 @@ export function BoardPage() {
         </div>
       ) : null}
       {board ? (
-        <Toolbar t={t} filters={filters} setFilters={setFilters} people={people} types={typeOptions(config.types, board.issues)} display={prefs.display} setDisplay={(display) => void savePrefs(rpc, { display })} />
+        <Toolbar
+          t={t}
+          filters={filters}
+          setFilters={setFilters}
+          people={people}
+          types={typeOptions(config.types, board.issues)}
+          statuses={statusOptions(board.statuses, board.issues)}
+          colors={statusColors(board.statuses)}
+          closedCount={closedCount}
+          display={prefs.display} setDisplay={(display) => void savePrefs(rpc, { display })} />
       ) : null}
       {error ? (
         <div className="tb-banner tb-banner-error">

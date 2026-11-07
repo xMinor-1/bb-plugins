@@ -24,13 +24,16 @@ The interface is in English and Russian.
 - **What are you interested in.** After the API key, a first-run step suggests the queues and open
   epics of the person's own tasks and fills My boards; it can be skipped.
 - **Board.** Columns by status, optionally rows by story or by person. Drag a card to change its
-  status; a toast offers Undo for that one task. Filters by text, assignee, type and "mine";
-  the type filter lists every type of the profile's `types`, then any other type on the board.
+  status; a toast offers Undo for that one task. Filters by text, assignee, status, type and
+  "mine". Closed tasks are hidden by default; the toolbar says how many, and a click or the status
+  filter shows them. The status filter picks several statuses at once. The type filter lists every
+  type of the profile's `types`, then any other type on the board.
 - **Cards.** Which fields a card shows is up to the person: type, key, priority, description
   lines, labels, the epic, due date, assignee. The epic is a tag with a colour of its own; a click
   opens it. A story's card has one row of cells, one per template part and one for other tasks,
   each with done of total, however many tasks the story has.
-- **List.** The same tasks as a tree under their parents; the Parent column shows the path with
+- **List.** The same tasks as a tree under their parents, in columns of fixed width: a long title
+  ends with an ellipsis and never pushes the status off the screen; the Parent column shows the path with
   titles. Parents that live on another board load too.
 - **A task in bb's side panel.** Click a card. The parents come first, one row each down to
   "This task": type, key, status and title, the story with its composition row, the epic with

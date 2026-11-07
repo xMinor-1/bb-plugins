@@ -925,6 +925,8 @@
   width: 100%;
   border-collapse: collapse;
   min-width: 820px;
+  /* the widths in the header hold: a long title cuts instead of widening the table */
+  table-layout: fixed;
 }
 .tb-tbl th {
   text-align: left;
@@ -943,6 +945,16 @@
   padding: 6px 10px;
   border-bottom: 1px solid var(--tb-line);
   vertical-align: middle;
+  overflow: hidden;
+}
+.tb-tbl th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tb-tbl .tb-pill {
+  max-width: 100%;
+  overflow: hidden;
 }
 .tb-row {
   cursor: pointer;
@@ -1911,6 +1923,9 @@
   font-size: 12px;
   color: var(--tb-muted);
   padding: 8px 8px 3px;
+}
+.tb-root label.tb-mi {
+  cursor: pointer;
 }
 .tb-root .tb-lnk {
   border: 0;
