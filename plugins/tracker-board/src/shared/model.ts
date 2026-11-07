@@ -98,10 +98,11 @@ export function issueFrom(raw: unknown, profile: Profile, statusNames?: Readonly
   const known = profile.statuses.find((item) => item.key === status);
   const fetched = statusNames?.get(status);
   const statusName = textOf(getPath(raw, f.statusName)) ?? (typeof statusValue === "object" ? displayName(statusValue) : null) ?? known?.name ?? fetched?.name ?? null;
+  // A category the build configured wins over the tracker's: some report "cancelled" as in progress.
   const categoryText =
+    known?.category ??
     textOf(getPath(raw, f.statusCategory)) ??
     (statusValue && typeof statusValue === "object" ? textOf((statusValue as Record<string, unknown>).category) : null) ??
-    known?.category ??
     fetched?.category ??
     status;
   const assigneeValue = f.assignee ? getPath(raw, f.assignee) : undefined;

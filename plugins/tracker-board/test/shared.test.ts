@@ -86,6 +86,13 @@ describe("issues", () => {
     expect(issueFrom({ summary: "no key" }, profile)).toBeNull();
   });
 
+  it("takes a status category the build configured over the tracker's", () => {
+    const configured = { ...profile, statuses: [...profile.statuses, { key: "cancelled", category: "done", show: "used" as const }] };
+    const raw = { key: "PAY-9", summary: "x", type: "task", status: "cancelled", status_category: "in_progress" };
+    expect(issueFrom(raw, profile)?.category).toBe("progress");
+    expect(issueFrom(raw, configured)?.category).toBe("done");
+  });
+
   it("finds keys and prefixes", () => {
     expect(findKey("https://tracker.example.com/PAY-110?x=1")).toBe("PAY-110");
     expect(findKey("nothing here")).toBeNull();
