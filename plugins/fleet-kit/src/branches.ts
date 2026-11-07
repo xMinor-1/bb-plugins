@@ -15,7 +15,8 @@ export type Branches = NonNullable<Manifest["branches"]>;
 
 /** What the person chose, kept in Fleet Kit's storage. */
 export interface BranchChoice {
-  branch: string;
+  /** Null while the person has only switched plugins and not picked a branch yet. */
+  branch: string | null;
   /** Plugins the person turned on or off by hand; the rest follow the branch. */
   plugins: Record<string, boolean>;
   at: string;
@@ -24,20 +25,34 @@ export interface BranchChoice {
 /**
  * Before any choice: "all" — a machine that already had the build installs
  * everything as before and nothing is turned off; "wait" — a new machine
- * installs only the common set until the person picks a branch.
+ * installs the common set and what every branch turns on, and the plugins
+ * that differ between branches wait for the choice.
  */
 export type BranchStart = "all" | "wait";
 
 /** On, off, or held back until the person picks a branch. */
 export type Wanted = "on" | "off" | "wait";
 
+/** Where this machine stands: the person's choice and what Fleet Kit last applied. */
+export interface BranchState {
+  choice: BranchChoice | null;
+  start: BranchStart;
+  /** Each optional plugin as the last sync under an existing branch left it: what a dropped branch keeps. */
+  applied: Record<string, boolean>;
+}
+
+export const noBranchState = (): BranchState => ({ choice: null, start: "all", applied: {} });
+
 export function optionalIds(branches: Branches | undefined): Set<string> {
   return new Set((branches?.optional ?? []).map((entry) => entry.id));
 }
 
+/** Whether the person has picked a branch (it may since have left the build). */
+export const picked = (choice: BranchChoice | null): choice is BranchChoice & { branch: string } => choice !== null && choice.branch !== null;
+
 /** The chosen branch, or null when there is no choice or the build no longer has that branch. */
 export function chosenBranch(branches: Branches | undefined, choice: BranchChoice | null): Branches["list"][number] | null {
-  if (branches === undefined || choice === null) return null;
+  if (branches === undefined || !picked(choice)) return null;
   return branches.list.find((branch) => branch.id === choice.branch) ?? null;
 }
 
@@ -46,14 +61,45 @@ export function branchDefault(branch: Branches["list"][number] | null, id: strin
   return branch?.plugins?.[id] ?? true;
 }
 
+/** The value every branch agrees on, or null when branches differ. */
+export function commonDefault(branches: Branches, id: string): boolean | null {
+  const values = new Set(branches.list.map((branch) => branchDefault(branch, id)));
+  return values.size === 1 ? [...values][0]! : null;
+}
+
 /** Whether this machine gets a plugin. */
-export function pluginWanted(branches: Branches | undefined, choice: BranchChoice | null, start: BranchStart, id: string): Wanted {
+export function pluginWanted(branches: Branches | undefined, state: BranchState, id: string): Wanted {
   if (branches === undefined || !optionalIds(branches).has(id)) return "on";
-  if (choice === null) return start === "wait" ? "wait" : "on";
-  const own = choice.plugins[id];
+  const { choice } = state;
+  // The person's own switch wins, before and after a branch is picked.
+  const own = choice?.plugins[id];
   if (own !== undefined) return own ? "on" : "off";
-  // A branch the build dropped keeps the person's own switches and turns nothing else off.
-  return branchDefault(chosenBranch(branches, choice), id) ? "on" : "off";
+  if (!picked(choice)) {
+    if (state.start === "all") return "on";
+    // A new machine gets what every branch has; only what differs between branches waits for the choice.
+    const same = commonDefault(branches, id);
+    return same === null ? "wait" : same ? "on" : "off";
+  }
+  const branch = chosenBranch(branches, choice);
+  // A branch the build dropped leaves everything as the person had it.
+  const value = branch !== null ? branchDefault(branch, id) : (state.applied[id] ?? true);
+  return value ? "on" : "off";
+}
+
+/** What the last sync applied, for a dropped branch to keep: updated only while the chosen branch exists. */
+export function appliedNow(branches: Branches | undefined, state: BranchState): Record<string, boolean> {
+  if (branches === undefined || !picked(state.choice) || chosenBranch(branches, state.choice) === null) return state.applied;
+  const applied = { ...state.applied };
+  for (const id of optionalIds(branches)) applied[id] = pluginWanted(branches, state, id) === "on";
+  return applied;
+}
+
+/** The optional plugins this machine has now that picking `branch` would turn off, by title. */
+export function turnsOff(branches: Branches, state: BranchState, branch: string): string[] {
+  const next: BranchState = { ...state, choice: chooseBranch(branches, state.choice, branch) };
+  return branches.optional
+    .filter((entry) => pluginWanted(branches, state, entry.id) === "on" && pluginWanted(branches, next, entry.id) === "off")
+    .map((entry) => entry.title);
 }
 
 /** The MCP servers' defaults under the chosen branch: the branch's own value, else the entry's `default`. */
@@ -62,15 +108,19 @@ export function mcpDefaults(manifest: Manifest, choice: BranchChoice | null): Re
   return Object.fromEntries(manifest.mcp.map((server) => [server.id, branch?.mcp?.[server.id] ?? server.default]));
 }
 
-/** A new choice of branch: the person's switches start over from the branch's defaults. */
-export function chooseBranch(branches: Branches, branch: string, now: Date = new Date()): BranchChoice {
+/**
+ * A new choice of branch. Switches of plugins that differ between branches
+ * start over from the new branch's defaults; the person's switches of plugins
+ * every branch treats alike (the shared set) stay.
+ */
+export function chooseBranch(branches: Branches, previous: BranchChoice | null, branch: string, now: Date = new Date()): BranchChoice {
   if (!branches.list.some((entry) => entry.id === branch)) throw new Error(`The build has no branch "${branch}".`);
-  return { branch, plugins: {}, at: now.toISOString() };
+  const kept = Object.fromEntries(Object.entries(previous?.plugins ?? {}).filter(([id]) => commonDefault(branches, id) !== null));
+  return { branch, plugins: kept, at: now.toISOString() };
 }
 
 /** Turn one optional plugin on or off within the current choice. */
 export function togglePlugin(branches: Branches, choice: BranchChoice | null, id: string, on: boolean, now: Date = new Date()): BranchChoice {
-  if (choice === null) throw new Error("Pick a branch first.");
-  if (!optionalIds(branches).has(id)) throw new Error(`"${id}" is part of every branch and cannot be turned off.`);
-  return { branch: choice.branch, plugins: { ...choice.plugins, [id]: on }, at: now.toISOString() };
+  if (!optionalIds(branches).has(id)) throw new Error(`"${id}" is part of every build and cannot be turned off.`);
+  return { branch: choice?.branch ?? null, plugins: { ...(choice?.plugins ?? {}), [id]: on }, at: now.toISOString() };
 }

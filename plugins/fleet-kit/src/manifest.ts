@@ -98,6 +98,8 @@ export type OnboardingStep = z.infer<typeof onboardingStep>;
  */
 const branchesBlock = z
   .object({
+    /** The plugins every machine gets whatever the choice: optional, a check that no plugin is left undecided. */
+    common: z.array(id).optional(),
     /** Plugins the person may turn on or off, with the name the First run page shows. */
     optional: z.array(z.object({ id, title: z.string().min(1), hint: z.string().optional() }).strict()).min(1),
     list: z
@@ -557,6 +559,16 @@ function checkBranches(manifest: Manifest, ids: Set<string>, warnings: string[])
     return problem === null;
   });
   const optional = new Set(block.optional.map((entry) => entry.id));
+  if (block.common !== undefined) {
+    const common = new Set(block.common);
+    for (const id of block.common) {
+      if (!ids.has(id)) warnings.push(`branches.common.${id}: is not in plugins`);
+      if (optional.has(id)) warnings.push(`branches.common.${id}: is also optional; it stays optional`);
+    }
+    for (const id of ids) {
+      if (!common.has(id) && !optional.has(id)) warnings.push(`branches: "${id}" is in neither common nor optional; every machine gets it`);
+    }
+  }
   const servers = new Set(manifest.mcp.map((server) => server.id));
   for (const branch of block.list) {
     for (const id of Object.keys(branch.plugins ?? {})) {

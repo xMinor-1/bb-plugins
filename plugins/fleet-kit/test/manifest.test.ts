@@ -194,6 +194,21 @@ describe("branches in the manifest", () => {
     expect(result.manifest!.branches!.list[1]!.plugins).toEqual({ notes: false });
   });
 
+  it("with a common list, warns about a plugin that is neither common nor optional", () => {
+    const manifest = withBranches();
+    manifest.branches.common = ["fleet-kit", "notes", "ghost"];
+    const result = checkManifest(manifest);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        "branches.common.ghost: is not in plugins",
+        "branches.common.notes: is also optional; it stays optional",
+      ]),
+    );
+    manifest.branches.common = ["notes"];
+    expect(checkManifest(manifest).warnings).toContain('branches: "fleet-kit" is in neither common nor optional; every machine gets it');
+  });
+
   it("refuses a repeated branch id and an unknown field in a branch", () => {
     const repeated = withBranches();
     repeated.branches.list[1].id = "business";

@@ -79,7 +79,7 @@ bb fleet-kit status [--json]      # build, last sync, OpenCode protection, secre
 bb fleet-kit sync [--json]        # sync now and wait; exits 1 when the sync had errors
 bb fleet-kit setup [--json]       # the First run steps and which are done
 bb fleet-kit branch [--json]      # the build's branches and which optional plugins are on
-bb fleet-kit branch choose <id>   # pick a branch; your switches start over from its defaults
+bb fleet-kit branch choose <id> [--yes]  # pick a branch; --yes confirms turning plugins off
 bb fleet-kit branch plugin <id> on|off
 bb fleet-kit secret set <name> --value-stdin < key.txt
 bb fleet-kit secret clear <name>
@@ -203,7 +203,8 @@ a newer Fleet Kit can still deliver it.
   warning; the rest of the build still applies. Fleet Kit 0.2.x ignores the
   block with a warning.
 - `branches` — sets of plugins the person picks from (see
-  [Branches](#branches)): `optional`, the plugins a person may switch, each
+  [Branches](#branches)): `common`, an optional list of the required plugins
+  for checking; `optional`, the plugins a person may switch, each
   with `id` (from `plugins`), `title` and `hint`; and `list`, the branches,
   each with `id`, `title`, `hint`, `plugins` (`{ "<optional id>": true |
   false }`, on when left out) and `mcp` (`{ "<mcp id>": true | false }`, over
@@ -265,21 +266,42 @@ with bb. A plugin dropped from `plugins` stays and the sync says so once.
 
 ```json
 "branches": {
-  "optional": [{ "id": "reports", "title": "Reports" }, { "id": "crm", "title": "CRM" }, { "id": "tracker", "title": "Task board" }],
+  "common": ["fleet-kit", "branding"],
+  "optional": [
+    { "id": "mail", "title": "Mail" },
+    { "id": "reports", "title": "Reports" },
+    { "id": "contacts", "title": "Contacts" },
+    { "id": "board", "title": "Task board" }
+  ],
   "list": [
-    { "id": "sales", "title": "Sales", "plugins": { "tracker": false } },
-    { "id": "engineering", "title": "Engineering", "plugins": { "reports": false, "crm": false } }
+    { "id": "sales", "title": "Sales", "plugins": { "board": false } },
+    { "id": "engineering", "title": "Engineering", "plugins": { "reports": false, "contacts": false } }
   ]
 }
 ```
 
+Three kinds of plugins:
+
+- **Required**: everything outside `optional` (here Fleet Kit and the
+  branding). Every machine gets them, and they cannot be turned off.
+  `common`, when given, only checks the manifest: a plugin in neither list
+  is a warning, and it is required.
+- **Shared**: optional plugins every branch leaves on (here mail). They are
+  installed at once, before any branch is picked, and the person can turn
+  each of them off, before or after picking a branch.
+- **Branch plugins**: optional plugins the branches differ on (here
+  reports, contacts and the board). They follow the chosen branch, and the
+  person can switch each of them.
+
 The choice is the person's and lives on the machine, in Fleet Kit's storage:
 a manifest update never resets it. It holds the branch and the plugins the
-person switched by hand; every other optional plugin follows the branch, so a
-plugin the build adds to a branch arrives with the branch's default. Picking
-another branch starts the switches over from its defaults. When the build
-drops the chosen branch, the person's switches stay, nothing else is turned
-off, and First run asks for a branch again.
+person switched by hand; every other optional plugin follows the branch.
+Picking another branch puts the switches of branch plugins back to its
+defaults and keeps the person's switches of shared plugins. A choice that
+would turn plugins off is saved only after the person confirms the list
+(`branch_choose` answers with the titles; `bb fleet-kit branch choose <id>
+--yes` on the command line). Changes are applied one at a time, so two quick
+clicks never overwrite each other.
 
 A plugin the choice leaves out is not installed. One that is installed is
 turned off (bb's disable), never removed, so bb keeps its settings, secrets
@@ -290,12 +312,26 @@ Before the person picks a branch:
 
 - a machine that already had the build's plugins when it first met a
   manifest with branches keeps installing everything, as before, and turns
-  nothing off;
-- a new machine installs only the common set, and the optional plugins wait
-  for the choice. Picking a branch is a First run step of its own.
+  nothing off; picking a branch is offered, not required, and is not counted
+  as a step left;
+- a new machine installs the required and the shared plugins at once; only
+  branch plugins wait, and picking a branch is a First run step until then.
+  Which case applies is decided once, when the first sync reads the manifest,
+  and the First run page knows it from that moment.
+
+When the manifest changes:
+
+| Change | On the machine |
+| --- | --- |
+| A plugin is added | Installed with its branch's default (shared or required: installed); the person's other switches stay |
+| A plugin gets a new version | Only plugins that are on are updated; one turned off stays off at its version |
+| A plugin leaves `plugins` | Stays as it is, on or off; only `removePlugins` removes a plugin |
+| A plugin moves between required and optional | Follows its new kind: a required plugin is on whatever the person switched |
+| The chosen branch is renamed or dropped | Every optional plugin stays as the person had it; First run offers to pick a branch again |
+| A branch default changes | Plugins the person did not switch follow it |
 
 A plugin that declares a plain setting `buildBranch` gets the chosen branch's
-id (empty before a choice), so it can shape itself by it — for example, an
+id (empty before a choice), so it can shape itself by it, for example an
 MCP catalog applying the branch's `mcp` defaults. Fleet Kit does not apply
 `mcp` itself yet.
 

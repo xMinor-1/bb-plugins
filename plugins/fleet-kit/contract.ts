@@ -116,9 +116,11 @@ export type SetupStep = z.infer<typeof setupStepSchema>;
 /** The build's branches and the person's choice, for the First run page. */
 export const branchSetupSchema = z.object({
   list: z.array(z.object({ id: z.string(), title: z.string(), hint: z.string().nullable() })),
-  /** The branch the person picked; null before a choice. */
+  /** The branch the person picked; null before a choice, or when the build dropped it. */
   chosen: z.string().nullable(),
-  /** No choice yet, and this machine holds the optional plugins back until there is one. */
+  /** The picked branch left the build: the person's plugins stay as they were. */
+  dropped: z.boolean(),
+  /** Plugins that differ between branches wait on this machine until a branch is picked. */
   waiting: z.boolean(),
   /** The optional plugins: whether this machine gets each one, and what the chosen branch recommends. */
   plugins: z.array(
@@ -127,6 +129,8 @@ export const branchSetupSchema = z.object({
       title: z.string(),
       hint: z.string().nullable(),
       on: z.boolean(),
+      /** Waits for a branch: it differs between branches. */
+      waiting: z.boolean(),
       recommended: z.boolean(),
       /** The person switched it by hand. */
       own: z.boolean(),
@@ -173,9 +177,10 @@ export const rpcContract = defineRpcContract({
   },
   lock_reset: { input: z.null(), output: z.object({ reset: z.boolean() }) },
   setup_status: { input: z.object({ lang: z.enum(["en", "ru"]) }).strict(), output: setupSchema },
+  /** Without `confirmed`, a choice that would turn plugins off is not saved: the answer lists them for the person to confirm. */
   branch_choose: {
-    input: z.object({ branch: z.string().regex(/^[a-z0-9][a-z0-9-]*$/) }).strict(),
-    output: z.object({ chosen: z.string() }),
+    input: z.object({ branch: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), confirmed: z.boolean().optional() }).strict(),
+    output: z.object({ chosen: z.string().nullable(), turnsOff: z.array(z.string()) }),
   },
   branch_toggle: {
     input: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), on: z.boolean() }).strict(),

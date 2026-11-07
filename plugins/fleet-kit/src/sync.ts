@@ -27,7 +27,7 @@ import {
   type Manifest,
   type ManifestPlugin,
 } from "./manifest.js";
-import { pluginWanted, type BranchChoice, type BranchStart } from "./branches.js";
+import { appliedNow, picked, pluginWanted, type BranchChoice, type BranchStart, type BranchState } from "./branches.js";
 import { fetchManifestText, parseManifestJson, parseManifestLocation } from "./fetch-manifest.js";
 import type { SecretStore } from "./secret-store.js";
 import { planOpenCode, readOwnedValue, writeOpenCodeConfig, openCodeMajor, type OpenCodePlan } from "./host/opencode-config.js";
@@ -114,6 +114,8 @@ export interface ManagedState {
   opencodeSetupFailures?: { version: string; count: number; at: number } | null;
   /** Decided once, when a build with branches first meets this machine without a choice (see BranchStart). */
   branchStart?: BranchStart | null;
+  /** The optional plugins as the last sync under an existing branch left them: a dropped branch keeps them so. */
+  branchApplied?: Record<string, boolean>;
 }
 
 /** After this many failures in a row: only the odd scheduled try, or a sync the person asks for. */
@@ -157,8 +159,11 @@ export interface SyncDeps {
   selfUpdateStartedAt?: number | undefined;
   /** Called as soon as the state of the OpenCode install changes: an install takes minutes and the panel shows it. */
   onOpenCode?: ((status: OpenCodeStatus) => Promise<void>) | undefined;
-  /** The manifest has been read. A first sync installs plugins for many minutes; the person can enter a key meanwhile. */
-  onManifest?: ((manifest: Manifest) => Promise<void>) | undefined;
+  /**
+   * The manifest has been read. A first sync installs plugins for many minutes; the person can enter a key
+   * meanwhile, and the First run page already knows whether this machine waits for a branch.
+   */
+  onManifest?: ((manifest: Manifest, branches: BranchState) => Promise<void>) | undefined;
   /** The person's branch and plugin switches; null before a choice. */
   choice?: BranchChoice | null;
   /** For tests. */
@@ -246,6 +251,7 @@ function loadManaged(saved: ManagedState): ManagedState {
     opencodeFailures: copy.opencodeFailures ?? null,
     opencodeSetupFailures: copy.opencodeSetupFailures ?? null,
     branchStart: copy.branchStart ?? null,
+    branchApplied: copy.branchApplied ?? {},
   };
 }
 
@@ -316,12 +322,13 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
   }
   const manifest = check.manifest;
   steps.add("manifest", display, "ok", say("manifestRead", { name: manifest.name, version: manifest.version }));
-  if (manifest.branches !== undefined && (deps.choice ?? null) === null && (managed.branchStart ?? null) === null) {
+  if (manifest.branches !== undefined && !picked(deps.choice ?? null) && (managed.branchStart ?? null) === null) {
     // A machine that already has the build's plugins keeps all of them until the person picks a branch.
     const had = Object.keys(managed.plugins).some((id) => id !== SELF_ID);
     managed.branchStart = had ? "all" : "wait";
   }
-  await deps.onManifest?.(manifest);
+  managed.branchApplied = appliedNow(manifest.branches, branchState(deps, managed));
+  await deps.onManifest?.(manifest, branchState(deps, managed));
 
   const version = (await within(deps.sdk.system.version(), CALL_MS, "Reading the bb version")).currentVersion;
   if (version !== "0.0.0" && compareVersions(version, manifest.bb.minVersion) < 0) {
@@ -592,8 +599,12 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
   }
 }
 
+export function branchState(deps: Pick<SyncDeps, "choice">, managed: Pick<ManagedState, "branchStart" | "branchApplied">): BranchState {
+  return { choice: deps.choice ?? null, start: managed.branchStart ?? "all", applied: managed.branchApplied ?? {} };
+}
+
 function wantedHere(deps: SyncDeps, manifest: Manifest, managed: ManagedState, id: string) {
-  return pluginWanted(manifest.branches, deps.choice ?? null, managed.branchStart ?? "all", id);
+  return pluginWanted(manifest.branches, branchState(deps, managed), id);
 }
 
 /**

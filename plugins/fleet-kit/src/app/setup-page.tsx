@@ -88,9 +88,16 @@ const messages = defineMessages(
     badge: (n: number) => `${n} setup ${n === 1 ? "step" : "steps"} left`,
     branchTitle: "Your set of plugins",
     branchPick: "Pick the branch closest to your work. It turns on the plugins it recommends; you can switch any of them below and change the branch later.",
-    branchWaiting: "Plugins that depend on the branch are installed once you pick one.",
-    branchNotPicked: "Not picked yet. Until you pick a branch, every plugin stays installed.",
-    branchChange: "Changing the branch puts the switches back to its recommendations.",
+    branchWaiting: "Plugins that differ between branches are installed once you pick one; the rest are already here.",
+    branchNotPicked: "Not picked yet. Everything stays as it was; picking a branch is up to you.",
+    branchDropped: "Your branch is no longer in the build. Your plugins stay as they were; pick another branch when you like.",
+    branchChange: "Changing the branch puts the switches of branch plugins back to its recommendations; your switches of the rest stay.",
+    waitsForBranch: "after you pick a branch",
+    confirmTitle: (branch: string) => `Pick "${branch}"?`,
+    confirmText: "This turns off:",
+    confirmKeep: "Their settings, data and keys stay; you can turn any of them on again here.",
+    confirmYes: "Turn off and pick",
+    cancel: "Cancel",
     included: "Included",
     recommended: "recommended",
     notRecommended: "not in this branch by default",
@@ -129,9 +136,16 @@ const messages = defineMessages(
     badge: (n) => `Осталось шагов настройки: ${n}`,
     branchTitle: "Ваш набор плагинов",
     branchPick: "Выберите ветку, ближе всего к вашей работе. Она включит рекомендуемые плагины; любой из них можно переключить ниже, а ветку сменить позже.",
-    branchWaiting: "Плагины, которые зависят от ветки, поставятся после выбора.",
-    branchNotPicked: "Ветка ещё не выбрана. Пока её нет, все плагины остаются на месте.",
-    branchChange: "При смене ветки переключатели вернутся к её рекомендациям.",
+    branchWaiting: "Плагины, которые отличаются по веткам, поставятся после выбора; остальные уже на месте.",
+    branchNotPicked: "Ветка не выбрана. Всё остаётся как было, выбирать необязательно.",
+    branchDropped: "Вашей ветки больше нет в сборке. Плагины остаются как были; другую ветку можно выбрать когда удобно.",
+    branchChange: "При смене ветки переключатели плагинов ветки вернутся к её рекомендациям, остальные ваши переключатели останутся.",
+    waitsForBranch: "после выбора ветки",
+    confirmTitle: (branch) => `Выбрать «${branch}»?`,
+    confirmText: "Выключатся:",
+    confirmKeep: "Их настройки, данные и ключи останутся; включить любой можно здесь же.",
+    confirmYes: "Выключить и выбрать",
+    cancel: "Отмена",
     included: "Что входит",
     recommended: "рекомендуется",
     notRecommended: "в этой ветке по умолчанию выключен",
@@ -298,11 +312,16 @@ function StepCard({ step, secretStore, onMark, onSecret }: {
 /** The branch and the optional plugins: picked here first, changed here later. */
 function BranchCard({ branches, onChoose, onToggle }: {
   branches: BranchSetup;
-  onChoose: (branch: string) => void;
+  /** Resolves to the plugins the choice would turn off when it needs a confirmation, else to an empty list. */
+  onChoose: (branch: string, confirmed: boolean) => Promise<string[]>;
   onToggle: (id: string, on: boolean) => void;
 }) {
   const t = useMessages(messages);
+  const [confirm, setConfirm] = useState<{ branch: string; title: string; off: string[] } | null>(null);
   const picked = branches.chosen !== null;
+  const choose = (branch: string, title: string) =>
+    void onChoose(branch, false).then((off) => setConfirm(off.length > 0 ? { branch, title, off } : null), () => undefined);
+  const status = picked ? null : branches.dropped ? t.branchDropped : branches.waiting ? t.branchWaiting : t.branchNotPicked;
   return (
     <section className="mt-4 rounded-lg border border-border bg-card px-4 py-3 text-sm" data-branches={branches.chosen ?? ""}>
       <div className="flex items-start gap-2">
@@ -310,7 +329,7 @@ function BranchCard({ branches, onChoose, onToggle }: {
         <div className="min-w-0 flex-1">
           <h2 className="font-medium">{t.branchTitle}</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">{t.branchPick}</p>
-          {!picked ? <p className="mt-0.5 text-xs text-muted-foreground">{branches.waiting ? t.branchWaiting : t.branchNotPicked}</p> : null}
+          {status ? <p className="mt-0.5 text-xs text-muted-foreground" data-branch-status>{status}</p> : null}
         </div>
       </div>
       <div role="radiogroup" aria-label={t.branchTitle} className="mt-3 grid gap-2 pl-6 sm:grid-cols-2">
@@ -323,7 +342,7 @@ function BranchCard({ branches, onChoose, onToggle }: {
               role="radio"
               aria-checked={active}
               data-branch={branch.id}
-              onClick={() => (active ? undefined : onChoose(branch.id))}
+              onClick={() => (active ? undefined : choose(branch.id, branch.title))}
               className={cn(
                 "rounded-md border px-3 py-2 text-left transition-colors",
                 active ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50",
@@ -338,34 +357,57 @@ function BranchCard({ branches, onChoose, onToggle }: {
           );
         })}
       </div>
-      {picked ? (
-        <>
-          <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.branchChange}</p>
-          <h3 className="mt-3 pl-6 text-xs font-medium text-muted-foreground">{t.included}</h3>
-          <ul className="mt-1 flex flex-col gap-1 pl-6">
-            {branches.plugins.map((plugin) => (
-              <li key={plugin.id} data-plugin={plugin.id} data-on={plugin.on} className="flex items-start gap-2 py-1">
-                <input
-                  id={`fleet-kit-plugin-${plugin.id}`}
-                  type="checkbox"
-                  className="mt-0.5 size-4 shrink-0 accent-primary"
-                  checked={plugin.on}
-                  disabled={plugin.planned}
-                  onChange={(event) => onToggle(plugin.id, event.target.checked)}
-                />
-                <label htmlFor={`fleet-kit-plugin-${plugin.id}`} className="min-w-0 flex-1">
-                  <span>{plugin.title}</span>
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    {plugin.planned ? t.plannedPlugin : plugin.own ? t.yours : plugin.recommended ? t.recommended : t.notRecommended}
-                  </span>
-                  {plugin.hint ? <span className="block text-xs text-muted-foreground">{plugin.hint}</span> : null}
-                </label>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.offNote}</p>
-        </>
+      {confirm ? (
+        <div role="alertdialog" aria-label={t.confirmTitle(confirm.title)} data-confirm={confirm.branch} className="mt-3 ml-6 rounded-md border border-amber-500/50 px-3 py-2 text-xs">
+          <p className="font-medium">{t.confirmTitle(confirm.title)}</p>
+          <p className="mt-1">
+            {t.confirmText} {confirm.off.join(", ")}
+          </p>
+          <p className="mt-1 text-muted-foreground">{t.confirmKeep}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => void onChoose(confirm.branch, true).then(() => setConfirm(null), () => undefined)}>
+              {t.confirmYes}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirm(null)}>
+              {t.cancel}
+            </Button>
+          </div>
+        </div>
       ) : null}
+      {picked ? <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.branchChange}</p> : null}
+      <h3 className="mt-3 pl-6 text-xs font-medium text-muted-foreground">{t.included}</h3>
+      <ul className="mt-1 flex flex-col gap-1 pl-6">
+        {branches.plugins.map((plugin) => (
+          <li key={plugin.id} data-plugin={plugin.id} data-on={plugin.on} className="flex items-start gap-2 py-1">
+            <input
+              id={`fleet-kit-plugin-${plugin.id}`}
+              type="checkbox"
+              className="mt-0.5 size-4 shrink-0 accent-primary"
+              checked={plugin.on}
+              disabled={plugin.planned}
+              onChange={(event) => onToggle(plugin.id, event.target.checked)}
+            />
+            <label htmlFor={`fleet-kit-plugin-${plugin.id}`} className="min-w-0 flex-1">
+              <span>{plugin.title}</span>
+              <span className="ml-2 text-xs text-muted-foreground">
+                {plugin.planned
+                  ? t.plannedPlugin
+                  : plugin.own
+                    ? t.yours
+                    : plugin.waiting
+                      ? t.waitsForBranch
+                      : !picked
+                        ? ""
+                        : plugin.recommended
+                          ? t.recommended
+                          : t.notRecommended}
+              </span>
+              {plugin.hint ? <span className="block text-xs text-muted-foreground">{plugin.hint}</span> : null}
+            </label>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.offNote}</p>
     </section>
   );
 }
@@ -424,7 +466,18 @@ export function SetupPage() {
           {setup.branches ? (
             <BranchCard
               branches={setup.branches}
-              onChoose={(branch) => void rpc.call("branch_choose", { branch }).then(() => refetch(), fail)}
+              onChoose={(branch, confirmed) =>
+                rpc.call("branch_choose", { branch, confirmed }).then(
+                  (answer) => {
+                    refetch();
+                    return answer.chosen === null ? answer.turnsOff : [];
+                  },
+                  (cause) => {
+                    fail(cause);
+                    throw cause;
+                  },
+                )
+              }
               onToggle={(id, on) => void rpc.call("branch_toggle", { id, on }).then(() => refetch(), fail)}
             />
           ) : null}

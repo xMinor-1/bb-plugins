@@ -16,7 +16,8 @@ import { opencodeConfigDirSchema, opencodeInstallDirSchema } from "./src/shared/
 import { resolveOpenCodeLocation } from "./src/host/opencode-location.js";
 import { lockState, resetStuckLock } from "./src/host/lock-state.js";
 import { collectSetup, markProblem, SetupAsker, type StoredOnboarding } from "./src/setup.js";
-import { chooseBranch, togglePlugin, type BranchChoice } from "./src/branches.js";
+import { createChoiceQueue } from "./src/choice-store.js";
+import { chooseBranch, noBranchState, togglePlugin, turnsOff, type BranchChoice, type BranchState } from "./src/branches.js";
 
 export { rpcContract };
 
@@ -120,6 +121,11 @@ export default async function plugin(bb: BbPluginApi) {
 
   /** The person's branch: kept on this machine, never replaced by a manifest update. */
   const readChoice = async () => (await kv.get<BranchChoice>("branchChoice")) ?? null;
+  /** Where the sync left this machine, saved as soon as a sync has read the manifest. */
+  const readBranchState = async (): Promise<BranchState> => {
+    const saved = (await kv.get<Omit<BranchState, "choice">>("branchSync")) ?? null;
+    return { ...noBranchState(), ...(saved ?? {}), choice: await readChoice() };
+  };
 
   const setupAnswers = new Map<"en" | "ru", { at: number; answer: Promise<Setup> }>();
 
@@ -146,8 +152,7 @@ export default async function plugin(bb: BbPluginApi) {
         secretStore: store.label,
         lastSync: (await kv.get<SyncReport>("lastSync")) ?? null,
         lang,
-        choice: await readChoice(),
-        branchStart: (await kv.get<ManagedState>("managed"))?.branchStart ?? null,
+        branchState: await readBranchState(),
       })),
       opencodeInstall: (await kv.get<OpenCodeStatus>("opencode"))?.install ?? null,
     }))();
@@ -220,14 +225,16 @@ export default async function plugin(bb: BbPluginApi) {
           await kv.set("opencode", value);
           publish();
         },
-        onManifest: async (manifest) => {
+        onManifest: async (manifest, branches) => {
           await saveFromManifest(manifest);
+          await kv.set("branchSync", { start: branches.start, applied: branches.applied });
           publish();
         },
       },
       trigger,
     );
     await kv.set("managed", outcome.managed);
+    await kv.set("branchSync", { start: outcome.managed.branchStart ?? "all", applied: outcome.managed.branchApplied ?? {} });
     await kv.set("lastSync", outcome.report);
     if (outcome.opencode !== null || outcome.manifest !== null) await kv.set("opencode", outcome.opencode);
     if (outcome.manifest !== null) await saveFromManifest(outcome.manifest);
@@ -360,21 +367,28 @@ export default async function plugin(bb: BbPluginApi) {
     return branches;
   }
 
-  /** Save the choice and bring the plugins to it now. */
-  async function saveChoice(choice: BranchChoice) {
-    await kv.set("branchChoice", choice);
-    publish();
-    void requestSync("manual");
+  /** Choice changes one at a time: two quick clicks, or a branch and a switch at once, never overwrite each other. */
+  const changeChoice = createChoiceQueue(
+    { read: readChoice, write: (choice) => kv.set("branchChoice", choice) },
+    () => {
+      publish();
+      void requestSync("manual");
+    },
+  );
+
+  /** Pick a branch. One that would turn plugins off is saved only once the person confirms the list. */
+  function pickBranch(branch: string, confirmed: boolean) {
+    return changeChoice<{ chosen: string | null; turnsOff: string[] }>(async (current) => {
+      const branches = await storedBranches();
+      const state = { ...(await readBranchState()), choice: current };
+      const off = turnsOff(branches, state, branch);
+      if (off.length > 0 && !confirmed) return { save: null, result: { chosen: null, turnsOff: off } };
+      return { save: chooseBranch(branches, current, branch), result: { chosen: branch, turnsOff: off } };
+    });
   }
 
-  async function pickBranch(branch: string) {
-    const choice = chooseBranch(await storedBranches(), branch);
-    await saveChoice(choice);
-    return choice;
-  }
-
-  async function switchPlugin(id: string, on: boolean) {
-    await saveChoice(togglePlugin(await storedBranches(), await readChoice(), id, on));
+  function switchPlugin(id: string, on: boolean) {
+    return changeChoice(async (current) => ({ save: togglePlugin(await storedBranches(), current, id, on), result: on }));
   }
 
   const refuse = (error: unknown): never => {
@@ -423,7 +437,13 @@ export default async function plugin(bb: BbPluginApi) {
       return { reset };
     },
     setup_status: ({ lang }) => setup(lang),
-    branch_choose: async ({ branch }) => ({ chosen: (await pickBranch(branch).catch(refuse)).branch }),
+    branch_choose: async ({ branch, confirmed }) => {
+      try {
+        return await pickBranch(branch, confirmed === true);
+      } catch (error) {
+        return refuse(error);
+      }
+    },
     branch_toggle: async ({ id, on }) => {
       await switchPlugin(id, on).catch(refuse);
       return { on };
@@ -514,13 +534,18 @@ export default async function plugin(bb: BbPluginApi) {
           },
         }),
         "branch choose": cliCommand({
-          summary: "Pick a branch; your plugin switches start over from its defaults",
+          summary: "Pick a branch; switches of plugins that differ between branches start over from its defaults",
           positionals: [{ name: "branch", description: "Branch id", required: true }],
+          options: { yes: { type: "boolean", description: "Confirm turning off the plugins the branch leaves out" } },
           async run(input) {
+            let answer: { chosen: string | null; turnsOff: string[] };
             try {
-              await pickBranch(input.positionals.branch);
+              answer = await pickBranch(input.positionals.branch, input.options.yes === true);
             } catch (error) {
               throw new PluginCliError(error instanceof Error ? error.message : String(error), { code: "no_such_branch" });
+            }
+            if (answer.chosen === null) {
+              return { exitCode: 1, stdout: `Not picked: this turns off ${answer.turnsOff.join(", ")}. Run again with --yes to confirm.` };
             }
             return { exitCode: 0, stdout: `Branch ${input.positionals.branch} picked; syncing.` };
           },
