@@ -173,6 +173,8 @@ export const profileSchema = z
     priorities: z.array(namedSchema).max(20).default([]),
     /** Changing labels sends the whole list (`set`) or the added and removed ones (`delta`). */
     labelUpdate: z.enum(["set", "delta"]).default("set"),
+    /** Values for the create request's variables nobody gave, such as a priority the tracker requires. */
+    createDefaults: z.record(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,40}$/), z.string().max(200)).default({}),
   })
   .strict();
 export type Profile = z.infer<typeof profileSchema>;

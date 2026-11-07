@@ -124,11 +124,12 @@ missing is dropped from the body. Variables in a path are URL-encoded.
 | `queries` | Templates for `search`'s `{query}`. Without `children` a board of an epic walks the epic's queue |
 | `paging` | Page size, and whether `{offset}` counts items (`offset`) or pages (`page`, from `firstPage`) |
 | `responses` | Where the useful part of each answer is; `""` is the answer itself |
-| `fields`, `userFields`, `statusFields`, `commentFields`, `componentFields` | Paths into one object: `a.b`, `a[].b` for a list, `x\|y` for the first that exists. An object in place of a value gives its `key`, `value`, `code`, `id` or `login` |
+| `fields`, `userFields`, `statusFields`, `commentFields`, `componentFields` | Paths into one object: `a.b`, `a[].b` for a list, `x\|y` for the first that exists, and an empty alternative for the value itself (`issue\|` reads a wrapped or a bare answer). An object in place of a value gives its `key`, `value`, `code`, `id` or `login` |
 | `statuses` | Board order with categories `todo`, `progress`, `done`. A status not listed goes by its category |
 | `kinds` | Which types are epics, stories and bugs; any other type is a task |
 | `types`, `priorities` | Menus when creating and editing |
 | `labelUpdate` | `set` sends the whole list as `{labels}`; `delta` sends `{labelsAdd}` and `{labelsRemove}` |
+| `createDefaults` | Values for `create` variables nobody gave, such as `{ "priority": "medium" }` when the tracker requires one |
 
 Variables: `{key}` and `{issueId}` (the task's id, or its key without one) in every per-task
 request; `{query}`, `{limit}`, `{offset}`, `{page}` in `search`; `{queue}`, `{summary}`,

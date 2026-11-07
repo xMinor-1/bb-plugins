@@ -201,6 +201,14 @@ describe("changes from the panel", () => {
     expect(mock.state.requests.some((request) => request.path.endsWith(`/issues/${task.id}/components`) && (request.body as { component_id: string }).component_id === "comp-1")).toBe(true);
   });
 
+  it("fills create variables nobody gave from the profile's createDefaults", async () => {
+    const { rpc } = await setup({ apiProfile: JSON.stringify({ ...MOCK_PROFILE, createDefaults: { priority: "low", type: "bug" } }) });
+    const changes = [{ kind: "create", ref: "r1", parentKey: "PAY-120", summary: "[QA] Saved cards", type: "task", priority: "", labels: [] }];
+    const { results } = await rpc<{ results: { ok: boolean; key: string | null }[] }>("apply", { changes, approve: ["c1"] });
+    expect(results[0]?.ok).toBe(true);
+    expect(issue(results[0]!.key!)).toMatchObject({ priority: "low", type: "task" });
+  });
+
   it("skips the children of a create that failed", async () => {
     const { rpc } = await setup();
     const changes = [

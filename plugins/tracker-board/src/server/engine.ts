@@ -269,6 +269,7 @@ async function createIssue(ctx: ApplyContext, change: Extract<Change, { kind: "c
     description: change.description || undefined,
     parent: parent?.key,
   };
+  for (const [name, value] of Object.entries(profile.createDefaults)) if (vars[name] === undefined) vars[name] = value;
   const result = await tracker.create(vars);
   const base = { key: result.key, issueId: result.id ?? result.key };
   if (parent && !tracker.uses("create", "parent")) {
