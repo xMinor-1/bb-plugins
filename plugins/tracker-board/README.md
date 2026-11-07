@@ -14,14 +14,23 @@ The interface is in English and Russian.
 ## What people see
 
 - **A page in the sidebar.** In bb's title bar: what to show (a queue, an epic or a story with
-  everything under it, tasks assigned to me, recent picks, or a search query if the build allows
-  it), Board or List, the chat, refresh and settings.
+  everything under it, tasks assigned to me, or a search query if the build allows it), Board or
+  List, the chat, refresh and settings.
+- **My boards.** The board list in the title bar starts with the person's own boards in their
+  order, then "Assigned to me" and recent boards. A star pins a board; rows are dragged, or moved
+  with the arrow keys on their handle. The search finds queues by name or key, epics and stories
+  by words of their title, and opens a key or a link as is. The build's shared boards (setting
+  `defaultBoards`) are there for everyone: they can be hidden, not removed.
+- **What are you interested in.** After the API key, a first-run step suggests the queues and open
+  epics of the person's own tasks and fills My boards; it can be skipped.
 - **Board.** Columns by status, optionally rows by story or by person. Drag a card to change its
   status; a toast offers Undo for that one task. Filters by text, assignee, type and "mine".
-- **Cards.** Which fields a card shows is up to the person: type, key, priority, the template
-  tile, description lines, labels, parent, due date, assignee. A story's card shows its
-  composition: which template tasks exist, how many are done and which are missing.
-- **List.** The same tasks as a tree under their parents.
+- **Cards.** Which fields a card shows is up to the person: type, key, priority, description
+  lines, labels, the epic, due date, assignee. The epic is a tag with a colour of its own; a click
+  opens it. A story's card has one row of cells, one per template part and one for other tasks,
+  each with done of total, however many tasks the story has.
+- **List.** The same tasks as a tree under their parents; the Parent column shows the path with
+  titles. Parents that live on another board load too.
 - **A task in bb's side panel.** Click a card: path to the epic, status, assignee, priority,
   description, child tasks and missing template parts, comments, labels.
 - **Child tasks from templates.** Under an epic or a story: the missing parts, all parts, a
@@ -29,10 +38,11 @@ The interface is in English and Russian.
   creating.
 - **Bulk edits.** Select cards (checkbox, Ctrl or Cmd click): status, assignee, labels, parent.
   A preview shows what changes and what is skipped and why, then applies.
-- **Chat.** One bb thread next to the board. "To chat" puts the selected tasks in as pills;
-  "+" starts a new chat; the thread can also be opened in full.
-- **Settings.** The machine that talks to the tracker, the API key, the person's own templates
-  and people list, card appearance, export and import of these settings as JSON, language.
+- **Chat.** One bb thread beside the board or below it, with a splitter. "To chat" puts the
+  selected tasks in as pills; "+" starts a new chat; the thread can also be opened in full.
+- **Settings.** The machine that talks to the tracker, the API key, My boards, the person's own
+  templates and people list, card appearance, export and import of these settings as JSON,
+  language.
 - **An onboarding step for a build's setup page.** The `setupStatus` RPC answers `done`, `todo`
   or `problem` from the saved key state, without calling the tracker.
 
@@ -63,6 +73,7 @@ and reads the rest with the tools.
 | `apiProfile` | JSON, below |
 | `templates` | JSON templates and bundles everyone gets; people add their own on top |
 | `guide` | Markdown guide for agents: queues, statuses, what labels mean |
+| `defaultBoards` | Shared boards: queue keys, issue keys or links, one per line, on top of everyone's My boards |
 | `allowQuery` | Let people open a board from the tracker's own query language |
 | `allowedModels` | One rule per line, `<provider-id> <model-glob>`. Empty means no agent gets the tools |
 
@@ -96,14 +107,16 @@ missing is dropped from the body. Variables in a path are URL-encoded.
     "user": { "method": "GET", "path": "/users/{id}" },
     "statuses": { "method": "GET", "path": "/statuses" },
     "components": { "method": "GET", "path": "/components", "query": { "queue_key": "{queue}" } },
-    "addComponent": { "method": "POST", "path": "/issues/{issueId}/components", "body": { "component_id": "{component}" } }
+    "addComponent": { "method": "POST", "path": "/issues/{issueId}/components", "body": { "component_id": "{component}" } },
+    "queues": { "method": "GET", "path": "/queues", "query": { "search": "{text}", "limit": "20" } }
   },
-  "queries": { "queue": "queue = {queue}", "children": "parent in ({keys})", "text": "summary ~ \"{text}\"", "mine": "assignee = me()" },
+  "queries": { "queue": "queue = {queue}", "children": "parent in ({keys})", "keys": "key in ({keys})", "text": "summary ~ \"{text}\"", "mine": "assignee = me()" },
   "paging": { "limit": 100, "mode": "offset" },
-  "responses": { "issues": "issues", "total": "total", "issue": "issue", "created": "issue", "myself": "account", "users": "users", "user": "user", "statuses": "statuses", "comments": "comments", "components": "components" },
+  "responses": { "issues": "issues", "total": "total", "issue": "issue", "created": "issue", "myself": "account", "users": "users", "user": "user", "statuses": "statuses", "comments": "comments", "components": "components", "queues": "queues" },
   "fields": { "key": "key", "id": "id", "queue": "queue_key", "summary": "summary", "description": "description", "type": "type", "status": "status", "statusCategory": "status_category", "priority": "priority", "assignee": "assignee_id", "author": "reporter_id", "parent": "parent_key", "labels": "labels", "due": "due_date", "created": "created_at", "updated": "updated_at" },
   "userFields": { "id": "id", "name": "display_name", "login": "email" },
   "statusFields": { "key": "code", "name": "name", "category": "category" },
+  "queueFields": { "key": "key", "name": "name", "archived": "is_archived" },
   "statuses": [
     { "key": "open", "name": "Open", "category": "todo" },
     { "key": "in_progress", "name": "In progress", "category": "progress" },
@@ -123,10 +136,10 @@ missing is dropped from the body. Variables in a path are URL-encoded.
 | `unwrap` | Wrapper keys stripped from every answer when present, such as `data` |
 | `webUrl`, `keyHelp` | The task's page in a browser; where people get a key |
 | `requests` | `myself`, `issue` and `search` are required. Without the others the matching actions are hidden or skipped with a reason |
-| `queries` | Templates for `search`'s `{query}`. Without `children` a board of an epic walks the epic's queue |
+| `queries` | Templates for `search`'s `{query}`. Without `children` a board of an epic walks the epic's queue. With `keys` the parents of a board's tasks load in batches of 40; without it one by one, up to 60 |
 | `paging` | Page size, and whether `{offset}` counts items (`offset`) or pages (`page`, from `firstPage`) |
 | `responses` | Where the useful part of each answer is; `""` is the answer itself |
-| `fields`, `userFields`, `statusFields`, `commentFields`, `componentFields` | Paths into one object: `a.b`, `a[].b` for a list, `x\|y` for the first that exists, and an empty alternative for the value itself (`issue\|` reads a wrapped or a bare answer). An object in place of a value gives its `key`, `value`, `code`, `id` or `login` |
+| `fields`, `userFields`, `statusFields`, `commentFields`, `componentFields`, `queueFields` | Paths into one object: `a.b`, `a[].b` for a list, `x\|y` for the first that exists, and an empty alternative for the value itself (`issue\|` reads a wrapped or a bare answer). An object in place of a value gives its `key`, `value`, `code`, `id` or `login` |
 | `statuses` | Board order with categories `todo`, `progress`, `done`. `"show": "used"` keeps a status's name and category without an empty column. A status not listed goes by its category; a tracker's own status list joins boards and menus only when it has 60 entries or fewer |
 | `kinds` | Which types are epics, stories and bugs; any other type is a task |
 | `types`, `priorities` | Menus when creating and editing |
@@ -136,7 +149,8 @@ missing is dropped from the body. Variables in a path are URL-encoded.
 Variables: `{key}` and `{issueId}` (the task's id, or its key without one) in every per-task
 request; `{query}`, `{limit}`, `{offset}`, `{page}` in `search`; `{queue}`, `{summary}`,
 `{type}`, `{priority}`, `{assignee}`, `{labels}`, `{description}`, `{parent}` in `create` and
-`update`; `{status}` in `transition` or `update`; `{text}` in `addComment` and `users`;
+`update`; `{status}` in `transition` or `update`; `{text}` in `addComment`, `users` and
+`queues` (without `queues` queues are opened by key only, and archived ones are left out);
 `{id}` in `user`; `{component}` and `{componentName}` in `addComponent`.
 
 When `create` has no `{parent}` or `{assignee}`, the plugin sets them after creating with

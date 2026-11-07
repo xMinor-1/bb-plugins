@@ -1,10 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { KINDS, splitPrefix, type Issue, type Kind } from "../shared/model";
-import { CARD_FIELDS, DEFAULT_FIELDS, sourceFromText, type CardField, type Display, type Prefs, type Source } from "../shared/prefs";
-import type { ConfigView } from "../server/rpc-contract";
+import { useState } from "react";
+import { KINDS, type Issue, type Kind } from "../shared/model";
+import { CARD_FIELDS, DEFAULT_FIELDS, type CardField, type Display } from "../shared/prefs";
 import type { Messages } from "./messages";
 import { Avatar, Icons, TypeTile } from "./parts";
-import type { Rpc } from "./store";
 import { Popover } from "./ui";
 
 export interface Filters {
@@ -172,114 +170,5 @@ export function DisplaySettings({ t, display, setDisplay }: { t: Messages; displ
         </button>
       </div>
     </div>
-  );
-}
-
-/** The board's source: recent boards, search by key or title, a queue, a query. */
-export function SourcePicker({ t, rpc, config, prefs, title, root, onPick }: { t: Messages; rpc: Rpc; config: ConfigView; prefs: Prefs; title: string | null; root: Issue | null; onPick: (source: Source) => void }) {
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState("");
-  const [found, setFound] = useState<Issue[]>([]);
-  const input = useRef<HTMLInputElement | null>(null);
-  const request = useRef(0);
-  useEffect(() => {
-    if (open) setTimeout(() => input.current?.focus(), 0);
-  }, [open]);
-  useEffect(() => {
-    const trimmed = text.trim();
-    if (trimmed.length < 2) {
-      setFound([]);
-      return;
-    }
-    const id = ++request.current;
-    const timer = setTimeout(() => {
-      rpc.call("find", { text: trimmed }).then(
-        ({ issues }) => {
-          if (id === request.current) setFound(issues.slice(0, 8));
-        },
-        () => {
-          if (id === request.current) setFound([]);
-        },
-      );
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [text, rpc]);
-  const pick = (source: Source) => {
-    setOpen(false);
-    setText("");
-    onPick(source);
-  };
-  const trimmed = text.trim();
-  // A key, a queue or a link to an issue; a link without a key never goes to the tracker as a query.
-  const parsed = sourceFromText(trimmed, config.allowQuery);
-  const queue = parsed?.kind === "queue" ? parsed.queue : null;
-  const key = parsed?.kind === "issue" ? parsed.key : null;
-  return (
-    <Popover
-      open={open}
-      onClose={() => setOpen(false)}
-      className="tb-src-pop"
-      trigger={
-        <button className="tb-src" type="button" onClick={() => setOpen(!open)} title={t.source} aria-expanded={open}>
-          {root ? <TypeTile kind={root.kind} t={t} /> : null}
-          {root ? <span className="tb-k">{root.key}</span> : null}
-          <span className="tb-t">{root ? splitPrefix(root.summary).rest : title ?? t.source}</span>
-          <Icons.chevD />
-        </button>
-      }
-    >
-      <input
-        ref={input}
-        className="tb-pin"
-        placeholder={t.sourcePlaceholder}
-        aria-label={t.sourcePlaceholder}
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter") return;
-          if (key) pick({ kind: "issue", key });
-          else if (found[0]) pick({ kind: "issue", key: found[0].key });
-          else if (parsed) pick(parsed);
-        }}
-      />
-      {found.map((issue) => (
-        <button key={issue.key} className="tb-mi" type="button" onClick={() => pick({ kind: "issue", key: issue.key })}>
-          <TypeTile kind={issue.kind} t={t} />
-          <b>{issue.key}</b>
-          <span className="tb-ellipsis">{splitPrefix(issue.summary).rest}</span>
-        </button>
-      ))}
-      {queue ? (
-        <button className="tb-mi" type="button" onClick={() => pick({ kind: "queue", queue })}>
-          <span className="tb-ty tb-ty-q">Q</span>
-          {t.wholeQueue(queue)}
-        </button>
-      ) : null}
-      {parsed?.kind === "query" ? (
-        <button className="tb-mi" type="button" onClick={() => pick({ kind: "query", query: trimmed })}>
-          <Icons.search />
-          {t.queryItem}
-        </button>
-      ) : null}
-      {trimmed.length >= 2 && found.length === 0 && !parsed ? <div className="tb-mh">{t.nothingFound}</div> : null}
-      {trimmed === "" ? (
-        <>
-          {config.can.mine ? (
-            <button className="tb-mi" type="button" onClick={() => pick({ kind: "mine" })}>
-              <Avatar id="me" name="Me" size={16} t={t} />
-              {t.mine}
-            </button>
-          ) : null}
-          {prefs.recent.length > 0 ? <div className="tb-mh">{t.recent}</div> : null}
-          {prefs.recent.map((item) => (
-            <button key={JSON.stringify(item.source)} className="tb-mi" type="button" onClick={() => pick(item.source)}>
-              {item.source.kind === "queue" ? <span className="tb-ty tb-ty-q">Q</span> : item.source.kind === "query" ? <Icons.search /> : null}
-              <span className="tb-ellipsis">{item.source.kind === "queue" ? t.wholeQueue(item.title) : item.source.kind === "mine" ? t.mine : item.title}</span>
-            </button>
-          ))}
-        </>
-      ) : null}
-      <div className="tb-mh">{t.sourceHint}</div>
-    </Popover>
   );
 }

@@ -20,12 +20,13 @@ import { experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-
 import { z } from "zod";
 import { hostContract, type FailureCode, type KeyStatus } from "./contract";
 import { loadBoard, loadParents, parseSource, sourceKey, type Board, type Source } from "./src/server/board";
+import { parseDefaultBoards, withTitle } from "./src/shared/boards";
 import { apply, describe, mapLimit, plan } from "./src/server/engine";
 import { rpcContract, type BoardView, type ConfigView, type IssueView, type StatusView } from "./src/server/rpc-contract";
 import { Tracker, TrackerError, type StatusInfo } from "./src/server/tracker";
 import { changeSchema, SKIP_TEXT, type Change, type ChangeResult, type PlannedChange } from "./src/shared/changes";
 import { LIMITS } from "./src/shared/limits";
-import { findKey, KEY_PATTERN, splitPrefix, type Issue, type Person } from "./src/shared/model";
+import { epicAbove, findKey, KEY_PATTERN, splitPrefix, type Issue, type Person } from "./src/shared/model";
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
 import { fromExport, prefsSchema, type Prefs } from "./src/shared/prefs";
 import { categoryOf, normalizeBaseUrl, parseProfile, ProfileError, type Profile } from "./src/shared/profile";
@@ -57,6 +58,11 @@ interface Execution {
   at: number;
 }
 
+/** "What are you interested in" looks at this many of the person's tasks. */
+const SUGGEST_FROM = 300;
+const SUGGEST_QUEUES = 6;
+const SUGGEST_EPICS = 8;
+
 interface Config {
   name: string;
   baseUrl: string | null;
@@ -64,6 +70,7 @@ interface Config {
   templates: TemplatesConfig;
   guide: string;
   allowQuery: boolean;
+  defaultBoards: Source[];
   problem: string | null;
 }
 
@@ -74,6 +81,7 @@ interface RawSettings {
   templates: string;
   guide: string;
   allowQuery: boolean;
+  defaultBoards?: string;
 }
 
 function readConfig(raw: RawSettings): Config {
@@ -99,7 +107,7 @@ function readConfig(raw: RawSettings): Config {
   } catch (error) {
     problems.push(error instanceof TemplatesError ? error.message : String(error));
   }
-  return { name: raw.trackerName.trim() || "Tracker", baseUrl, profile, templates, guide: raw.guide, allowQuery: raw.allowQuery, problem: problems[0] ?? null };
+  return { name: raw.trackerName.trim() || "Tracker", baseUrl, profile, templates, guide: raw.guide, allowQuery: raw.allowQuery, defaultBoards: parseDefaultBoards(raw.defaultBoards ?? ""), problem: problems[0] ?? null };
 }
 
 /**
@@ -195,6 +203,14 @@ export default async function plugin(bb: BbPluginApi) {
       default: "",
       experimental_multiline: true,
       experimental_schema: z.string().max(100_000),
+    },
+    defaultBoards: {
+      type: "string",
+      label: "Shared boards",
+      description: "Boards everyone finds under My boards: queue keys, issue keys or links, one per line. People can hide them but not remove them.",
+      default: "",
+      experimental_multiline: true,
+      experimental_schema: z.string().max(4000),
     },
     allowQuery: {
       type: "boolean",
@@ -762,6 +778,23 @@ export default async function plugin(bb: BbPluginApi) {
     return { ok: outcome.ok, code: outcome.code, me: outcome.me };
   }
 
+  /** Queue names by key: a queue board reads by name, and names rarely change. */
+  const queueNames = new Map<string, string>();
+
+  async function queueTitle(tracker: Tracker, queue: string, prefs: Prefs): Promise<string> {
+    const known = queueNames.get(queue);
+    if (known) return known;
+    if (tracker.has("queues")) {
+      const name = await tracker.queues(queue).then((found) => found.find((item) => item.key === queue)?.name, () => undefined);
+      if (name) {
+        queueNames.set(queue, name);
+        return name;
+      }
+    }
+    // The tracker could not say: keep the name the board was saved with.
+    return prefs.boards.find((board) => board.source.kind === "queue" && board.source.queue === queue)?.title || queue;
+  }
+
   function sourceTitle(source: Source, root: Issue | null): string {
     switch (source.kind) {
       case "issue":
@@ -794,6 +827,7 @@ export default async function plugin(bb: BbPluginApi) {
         bundles: config.templates.bundles,
         composition: compositionOf(config.templates),
         allowQuery: config.allowQuery,
+        defaultBoards: config.defaultBoards,
         can: {
           create: has("create"),
           status: has("transition") || uses("update", "status"),
@@ -807,6 +841,7 @@ export default async function plugin(bb: BbPluginApi) {
           people: has("users"),
           components: has("issueComponents"),
           mine: Boolean(profile?.queries.mine),
+          queues: has("queues"),
         },
         agentsAllowed: policy.rules.length > 0,
       };
@@ -858,10 +893,11 @@ export default async function plugin(bb: BbPluginApi) {
       const parents = await loadParents(tracker, board.issues);
       await nameIssues(tracker, board.issues);
       const me = await meOn(hostId, tracker);
-      const title = sourceTitle(source, board.root);
       const prefs = await loadPrefs();
-      const recent = [{ source, title }, ...prefs.recent.filter((item) => sourceKey(item.source) !== sourceKey(source))].slice(0, LIMITS.recent);
-      await savePrefs({ ...prefs, source, recent });
+      const title = source.kind === "queue" ? await queueTitle(tracker, source.queue, prefs) : sourceTitle(source, board.root);
+      const kind = board.root?.kind;
+      const recent = [{ source, title, ...(kind ? { kind } : {}) }, ...prefs.recent.filter((item) => sourceKey(item.source) !== sourceKey(source))].slice(0, LIMITS.recent);
+      await savePrefs({ ...prefs, source, recent, boards: withTitle(prefs.boards, source, title, kind) });
       const people = new Map<string, string>();
       for (const issue of board.issues) if (issue.assignee) people.set(issue.assignee, issue.assigneeName ?? issue.assignee);
       const view: BoardView = {
@@ -926,6 +962,39 @@ export default async function plugin(bb: BbPluginApi) {
       if (!tracker.has("users")) return local;
       const remote = await tracker.users(text.trim());
       return [...local, ...remote.filter((person) => !local.some((known) => known.id === person.id))].slice(0, 50);
+    },
+    queues: async ({ text }) => {
+      const trimmed = text.trim();
+      if (trimmed.length < 2) return { queues: [] };
+      const tracker = await trackerOn(await panelHost());
+      if (!tracker.has("queues")) return { queues: [] };
+      return { queues: await tracker.queues(trimmed) };
+    },
+    suggestBoards: async () => {
+      const query = config.profile?.queries.mine;
+      if (!query) return { queues: [], epics: [] };
+      const tracker = await trackerOn(await panelHost());
+      const { issues } = await tracker.search(query, SUGGEST_FROM);
+      const byKey = new Map([...(await loadParents(tracker, issues)), ...issues].map((issue) => [issue.key, issue]));
+      const queues = new Map<string, number>();
+      const epics = new Map<string, { issue: Issue; count: number }>();
+      for (const issue of issues) {
+        if (issue.queue) queues.set(issue.queue, (queues.get(issue.queue) ?? 0) + 1);
+        const epic = issue.kind === "epic" ? issue : epicAbove(issue, byKey);
+        if (!epic || epic.category === "done") continue;
+        const entry = epics.get(epic.key) ?? { issue: epic, count: 0 };
+        entry.count += 1;
+        epics.set(epic.key, entry);
+      }
+      const top = [...queues].sort((a, b) => b[1] - a[1]).slice(0, SUGGEST_QUEUES);
+      // A queue's name, when the tracker can look queues up: the key alone says little.
+      const named = tracker.has("queues")
+        ? await mapLimit(top, 3, ([key]) => tracker.queues(key).then((found) => found.find((queue) => queue.key === key)?.name ?? key, () => key))
+        : top.map(([key]) => key);
+      return {
+        queues: top.map(([key, count], index) => ({ key, name: named[index] ?? key, count })),
+        epics: [...epics.values()].sort((a, b) => b.count - a.count).slice(0, SUGGEST_EPICS),
+      };
     },
     preview: async ({ changes }) => {
       const hostId = await panelHost();

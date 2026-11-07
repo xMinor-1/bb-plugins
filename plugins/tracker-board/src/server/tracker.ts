@@ -173,6 +173,18 @@ export class Tracker {
       .slice(0, 50);
   }
 
+  async queues(text: string): Promise<{ key: string; name: string }[]> {
+    const { json } = await this.call("queues", { text });
+    const qf = this.profile.queueFields;
+    const out: { key: string; name: string }[] = [];
+    for (const raw of listOf(getPath(json, this.profile.responses.queues))) {
+      const key = scalar(getPath(raw, qf.key));
+      if (!key || (qf.archived && getPath(raw, qf.archived) === true)) continue;
+      out.push({ key, name: displayName(getPath(raw, qf.name)) ?? scalar(getPath(raw, qf.name)) ?? key });
+    }
+    return out.slice(0, 20);
+  }
+
   async user(id: string): Promise<Person | null> {
     const { json } = await this.call("user", { id });
     const raw = getPath(json, this.profile.responses.user) ?? json;

@@ -10,7 +10,8 @@ import type { ConfigView } from "../server/rpc-contract";
 import { PeoplePicker } from "./Bulk";
 import type { Messages } from "./messages";
 import { Avatar, Icons } from "./parts";
-import { configStore, errorText, failureText, prefsStore, reloadBoard, savePrefs, type Rpc } from "./store";
+import { BoardsSection, needsInterest } from "./Boards";
+import { configStore, errorText, failureText, prefsStore, reloadBoard, savePrefs, settingsOpenStore, type Rpc } from "./store";
 import { Popover, Spinner } from "./ui";
 
 function Connection({ t, rpc, config }: { t: Messages; rpc: Rpc; config: ConfigView }) {
@@ -97,7 +98,11 @@ function Connection({ t, rpc, config }: { t: Messages; rpc: Rpc; config: ConfigV
                 const result = await rpc.call("saveKey", { key: key.trim() });
                 setKey("");
                 setCheck(result);
-                if (result.ok) void reloadBoard(rpc);
+                if (!result.ok) return;
+                // The first key: next comes "What are you interested in".
+                const prefs = prefsStore.get();
+                if (prefs && needsInterest(config, prefs)) settingsOpenStore.set(false);
+                else void reloadBoard(rpc);
               })
             }
           >
@@ -392,6 +397,7 @@ export function SettingsView({ t, rpc, config, prefs }: { t: Messages; rpc: Rpc;
     <div className="tb-settings">
       {config.problem ? <p className="tb-error">{t.notConfigured(config.problem)}</p> : null}
       <Connection t={t} rpc={rpc} config={config} />
+      <BoardsSection t={t} rpc={rpc} config={config} prefs={prefs} />
       <TemplatesSection t={t} rpc={rpc} config={config} prefs={prefs} />
       <PeopleSection t={t} rpc={rpc} prefs={prefs} />
       <TransferSection t={t} rpc={rpc} prefs={prefs} />

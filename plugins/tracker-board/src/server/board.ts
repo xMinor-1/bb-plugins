@@ -15,18 +15,7 @@ export interface Board {
   truncated: boolean;
 }
 
-export function sourceKey(source: Source): string {
-  switch (source.kind) {
-    case "queue":
-      return `queue:${source.queue}`;
-    case "issue":
-      return `issue:${source.key}`;
-    case "query":
-      return `query:${source.query}`;
-    case "mine":
-      return "mine";
-  }
-}
+export { sourceId as sourceKey } from "../shared/prefs";
 
 /** A typed source: an issue key or a link to one, a queue key, or a query. */
 /** What a typed or pasted text opens; see `sourceFromText`. */

@@ -30,6 +30,22 @@ export const Icons = {
   board: () => svg(16, <><rect x="3.5" y="4" width="5" height="16" rx="1.5" /><rect x="10" y="4" width="5" height="11" rx="1.5" /><rect x="16.5" y="4" width="4" height="7" rx="1.5" /></>),
   list: () => svg(15, <path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" />, 2.2),
   comment: () => svg(13, <path d="M4 6h12a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H9l-4 3v-3H4" />, 2),
+  star: ({ on }: { on: boolean }) => (
+    <svg width={15} height={15} viewBox="0 0 24 24" fill={on ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" aria-hidden="true">
+      <path d="m12 3.5 2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" />
+    </svg>
+  ),
+  grip: () => svg(12, <><circle cx="9" cy="6" r="1" /><circle cx="15" cy="6" r="1" /><circle cx="9" cy="12" r="1" /><circle cx="15" cy="12" r="1" /><circle cx="9" cy="18" r="1" /><circle cx="15" cy="18" r="1" /></>, 2.2),
+  eye: ({ on }: { on: boolean }) =>
+    svg(
+      14,
+      on ? (
+        <><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="2.8" /></>
+      ) : (
+        <><path d="M4 4l16 16M10.6 6.1A9 9 0 0 1 12 6c6 0 9.5 6 9.5 6a16 16 0 0 1-2.6 3.2M6.3 7.6C3.9 9.3 2.5 12 2.5 12S6 18 12 18c1.4 0 2.7-.3 3.8-.8" /></>
+      ),
+    ),
+  clock: () => svg(12, <><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></>, 2),
 };
 
 const KIND_PATH: Record<Kind, ReactNode> = {

@@ -3,7 +3,7 @@
 // holds exactly this and never the API key.
 import { z } from "zod";
 import { LIMITS } from "./limits";
-import { KEY_PATTERN, QUEUE_PATTERN } from "./model";
+import { KEY_PATTERN, KINDS, QUEUE_PATTERN } from "./model";
 import { templateSchema } from "./templates";
 
 export const CARD_FIELDS = ["type", "key", "priority", "description", "composition", "labels", "components", "parent", "due", "assignee", "comments"] as const;
@@ -16,6 +16,18 @@ export const sourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("query"), query: z.string().min(1).max(2000) }).strict(),
   z.object({ kind: z.literal("mine") }).strict(),
 ]);
+
+export const savedBoardSchema = z
+  .object({
+    source: sourceSchema,
+    title: z.string().max(300).default(""),
+    /** The type of an issue board's root, for its icon in the list. */
+    kind: z.enum(KINDS).optional(),
+    /** Only a build's board is hidden instead of removed. */
+    hidden: z.boolean().default(false),
+  })
+  .strict();
+export type SavedBoard = z.infer<typeof savedBoardSchema>;
 
 export const displaySchema = z
   .object({
@@ -32,6 +44,8 @@ export const displaySchema = z
   .strict();
 export type Display = z.infer<typeof displaySchema>;
 
+const recentItemSchema = z.object({ source: sourceSchema, title: z.string().max(300), kind: z.enum(KINDS).optional() }).strict();
+
 export const personSchema = z.object({ id: z.string().min(1).max(200), name: z.string().min(1).max(200) }).strict();
 
 export const prefsSchema = z
@@ -40,12 +54,16 @@ export const prefsSchema = z
     templates: z.array(templateSchema).max(LIMITS.templates).default([]),
     people: z.array(personSchema).max(LIMITS.people).default([]),
     source: sourceSchema.nullable().default(null),
-    recent: z.array(z.object({ source: sourceSchema, title: z.string().max(300) }).strict()).max(LIMITS.recent).default([]),
+    recent: z.array(recentItemSchema).max(LIMITS.recent).default([]),
+    /** "My boards" in the person's order, the build's boards among them once touched. */
+    boards: z.array(savedBoardSchema).max(LIMITS.boards).default([]),
+    /** The person went through "What are you interested in" (or skipped it). */
+    boardsReady: z.boolean().default(false),
   })
   .strict();
 export type Prefs = z.infer<typeof prefsSchema>;
 
-const recentSchema = z.array(z.object({ source: sourceSchema, title: z.string().max(300) }).strict()).max(LIMITS.recent);
+const recentSchema = z.array(recentItemSchema).max(LIMITS.recent);
 
 /**
  * A change to some of the prefs. Not `prefsSchema.partial()`: zod 4 fills a missing
@@ -58,6 +76,8 @@ export const prefsPatchSchema = z
     people: z.array(personSchema).max(LIMITS.people).optional(),
     source: sourceSchema.nullable().optional(),
     recent: recentSchema.optional(),
+    boards: z.array(savedBoardSchema).max(LIMITS.boards).optional(),
+    boardsReady: z.boolean().optional(),
   })
   .strict();
 export type PrefsInput = z.input<typeof prefsSchema>;
@@ -72,13 +92,14 @@ export const exportSchema = z
     display: displaySchema.optional(),
     templates: z.array(templateSchema).max(LIMITS.templates).optional(),
     people: z.array(personSchema).max(LIMITS.people).optional(),
-    recent: z.array(z.object({ source: sourceSchema, title: z.string().max(300) }).strict()).max(LIMITS.recent).optional(),
+    recent: z.array(recentItemSchema).max(LIMITS.recent).optional(),
+    boards: z.array(savedBoardSchema).max(LIMITS.boards).optional(),
   })
   .strict();
 export type ExportFile = z.infer<typeof exportSchema>;
 
 export function toExport(prefs: Prefs): ExportFile {
-  return { kind: EXPORT_KIND, version: 1, display: prefs.display, templates: prefs.templates, people: prefs.people, recent: prefs.recent };
+  return { kind: EXPORT_KIND, version: 1, display: prefs.display, templates: prefs.templates, people: prefs.people, recent: prefs.recent, boards: prefs.boards };
 }
 
 /** Settings from a file replace the matching parts; the board in view stays. */
@@ -89,9 +110,24 @@ export function fromExport(prefs: Prefs, file: ExportFile): Prefs {
     ...(file.templates ? { templates: file.templates } : {}),
     ...(file.people ? { people: file.people } : {}),
     ...(file.recent ? { recent: file.recent } : {}),
+    ...(file.boards ? { boards: file.boards, boardsReady: true } : {}),
   });
 }
 export type Source = z.infer<typeof sourceSchema>;
+
+/** One id per board source, for comparing and as a React key. */
+export function sourceId(source: Source): string {
+  switch (source.kind) {
+    case "queue":
+      return `queue:${source.queue}`;
+    case "issue":
+      return `issue:${source.key}`;
+    case "query":
+      return `query:${source.query}`;
+    case "mine":
+      return "mine";
+  }
+}
 
 /**
  * What a typed or pasted text opens: an issue key, a queue, a link to an issue (with or

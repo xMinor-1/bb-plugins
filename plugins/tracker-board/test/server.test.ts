@@ -128,16 +128,51 @@ describe("the board", () => {
     expect(view.parents.map((item) => item.key)).toEqual(["PAY-110", "PAY-101"]);
   });
 
+  it("finds queues by name, without archived ones", async () => {
+    const { rpc } = await setup();
+    expect(await rpc("queues", { text: "pay" })).toEqual({ queues: [{ key: "PAY", name: "Payments" }] });
+    expect(await rpc("queues", { text: "p" })).toEqual({ queues: [] });
+  });
+
+  it("suggests the queues and open epics of the person's own tasks", async () => {
+    const { rpc } = await setup();
+    const suggestions = await rpc<{ queues: { key: string; name: string; count: number }[]; epics: { issue: { key: string }; count: number }[] }>("suggestBoards");
+    expect(suggestions.queues[0]).toMatchObject({ key: "PAY", name: "Payments" });
+    expect(suggestions.epics.map((item) => item.issue.key)).toEqual(["PAY-101"]);
+  });
+
+  it("gives the build's shared boards and names a pinned board when it loads", async () => {
+    const { rpc } = await setup({ defaultBoards: "PAY\nOPS-1" });
+    const config = await rpc<{ defaultBoards: unknown; can: { queues: boolean } }>("config");
+    expect(config.defaultBoards).toEqual([{ kind: "queue", queue: "PAY" }, { kind: "issue", key: "OPS-1" }]);
+    expect(config.can.queues).toBe(true);
+    await rpc("setPrefs", { boards: [{ source: { kind: "issue", key: "PAY-101" }, title: "", hidden: false }] });
+    await rpc("board", { source: { kind: "issue", key: "PAY-101" } });
+    const prefs = await rpc<{ boards: { title: string }[] }>("prefs");
+    expect(prefs.boards[0]?.title).toBe("PAY-101 Card payment in the mobile app");
+  });
+
   it("opens one task with comments and remembers recent boards", async () => {
     const { rpc } = await setup();
     const view = await rpc<IssueView>("issue", { key: "PAY-110" });
     expect(view.issue.statusName).toBe("In progress");
     expect(view.comments?.[0]?.text).toContain("callback");
     expect(view.comments?.[0]?.authorName).toBe("Igor Vetrov");
-    await rpc("board", { source: { kind: "queue", queue: "OPS" } });
+    const board = await rpc<BoardView>("board", { source: { kind: "queue", queue: "OPS" } });
+    // A queue board reads by the queue's name, not its key.
+    expect(board.title).toBe("Operations");
     const prefs = await rpc<{ recent: { title: string }[]; source: unknown }>("prefs");
     expect(prefs.source).toEqual({ kind: "queue", queue: "OPS" });
-    expect(prefs.recent[0]?.title).toBe("OPS");
+    expect(prefs.recent[0]?.title).toBe("Operations");
+  });
+
+  it("keeps the type of an issue board's root for its icon in the lists", async () => {
+    const { rpc } = await setup();
+    await rpc("setPrefs", { boards: [{ source: { kind: "issue", key: "PAY-101" }, title: "", hidden: false }] });
+    await rpc("board", { source: { kind: "issue", key: "PAY-101" } });
+    const prefs = await rpc<{ recent: { kind?: string }[]; boards: { kind?: string }[] }>("prefs");
+    expect(prefs.recent[0]?.kind).toBe("epic");
+    expect(prefs.boards[0]?.kind).toBe("epic");
   });
 
   it("saves one part of the prefs without resetting the board in view", async () => {

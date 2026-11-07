@@ -46,6 +46,7 @@ export const flashStore = createStore<ReadonlySet<string>>(new Set());
 /** The key shown in the side panel tab. */
 export const openKeyStore = createStore<string | null>(null);
 export const chatOpenStore = createStore<boolean>(false);
+export const settingsOpenStore = createStore<boolean>(false);
 /** Task pills waiting for the chat's composer to appear. */
 export const pendingPillsStore = createStore<string[]>([]);
 

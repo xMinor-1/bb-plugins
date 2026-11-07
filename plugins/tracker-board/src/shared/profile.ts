@@ -98,6 +98,8 @@ export const profileSchema = z
         components: requestSchema.optional(),
         issueComponents: requestSchema.optional(),
         addComponent: requestSchema.optional(),
+        /** Queues by name or key, {text}: "My boards" finds a queue by what people call it. */
+        queues: requestSchema.optional(),
       })
       .strict(),
     /** Query-language templates for the search request's {query}. */
@@ -133,9 +135,10 @@ export const profileSchema = z
         statuses: pathSchema.default(""),
         comments: pathSchema.default(""),
         components: pathSchema.default(""),
+        queues: pathSchema.default(""),
       })
       .strict()
-      .default({ issues: "", issue: "", created: "", myself: "", user: "", users: "", statuses: "", comments: "", components: "" }),
+      .default({ issues: "", issue: "", created: "", myself: "", user: "", users: "", statuses: "", comments: "", components: "", queues: "" }),
     fields: issueFieldsSchema.default({ key: "key", summary: "summary", type: "type", status: "status" }),
     userFields: z
       .object({ id: pathSchema.default("id"), name: pathSchema.default("display_name|name"), login: pathSchema.optional() })
@@ -159,6 +162,11 @@ export const profileSchema = z
       .object({ id: pathSchema.default("id"), name: pathSchema.default("name") })
       .strict()
       .default({ id: "id", name: "name" }),
+    /** A queue in the queues answer; one whose `archived` path is true is left out. */
+    queueFields: z
+      .object({ key: pathSchema.default("key"), name: pathSchema.default("name"), archived: pathSchema.optional() })
+      .strict()
+      .default({ key: "key", name: "name" }),
     /** Statuses in board order. A status the tracker reports that is not listed goes by its category. */
     statuses: z.array(statusSchema).max(100).default([]),
     /** Which tracker types are epics, stories and bugs; every other type is a task. */

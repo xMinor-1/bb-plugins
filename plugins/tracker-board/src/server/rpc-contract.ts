@@ -29,6 +29,8 @@ export interface ConfigView {
   bundles: Bundle[];
   composition: string[];
   allowQuery: boolean;
+  /** The build's shared boards, on top of "My boards" until the person orders them. */
+  defaultBoards: z.infer<typeof sourceSchema>[];
   can: {
     create: boolean;
     status: boolean;
@@ -42,6 +44,8 @@ export interface ConfigView {
     people: boolean;
     components: boolean;
     mine: boolean;
+    /** Queues can be found by name. */
+    queues: boolean;
   };
   /** Whether any agent may use the tracker tools. */
   agentsAllowed: boolean;
@@ -69,6 +73,17 @@ export interface IssueView {
   children: Issue[] | null;
   /** The issue's parents up to the top. */
   parents: Issue[];
+}
+
+export interface QueueView {
+  key: string;
+  name: string;
+}
+
+/** What "What are you interested in" offers first: from the person's own tasks. */
+export interface Suggestions {
+  queues: (QueueView & { count: number })[];
+  epics: { issue: Issue; count: number }[];
 }
 
 export interface ChatView {
@@ -106,6 +121,8 @@ export const rpcContract = defineRpcContract({
   issue: { input: z.object({ key: z.string().min(1).max(60) }).strict(), output: custom<IssueView>() },
   find: { input: z.object({ text: z.string().max(300) }).strict(), output: custom<{ issues: Issue[] }>() },
   people: { input: z.object({ text: z.string().max(200) }).strict(), output: custom<Person[]>() },
+  queues: { input: z.object({ text: z.string().max(200) }).strict(), output: custom<{ queues: QueueView[] }>() },
+  suggestBoards: { input: z.null(), output: custom<Suggestions>() },
   preview: { input: z.object({ changes }).strict(), output: custom<PlannedChange[]>() },
   apply: {
     input: z.object({ changes, approve: z.array(z.string().max(10)).max(200) }).strict(),

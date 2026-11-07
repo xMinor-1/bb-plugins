@@ -7,6 +7,7 @@ import { boardCards, type Issue, type Person } from "../shared/model";
 import type { Display, Source } from "../shared/prefs";
 import type { rpcContract } from "../server/rpc-contract";
 import { boardColumns, BoardView, ListView } from "./Board";
+import { HeaderStar, InterestStep, needsInterest, SourcePicker, type BoardItem } from "./Boards";
 import { BulkBar, BulkDialog, type BulkRequest } from "./Bulk";
 import { ChatColumn, ChatSplitter } from "./Chat";
 import { messages } from "./messages";
@@ -18,7 +19,6 @@ import {
   boardStore,
   chatOpenStore,
   configStore,
-  createStore,
   errorText,
   failureText,
   flash,
@@ -31,17 +31,16 @@ import {
   reloadBoard,
   savePrefs,
   selectionStore,
+  settingsOpenStore,
   toggleSelected,
   useStore,
   type Rpc,
 } from "./store";
 import { TemplatesDialog } from "./Templates";
-import { applyFilters, NO_FILTERS, SourcePicker, Toolbar, type Filters } from "./Toolbar";
+import { applyFilters, NO_FILTERS, Toolbar, type Filters } from "./Toolbar";
 import { Spinner } from "./ui";
 import { childrenOf, ViewContext, type ViewData } from "./view";
 import { mergeTemplates } from "../shared/templates";
-
-export const settingsOpenStore = createStore<boolean>(false);
 
 let started = false;
 
@@ -77,17 +76,22 @@ export function PageHeader() {
   if (!config || !prefs) return null;
   const view = prefs.display.view;
   const setView = (next: Display["view"]) => void savePrefs(rpc, { display: { ...prefs.display, view: next } });
+  const firstRun = needsInterest(config, prefs);
+  const current: BoardItem | null = board ? { source: board.source, title: board.title, ...(board.root ? { kind: board.root.kind } : {}) } : null;
   return (
     <div className="tb-root tb-ph">
-      {settingsOpen ? null : (
-        <SourcePicker t={t} rpc={rpc} config={config} prefs={prefs} title={board?.title ?? null} root={board?.root ?? null} onPick={(source: Source) => void loadBoard(rpc, source)} />
+      {settingsOpen || firstRun ? null : (
+        <>
+          {current ? <HeaderStar t={t} rpc={rpc} config={config} prefs={prefs} item={current} /> : null}
+          <SourcePicker t={t} rpc={rpc} config={config} prefs={prefs} current={current} onPick={(source: Source) => void loadBoard(rpc, source)} />
+        </>
       )}
       <span className="tb-grow" />
       {settingsOpen ? (
         <button className="tb-btn" type="button" onClick={() => settingsOpenStore.set(false)}>
           {t.toBoard}
         </button>
-      ) : (
+      ) : firstRun ? null : (
         <>
           <div className="tb-seg" role="group" aria-label={t.board}>
             <button type="button" aria-pressed={view === "board"} onClick={() => setView("board")} title={t.board} aria-label={t.board}>
@@ -261,6 +265,10 @@ export function BoardPage() {
   const work = settingsOpen ? (
     <div className="tb-scroll">
       <SettingsView t={t} rpc={rpc} config={config} prefs={prefs} />
+    </div>
+  ) : needsInterest(config, prefs) ? (
+    <div className="tb-scroll">
+      <InterestStep t={t} rpc={rpc} config={config} prefs={prefs} />
     </div>
   ) : (
     <>

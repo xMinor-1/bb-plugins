@@ -1,6 +1,6 @@
 // A popover and a dialog in the board's own style. Plugin CSS is global to the bb
 // page, so every class carries the tb- prefix.
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 
 export function useOutside(open: boolean, onClose: () => void) {
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -39,10 +39,30 @@ export function Popover({
   place?: "below-start" | "below-end" | "above-start";
 }) {
   const ref = useOutside(open, onClose);
+  const pop = useRef<HTMLDivElement | null>(null);
+  // The board list sits in the right half of bb's title bar: keep a popup inside the window.
+  useLayoutEffect(() => {
+    const el = pop.current;
+    if (!open || !el) return;
+    const fit = () => {
+      el.style.translate = "";
+      const box = el.getBoundingClientRect();
+      const room = document.documentElement.clientWidth - 8;
+      const shift = box.right > room ? Math.max(8 - box.left, room - box.right) : box.left < 8 ? 8 - box.left : 0;
+      if (shift) el.style.translate = `${Math.round(shift)}px 0`;
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [open]);
   return (
     <span className="tb-popwrap" ref={ref}>
       {trigger}
-      {open ? <div className={`tb-pop tb-pop-${place}${className ? ` ${className}` : ""}`}>{children}</div> : null}
+      {open ? (
+        <div ref={pop} className={`tb-pop tb-pop-${place}${className ? ` ${className}` : ""}`}>
+          {children}
+        </div>
+      ) : null}
     </span>
   );
 }

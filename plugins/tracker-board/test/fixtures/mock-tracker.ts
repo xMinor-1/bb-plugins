@@ -267,6 +267,15 @@ export function startMockTracker(port = 0): Promise<{ url: string; state: MockSt
         return send(res, 201, { data: {} });
       }
     }
+    if (req.method === "GET" && p === "/queues") {
+      const q = (url.searchParams.get("search") ?? "").toLowerCase();
+      const queues = [
+        { key: "PAY", name: "Payments", is_archived: false },
+        { key: "OPS", name: "Operations", is_archived: false },
+        { key: "OLDPAY", name: "Payments (old)", is_archived: true },
+      ];
+      return send(res, 200, { data: { queues: queues.filter((queue) => queue.key.toLowerCase().includes(q) || queue.name.toLowerCase().includes(q)) } });
+    }
     if (req.method === "GET" && p === "/components") {
       const queue = url.searchParams.get("queue_key") ?? "";
       return send(res, 200, { data: { components: (state.components.get(queue) ?? []).map((name, index) => ({ id: `comp-${index}`, name })) } });
@@ -307,6 +316,7 @@ export const MOCK_PROFILE = {
     comments: { method: "GET", path: "/issues/{key}/comments" },
     addComment: { method: "POST", path: "/issues/{key}/comments", body: { content: "{text}" } },
     users: { method: "GET", path: "/users", query: { search: "{text}" } },
+    queues: { method: "GET", path: "/queues", query: { search: "{text}", limit: "20" } },
     user: { method: "GET", path: "/users/{id}" },
     statuses: { method: "GET", path: "/statuses", query: { limit: "1000" } },
     components: { method: "GET", path: "/components", query: { queue_key: "{queue}", limit: "1000" } },
@@ -314,7 +324,8 @@ export const MOCK_PROFILE = {
   },
   queries: { queue: "queue = {queue}", text: 'summary ~ "{text}"', mine: "assignee = me()" },
   paging: { limit: 100, mode: "offset" },
-  responses: { issues: "issues", total: "total", issue: "issue", created: "issue", myself: "account", user: "user", users: "users", statuses: "statuses", comments: "comments", components: "components" },
+  responses: { issues: "issues", total: "total", issue: "issue", created: "issue", myself: "account", user: "user", users: "users", statuses: "statuses", comments: "comments", components: "components", queues: "queues" },
+  queueFields: { key: "key", name: "name", archived: "is_archived" },
   fields: {
     key: "key",
     id: "id",

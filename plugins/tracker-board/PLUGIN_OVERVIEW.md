@@ -6,16 +6,19 @@ you confirm.
 
 - A board and a list in the sidebar: a queue, or an epic or a story with everything
   under it. Columns by status, rows by story or by person, drag to change status.
+- My boards: the boards you switch between, pinned with a star and in your order,
+  with shared boards from your team's setup. Find a queue by name, an epic by its
+  title, or paste a link.
 - Cards you set up yourself: which fields they show and how many lines of
-  description. A story's card shows which of its template tasks exist and which are
-  missing.
+  description. The epic is a coloured tag; a story's card has one row of done-of-total
+  cells by role, however many tasks the story has.
 - A task opens in bb's side panel: status, assignee, priority, description, child
   tasks, comments and labels.
 - Templates that create the usual child tasks of an epic or a story in one go, with
   labels for the current quarter. Your own templates sit on top of the shared ones.
 - Bulk edits of status, assignee, labels and parent with a preview of what changes and
   what is skipped.
-- One chat next to the board. Select tasks, press "To chat", say what to do: the agent
+- One chat beside the board or below it. Select tasks, press "To chat", say what to do: the agent
   proposes, a form above the composer lists each change, and only what you approve
   is applied.
 - Export and import of your settings as JSON. English and Russian interface.

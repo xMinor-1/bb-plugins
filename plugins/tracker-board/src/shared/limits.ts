@@ -20,4 +20,6 @@ export const LIMITS = {
   templates: 100,
   people: 200,
   recent: 12,
+  /** Boards one person keeps under "My boards", the build's included. */
+  boards: 30,
 } as const;
