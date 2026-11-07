@@ -1,6 +1,6 @@
 // Small pieces every view uses: icons, the type tile, status dots, avatars.
 import type { ReactNode } from "react";
-import type { Issue, Kind } from "../shared/model";
+import { ancestors, splitPrefix, type Issue, type Kind } from "../shared/model";
 import type { StatusView } from "../server/rpc-contract";
 import type { Messages } from "./messages";
 
@@ -147,4 +147,61 @@ export function isLate(issue: Issue, today: string): boolean {
 export function todayText(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+const EPIC_HUES = [250, 25, 145, 300, 200, 60, 330, 95];
+
+/** A colour that stays with an epic: from its key, so every board and card agree. */
+export function epicHue(key: string): number {
+  let hash = 2166136261;
+  for (const char of key) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return EPIC_HUES[hash % EPIC_HUES.length]!;
+}
+
+export function EpicTag({ epic, t, onOpen }: { epic: Issue; t: Messages; onOpen: (key: string) => void }) {
+  const title = splitPrefix(epic.summary).rest;
+  return (
+    <button
+      className="tb-etag"
+      type="button"
+      style={{ ["--tb-eh" as string]: `oklch(62% 0.14 ${epicHue(epic.key)})` }}
+      title={t.epicTag(epic.key, title)}
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen(epic.key);
+      }}
+    >
+      <span>{title}</span>
+    </button>
+  );
+}
+
+/** Epic › story › …: every parent with its title, each opens on click. */
+export function ParentPath({ issue, byKey, t, onOpen }: { issue: Issue; byKey: ReadonlyMap<string, Issue>; t: Messages; onOpen: (key: string) => void }) {
+  const up = ancestors(issue, byKey);
+  if (up.length === 0) return issue.parent ? <span className="tb-key">{issue.parent}</span> : null;
+  return (
+    <span className="tb-chain">
+      {up.map((parent, index) => (
+        <span key={parent.key} className="tb-chain-i">
+          {index > 0 ? <span className="tb-chs">›</span> : null}
+          <button
+            className="tb-chn"
+            type="button"
+            title={`${parent.key} ${parent.summary}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpen(parent.key);
+            }}
+          >
+            <TypeTile kind={parent.kind} t={t} small />
+            <span>{splitPrefix(parent.summary).rest}</span>
+          </button>
+        </span>
+      ))}
+    </span>
+  );
 }

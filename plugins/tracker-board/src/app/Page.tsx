@@ -233,6 +233,7 @@ export function BoardPage() {
       statuses: board.statuses,
       colors: statusColors(board.statuses),
       byKey,
+      chain: new Map([...board.parents, ...board.issues].map((issue) => [issue.key, issue])),
       children,
       templates,
       parts,

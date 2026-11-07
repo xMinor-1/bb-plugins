@@ -18,6 +18,8 @@ export interface ViewData {
   statuses: StatusView[];
   colors: Map<string, string>;
   byKey: Map<string, Issue>;
+  /** The board's issues and their parents loaded from elsewhere: for paths and epic tags. */
+  chain: Map<string, Issue>;
   children: Map<string, Issue[]>;
   templates: Template[];
   /** Templates whose tiles a story card shows. */
@@ -54,17 +56,29 @@ export function childrenOf(issues: readonly Issue[]): Map<string, Issue[]> {
   return out;
 }
 
-/** A story's parts by template: which exist (and in what status) and which are missing. */
+export interface RoleCount {
+  done: number;
+  total: number;
+  issues: Issue[];
+}
+
+/**
+ * A story's tasks counted by template part (by title prefix: every [BE] task counts for
+ * BE), and everything else together. A part with no task is missing.
+ */
 export function composition(story: Issue, view: Pick<ViewData, "children" | "parts">) {
   const kids = view.children.get(story.key) ?? [];
-  const byPrefix = new Map<string, Issue>();
+  const count = (issues: Issue[]): RoleCount => ({ done: issues.filter((issue) => issue.category === "done").length, total: issues.length, issues });
+  const byPrefix = new Map<string, Issue[]>();
   for (const kid of kids) {
-    const { prefix } = splitPrefix(kid.summary);
-    if (prefix && !byPrefix.has(prefix.toLowerCase())) byPrefix.set(prefix.toLowerCase(), kid);
+    const prefix = splitPrefix(kid.summary).prefix.toLowerCase();
+    if (!prefix) continue;
+    const list = byPrefix.get(prefix) ?? [];
+    list.push(kid);
+    byPrefix.set(prefix, list);
   }
-  const parts = view.parts.map((template) => ({ template, issue: byPrefix.get(prefixId(template).toLowerCase()) ?? null }));
-  const used = new Set(parts.map((part) => part.issue?.key).filter((key): key is string => Boolean(key)));
-  const extra = kids.filter((kid) => !used.has(kid.key));
-  const done = kids.filter((kid) => kid.category === "done").length;
-  return { parts, extra, done, total: kids.length, missing: parts.filter((part) => !part.issue).map((part) => part.template) };
+  const parts = view.parts.map((template) => ({ template, ...count(byPrefix.get(prefixId(template).toLowerCase()) ?? []) }));
+  const used = new Set(parts.flatMap((part) => part.issues.map((issue) => issue.key)));
+  const other = count(kids.filter((kid) => !used.has(kid.key)));
+  return { parts, other, done: count(kids).done, total: kids.length, missing: parts.filter((part) => part.total === 0).map((part) => part.template) };
 }

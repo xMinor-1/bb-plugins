@@ -110,6 +110,24 @@ describe("the board", () => {
     expect(searches).toContain("parent in (PAY-120)");
   });
 
+  it("loads the parents a board does not hold, by keys in one search", async () => {
+    const { rpc } = await setup({ apiProfile: JSON.stringify({ ...MOCK_PROFILE, queries: { ...MOCK_PROFILE.queries, keys: "key in ({keys})" } }) });
+    const board = await rpc<BoardView>("board", { source: { kind: "mine" } });
+    // PAY-131 is mine; its story PAY-130 is nobody's, so only the parents list has it.
+    expect(board.issues.map((item) => item.key)).not.toContain("PAY-130");
+    expect(board.parents.map((item) => item.key)).toEqual(["PAY-130"]);
+    const searches = mock.state.requests.filter((request) => request.path.endsWith("/issues/_search")).map((request) => (request.body as { query: string }).query);
+    expect(searches).toContain("key in (PAY-130)");
+  });
+
+  it("reads parents one by one without a keys query, and up to the top for one issue", async () => {
+    const { rpc } = await setup();
+    const board = await rpc<BoardView>("board", { source: { kind: "mine" } });
+    expect(board.parents.map((item) => item.key)).toEqual(["PAY-130"]);
+    const view = await rpc<IssueView>("issue", { key: "PAY-112" });
+    expect(view.parents.map((item) => item.key)).toEqual(["PAY-110", "PAY-101"]);
+  });
+
   it("opens one task with comments and remembers recent boards", async () => {
     const { rpc } = await setup();
     const view = await rpc<IssueView>("issue", { key: "PAY-110" });

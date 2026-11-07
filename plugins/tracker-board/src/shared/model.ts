@@ -163,6 +163,24 @@ export function boardCards(issues: readonly Issue[], rootKey: string | null): Is
   return issues.filter((issue) => issue.key !== rootKey);
 }
 
+/**
+ * The nearest epic above an issue: the epic, null when the path ends without one, or
+ * undefined when a parent on the way is not known (not loaded), so nothing can be said.
+ */
+export function epicAbove(issue: Issue, byKey: ReadonlyMap<string, Issue>): Issue | null | undefined {
+  const seen = new Set([issue.key]);
+  let key = issue.parent;
+  while (key) {
+    if (seen.has(key) || seen.size > 20) return undefined;
+    seen.add(key);
+    const next = byKey.get(key);
+    if (!next) return undefined;
+    if (next.kind === "epic") return next;
+    key = next.parent;
+  }
+  return null;
+}
+
 /** The chain of parents above an issue, nearest last, within the given set. */
 export function ancestors(issue: Issue, byKey: ReadonlyMap<string, Issue>): Issue[] {
   const out: Issue[] = [];

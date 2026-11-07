@@ -842,34 +842,48 @@
   border: 1px solid var(--tb-line);
 }
 .tb-comp-row {
-  display: flex;
+  display: grid;
   gap: 3px;
   min-width: 0;
   overflow: hidden;
 }
 .tb-tile {
-  flex: 1 1 0;
   min-width: 0;
-  height: 21px;
-  border-radius: 5px;
-  display: grid;
-  place-items: center;
-  font-size: 10.5px;
-  font-weight: 600;
+  height: 32px;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  line-height: 1.05;
   color: #fff;
   overflow: hidden;
+  white-space: nowrap;
 }
-.tb-tile-miss {
-  background: transparent !important;
+.tb-tile b {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.tb-tile i {
+  font-style: normal;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.tb-tile-done {
+  background: var(--tb-st-done);
+}
+.tb-tile-work {
+  background: var(--tb-st-dev);
+}
+.tb-tile-none {
   color: var(--tb-faint);
   border: 1.5px dashed var(--tb-line-strong);
 }
-.tb-tile-extra {
-  flex: 0 0 auto;
-  min-width: 26px;
-  padding: 0 5px;
-  background: var(--tb-hover);
-  color: var(--tb-muted);
+.tb-tile-other.tb-tile-work {
+  background: var(--tb-line-strong);
+  color: var(--tb-fg);
 }
 .tb-comp-cap {
   display: flex;
@@ -1637,4 +1651,94 @@
   border: 1px solid var(--tb-line);
   border-radius: 999px;
   padding: 2px 10px 2px 2px;
+}
+
+/* The epic of a card: a tag in the epic's own colour. */
+.tb-c-epic {
+  display: flex;
+  min-width: 0;
+  margin: -1px 0 -2px;
+}
+.tb-etag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  padding: 1px 7px 1px 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--tb-fg);
+  background: color-mix(in oklch, var(--tb-eh) 16%, var(--tb-card));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--tb-eh) 34%, transparent);
+  cursor: pointer;
+}
+.tb-etag::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--tb-eh);
+  flex: none;
+}
+.tb-etag span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tb-etag:hover {
+  background: color-mix(in oklch, var(--tb-eh) 26%, var(--tb-card));
+}
+.tb-noepic {
+  font-size: 12px;
+  color: var(--tb-faint);
+}
+/* Epic › story with titles, in the list's parent column. */
+.tb-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px 3px;
+  min-width: 0;
+  max-width: 340px;
+  font-size: 12px;
+  color: var(--tb-muted);
+}
+.tb-chain-i {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
+}
+.tb-chn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  padding: 1px 4px;
+  border-radius: 5px;
+  color: inherit;
+  min-width: 0;
+  max-width: 100%;
+  cursor: pointer;
+}
+.tb-chn span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.tb-chn:hover {
+  color: var(--tb-fg);
+  background: var(--tb-hover);
+}
+.tb-chs {
+  color: var(--tb-faint);
+  flex: none;
 }

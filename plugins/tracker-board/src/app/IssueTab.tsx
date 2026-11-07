@@ -75,7 +75,7 @@ export function IssueTab({ params }: { params: unknown }) {
   const statuses = board?.statuses ?? config.statuses;
   const colors = statusColors(statuses);
   const statusName = (status: string) => statuses.find((item) => item.key === status)?.name ?? status;
-  const byKey = new Map((board?.issues ?? []).map((item) => [item.key, item]));
+  const byKey = new Map([...(board?.parents ?? []), ...(view.parents ?? []), ...(board?.issues ?? [])].map((item) => [item.key, item]));
   const chain = ancestors(issue, byKey);
   const kids: Issue[] = view.children ?? (board?.issues ?? []).filter((item) => item.parent === issue.key);
   const templates = config.templates;
@@ -338,7 +338,16 @@ export function IssueTab({ params }: { params: unknown }) {
               </>
             ) : null}
             <dt>{t.parent}</dt>
-            <dd>{issue.parent ? <button className="tb-addl tb-addl-solid" type="button" onClick={() => openIssueTab(issue.parent!)}>{issue.parent}</button> : <span className="tb-hint">{t.none}</span>}</dd>
+            <dd>
+              {issue.parent ? (
+                <button className="tb-addl tb-addl-solid" type="button" onClick={() => openIssueTab(issue.parent!)}>
+                  {issue.parent}
+                  {byKey.get(issue.parent) ? ` ${splitPrefix(byKey.get(issue.parent)!.summary).rest}` : ""}
+                </button>
+              ) : (
+                <span className="tb-hint">{t.none}</span>
+              )}
+            </dd>
             {issue.due ? (
               <>
                 <dt>{t.due}</dt>

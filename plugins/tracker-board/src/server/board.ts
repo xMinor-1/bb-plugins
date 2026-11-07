@@ -1,6 +1,7 @@
 // What a board shows: a queue, a query, or one issue with everything nested under it.
 import { LIMITS } from "../shared/limits";
 import type { Issue } from "../shared/model";
+import { mapLimit } from "./engine";
 import type { Tracker } from "./tracker";
 
 export type { Source } from "../shared/prefs";
@@ -63,6 +64,57 @@ export function descendants(rootKey: string, pool: readonly Issue[]): Issue[] {
 
 const CHILD_BATCH = 40;
 const MAX_DEPTH = 5;
+const PARENT_BATCH = 40;
+/** Parents read one by one when the profile cannot ask for several keys at once. */
+const PARENT_SINGLE_MAX = 60;
+const PARENT_CONCURRENCY = 4;
+export const MAX_PARENTS = 200;
+
+function missingParents(issues: readonly Issue[], known: ReadonlyMap<string, Issue>): string[] {
+  return [...new Set(issues.map((issue) => issue.parent).filter((key): key is string => Boolean(key) && !known.has(key!)))];
+}
+
+async function readByKeys(tracker: Tracker, keys: readonly string[]): Promise<Issue[]> {
+  const query = tracker.profile.queries.keys;
+  if (query) {
+    const out: Issue[] = [];
+    for (let i = 0; i < keys.length; i += PARENT_BATCH) {
+      const batch = keys.slice(i, i + PARENT_BATCH);
+      const page = await tracker.search(fill(query, { keys: batch.join(", "), key: batch[0]! }), batch.length);
+      out.push(...page.issues);
+    }
+    return out;
+  }
+  const single = keys.slice(0, PARENT_SINGLE_MAX);
+  const found = await mapLimit(single, PARENT_CONCURRENCY, (key) => tracker.issue(key).catch(() => null));
+  return found.filter((issue): issue is Issue => issue !== null);
+}
+
+/**
+ * The parents above `issues` that `issues` do not hold, level by level up to the top:
+ * a task on "assigned to me" shows its story and epic though both live on other boards.
+ * Best effort: whatever fails to load is left out, the board itself stays.
+ */
+export async function loadParents(tracker: Tracker, issues: readonly Issue[], max: number = MAX_PARENTS): Promise<Issue[]> {
+  const known = new Map(issues.map((issue) => [issue.key, issue]));
+  const out: Issue[] = [];
+  let wanted = missingParents(issues, known);
+  for (let depth = 0; depth < MAX_DEPTH && wanted.length > 0 && out.length < max; depth += 1) {
+    let found: Issue[];
+    try {
+      found = await readByKeys(tracker, wanted.slice(0, max - out.length));
+    } catch {
+      break;
+    }
+    const fresh = found.filter((issue) => !known.has(issue.key));
+    for (const issue of fresh) {
+      known.set(issue.key, issue);
+      out.push(issue);
+    }
+    wanted = missingParents(fresh, known);
+  }
+  return out;
+}
 
 export async function loadBoard(tracker: Tracker, source: Source, max: number = LIMITS.boardIssues): Promise<Board> {
   const queries = tracker.profile.queries;

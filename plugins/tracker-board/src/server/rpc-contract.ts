@@ -52,6 +52,8 @@ export interface BoardView {
   title: string;
   root: Issue | null;
   issues: Issue[];
+  /** Parents of the board's issues that live elsewhere: for paths and epic tags, not cards. */
+  parents: Issue[];
   truncated: boolean;
   loadedAt: number;
   statuses: StatusView[];
@@ -65,6 +67,8 @@ export interface IssueView {
   components: string[] | null;
   /** Direct children, when the tracker can list them by parent. */
   children: Issue[] | null;
+  /** The issue's parents up to the top. */
+  parents: Issue[];
 }
 
 export interface ChatView {

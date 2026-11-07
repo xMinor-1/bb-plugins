@@ -115,7 +115,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   return text ? JSON.parse(text) : null;
 }
 
-/** `queue = PAY`, `key = PAY-1`, `parent in (A, B)`, `assignee = me()`, `summary ~ "text"`, joined by AND. */
+/** `queue = PAY`, `key = PAY-1`, `key in (A, B)`, `parent in (A, B)`, `assignee = me()`, `summary ~ "text"`, joined by AND. */
 function matches(issue: MockIssue, query: string, me: string): boolean {
   return query
     .split(/\s+AND\s+/i)
@@ -126,6 +126,8 @@ function matches(issue: MockIssue, query: string, me: string): boolean {
       if (m) return issue.queue_key === m[1];
       m = /^key\s*=\s*(\S+)$/i.exec(part);
       if (m) return issue.key === m[1];
+      m = /^key\s+in\s*\(([^)]*)\)$/i.exec(part);
+      if (m) return m[1]!.split(",").map((key) => key.trim()).includes(issue.key);
       m = /^parent\s+in\s*\(([^)]*)\)$/i.exec(part);
       if (m) return m[1]!.split(",").map((key) => key.trim()).includes(issue.parent_key ?? "");
       m = /^assignee\s*=\s*me\(\)$/i.exec(part);

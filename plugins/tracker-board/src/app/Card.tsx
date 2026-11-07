@@ -1,7 +1,8 @@
-import { splitPrefix, type Issue } from "../shared/model";
+import { epicAbove, type Issue } from "../shared/model";
 import { templateOfIssue } from "../shared/templates";
-import { Avatar, formatDate, Icons, isLate, Priority, TitleText, TypeTile } from "./parts";
-import { composition, useView } from "./view";
+import { Avatar, EpicTag, formatDate, Icons, isLate, Priority, TitleText, TypeTile } from "./parts";
+import type { Messages } from "./messages";
+import { composition, useView, type RoleCount } from "./view";
 
 function plain(text: string | null): string {
   if (!text) return "";
@@ -18,14 +19,31 @@ function plain(text: string | null): string {
   return out.replace(/[#*_`>|~]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
 }
 
-const EXTRA_LISTED = 12;
+const LISTED = 12;
 
-function extraTitle(t: ReturnType<typeof useView>["t"], extra: readonly Issue[], statusName: (key: string) => string): string {
-  const lines = extra.slice(0, EXTRA_LISTED).map((issue) => `${issue.key} ${issue.summary}: ${statusName(issue.status)}`);
-  if (extra.length > EXTRA_LISTED) lines.push(t.andMore(extra.length - EXTRA_LISTED));
-  return [t.otherTasks(extra.length), ...lines].join("\n");
+/** A cell's hover text: the counts in words, then the tasks themselves. */
+function cellTitle(head: string, count: RoleCount, statusName: (key: string) => string, t: Messages): string {
+  const lines = count.issues.slice(0, LISTED).map((issue) => `${issue.key} ${issue.summary}: ${statusName(issue.status)}`);
+  if (count.issues.length > LISTED) lines.push(t.andMore(count.issues.length - LISTED));
+  return [head, ...lines].join("\n");
 }
 
+function RoleCell({ label, count, head, other }: { label: string; count: RoleCount; head: string; other?: boolean }) {
+  const view = useView();
+  const state = count.total === 0 ? "none" : count.done === count.total ? "done" : "work";
+  return (
+    <span className={`tb-tile tb-tile-${state}${other ? " tb-tile-other" : ""}`} title={cellTitle(head, count, view.statusName, view.t)}>
+      <b>{label}</b>
+      <i>{count.total > 0 ? `${count.done}/${count.total}` : "–"}</i>
+    </span>
+  );
+}
+
+/**
+ * A story's composition: one cell per template part and one for the rest, each with
+ * done of total. The row has a fixed number of cells, so every card keeps its size
+ * however many tasks a story has.
+ */
 export function Composition({ story }: { story: Issue }) {
   const view = useView();
   const { t } = view;
@@ -33,29 +51,14 @@ export function Composition({ story }: { story: Issue }) {
   if (c.parts.length === 0 && c.total === 0) return null;
   return (
     <div className="tb-comp">
-      <div className="tb-comp-row">
-        {c.parts.map(({ template, issue }) =>
-          issue ? (
-            <span key={template.id} className="tb-tile" style={{ background: view.colors.get(issue.status) }} title={`${issue.key} ${template.title}: ${view.statusName(issue.status)}`}>
-              {template.id}
-            </span>
-          ) : (
-            <span key={template.id} className="tb-tile tb-tile-miss" title={t.noTaskYet(template.title)}>
-              {template.id}
-            </span>
-          ),
-        )}
-        {c.extra.length > 0 ? (
-          // Every task outside the template parts shares one cell: a story with dozens of tasks
-          // keeps the card's width (one tile per task ran past the card's right edge).
-          <span className="tb-tile tb-tile-extra" title={extraTitle(t, c.extra, view.statusName)}>
-            +{c.extra.length}
-          </span>
-        ) : null}
+      <div className="tb-comp-row" style={{ gridTemplateColumns: `repeat(${c.parts.length}, minmax(0, 1fr)) minmax(0, 1.45fr)` }}>
+        {c.parts.map((part) => (
+          <RoleCell key={part.template.id} label={part.template.id} count={part} head={part.total > 0 ? t.roleDone(part.template.title, part.done, part.total) : t.noTaskYet(part.template.title)} />
+        ))}
+        <RoleCell label={t.otherShort} count={c.other} head={c.other.total > 0 ? t.roleDone(t.otherTasksTitle, c.other.done, c.other.total) : t.noOtherTasks} other />
       </div>
       <div className="tb-comp-cap">
         <span>{t.doneOf(c.done, c.total)}</span>
-        {c.missing.length > 0 ? <span>{t.missing(c.missing.length)}</span> : null}
       </div>
     </div>
   );
@@ -80,9 +83,9 @@ export function Card({ issue }: { issue: Issue }) {
   const { t, display } = view;
   const has = (field: (typeof display.fields)[number]) => display.fields.includes(field);
   const selected = view.selection.has(issue.key);
-  const parent = issue.parent ? view.byKey.get(issue.parent) : undefined;
+  // On a card only the epic, as a tag; the full path is in the issue panel and the list.
+  const epic = has("parent") && issue.kind !== "epic" ? epicAbove(issue, view.chain) : undefined;
   const late = isLate(issue, view.today);
-  const showParent = has("parent") && parent && !(display.group === "story" && parent.kind === "story");
   const labels = has("labels") ? issue.labels : [];
   const template = has("components") ? templateOfIssue(issue, view.templates) : null;
   const components = has("components") ? (issue.components.length > 0 ? issue.components : template?.components ?? []) : [];
@@ -132,6 +135,13 @@ export function Card({ issue }: { issue: Issue }) {
         <span className="tb-grow" />
         {has("priority") ? <Priority value={issue.priority} name={view.priorityName(issue.priority)} t={t} /> : null}
       </div>
+      {epic && epic.key !== view.board.root?.key ? (
+        <div className="tb-c-epic">
+          <EpicTag epic={epic} t={t} onOpen={view.open} />
+        </div>
+      ) : epic === null ? (
+        <div className="tb-c-epic tb-noepic">{t.noEpic}</div>
+      ) : null}
       <div className="tb-c-title">
         <TitleText issue={issue} />
       </div>
@@ -152,15 +162,9 @@ export function Card({ issue }: { issue: Issue }) {
           ))}
         </div>
       ) : null}
-      {showParent || (has("due") && issue.due) || has("assignee") ? (
+      {(has("due") && issue.due) || has("assignee") ? (
         <div className="tb-c-meta">
-          {showParent && parent ? (
-            <span className="tb-parent tb-grow" title={`${t.parentLabel}: ${parent.key} ${parent.summary}`}>
-              ↑ {parent.key} {splitPrefix(parent.summary).rest}
-            </span>
-          ) : (
-            <span className="tb-grow" />
-          )}
+          <span className="tb-grow" />
           {has("due") && issue.due ? (
             <span className={`tb-due${late ? " tb-late" : ""}`} title={t.due}>
               {late ? t.overdue : ""}

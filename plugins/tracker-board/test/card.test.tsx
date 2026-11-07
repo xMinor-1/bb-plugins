@@ -1,5 +1,5 @@
 // A story card's composition row: one cell per template part and one for everything else,
-// however many tasks the story has.
+// each with done of total, however many tasks the story has.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -35,12 +35,17 @@ describe("story composition on a card", () => {
     const html = render(story, kids);
     const tiles = html.match(/class="tb-tile[ "]/g) ?? [];
     expect(tiles.length).toBe(parts.length + 1);
-    expect(html).toContain(">+34<");
+    // Every [BE] task counts for BE (10 of 12 done), the rest for "other" (18 of 23).
+    expect(html).toContain("<b>BE</b><i>10/12</i>");
+    expect(html).toContain("<b>other</b><i>18/23</i>");
     expect(html).toContain("Done 28 of 35");
   });
 
-  it("shows no extra cell when every task is a part", () => {
-    const html = render(story, [kid(1, "[D] Saved cards"), kid(2, "[BE] Saved cards")]);
-    expect(html).not.toContain("tb-tile-extra");
+  it("marks each cell by state: all done, in work, no tasks", () => {
+    const html = render(story, [kid(1, "[D] Saved cards", "done"), kid(2, "[BE] Saved cards"), kid(3, "[BE] Saved cards API", "done")]);
+    expect(html).toMatch(/tb-tile-done"[^>]*><b>D<\/b><i>1\/1/);
+    expect(html).toMatch(/tb-tile-work"[^>]*><b>BE<\/b><i>1\/2/);
+    expect(html).toMatch(/tb-tile-none"[^>]*><b>QA<\/b><i>–/);
+    expect(html).toMatch(/tb-tile-none tb-tile-other"[^>]*><b>other<\/b>/);
   });
 });

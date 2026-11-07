@@ -19,7 +19,7 @@
 import { experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { hostContract, type FailureCode, type KeyStatus } from "./contract";
-import { loadBoard, parseSource, sourceKey, type Board, type Source } from "./src/server/board";
+import { loadBoard, loadParents, parseSource, sourceKey, type Board, type Source } from "./src/server/board";
 import { apply, describe, mapLimit, plan } from "./src/server/engine";
 import { rpcContract, type BoardView, type ConfigView, type IssueView, type StatusView } from "./src/server/rpc-contract";
 import { Tracker, TrackerError, type StatusInfo } from "./src/server/tracker";
@@ -855,6 +855,7 @@ export default async function plugin(bb: BbPluginApi) {
       const tracker = await trackerOn(hostId);
       const statuses = await statusesOn(hostId);
       const board: Board = await loadBoard(tracker, source);
+      const parents = await loadParents(tracker, board.issues);
       await nameIssues(tracker, board.issues);
       const me = await meOn(hostId, tracker);
       const title = sourceTitle(source, board.root);
@@ -868,6 +869,7 @@ export default async function plugin(bb: BbPluginApi) {
         title,
         root: board.root,
         issues: board.issues,
+        parents,
         truncated: board.truncated,
         loadedAt: Date.now(),
         statuses: statusViews(statuses, board.issues),
@@ -880,12 +882,13 @@ export default async function plugin(bb: BbPluginApi) {
       const hostId = await panelHost();
       const tracker = await trackerOn(hostId);
       const issue = await tracker.issue(key.toUpperCase());
-      const [comments, components, children] = await Promise.all([
+      const [comments, components, children, parents] = await Promise.all([
         tracker.has("comments") ? tracker.comments(issue).catch(() => null) : Promise.resolve(null),
         tracker.has("issueComponents") ? tracker.components(issue).catch(() => null) : Promise.resolve(null),
         config.profile?.queries.children
           ? tracker.search(config.profile.queries.children.replaceAll("{keys}", issue.key).replaceAll("{key}", issue.key), 200).then((page) => page.issues.filter((child) => child.parent === issue.key || !child.parent), () => null)
           : Promise.resolve(null),
+        loadParents(tracker, [issue]),
       ]);
       const named = [issue, ...(children ?? [])];
       await nameIssues(tracker, named);
@@ -893,7 +896,7 @@ export default async function plugin(bb: BbPluginApi) {
         await resolveNames(tracker, comments.map((comment) => (comment.authorName ? null : comment.author)));
         for (const comment of comments) if (comment.author && !comment.authorName) comment.authorName = names.get(comment.author)?.name ?? null;
       }
-      const view: IssueView = { issue, comments, components, children };
+      const view: IssueView = { issue, comments, components, children, parents };
       return view;
     },
     find: async ({ text }) => {

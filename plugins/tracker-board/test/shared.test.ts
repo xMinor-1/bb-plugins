@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { parseSource } from "../src/server/board";
 import { fillJson, fillPath, fillQuery, getPath, scalar } from "../src/shared/json-path";
-import { boardCards, findKey, issueFrom, splitPrefix } from "../src/shared/model";
+import { boardCards, epicAbove, findKey, issueFrom, splitPrefix } from "../src/shared/model";
 import { categoryOf, normalizeBaseUrl, parseProfile } from "../src/shared/profile";
 import { childTitle, expandLabel, mergeTemplates, parseTemplates, planRows } from "../src/shared/templates";
 import { MOCK_PROFILE, MOCK_TEMPLATES } from "./fixtures/mock-tracker";
@@ -101,6 +101,20 @@ describe("issues", () => {
     ];
     expect(boardCards(issues, null).map((issue) => issue.key)).toEqual(["PAY-101", "PAY-130", "PAY-120"]);
     expect(boardCards(issues, "PAY-101").map((issue) => issue.key)).toEqual(["PAY-130", "PAY-120"]);
+  });
+
+  it("finds the epic above an issue, or says there is none, or that it cannot tell", () => {
+    const make = (key: string, type: string, parent: string | null) => issueFrom({ key, summary: key, type, status: "open", parent_key: parent }, profile)!;
+    const epic = make("PAY-101", "epic", null);
+    const story = make("PAY-120", "story", "PAY-101");
+    const task = make("PAY-121", "task", "PAY-120");
+    const loose = make("PAY-9", "task", null);
+    const lost = make("PAY-122", "task", "PAY-999");
+    const byKey = new Map([epic, story, task, loose, lost].map((issue) => [issue.key, issue]));
+    expect(epicAbove(task, byKey)?.key).toBe("PAY-101");
+    expect(epicAbove(story, byKey)?.key).toBe("PAY-101");
+    expect(epicAbove(loose, byKey)).toBeNull();
+    expect(epicAbove(lost, byKey)).toBeUndefined();
   });
 
   it("finds keys and prefixes", () => {
