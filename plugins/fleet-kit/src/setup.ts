@@ -11,8 +11,9 @@
 // through Fleet Kit: the person types them in the plugin's own form.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import type { Setup, SetupMark, SetupStep, SyncReport } from "../contract.js";
+import type { BranchSetup, Setup, SetupMark, SetupStep, SyncReport } from "../contract.js";
 import type { OnboardingStep } from "./manifest.js";
+import { branchDefault, chosenBranch, noBranchState, picked, pluginWanted, type Branches, type BranchState } from "./branches.js";
 
 type Sdk = BbPluginApi["sdk"];
 
@@ -21,6 +22,8 @@ export interface StoredOnboarding {
   steps: OnboardingStep[];
   /** Plugins the manifest lists as planned: their steps wait for them. */
   planned: string[];
+  /** The build's branches; absent when it has none (or was saved by an older Fleet Kit). */
+  branches?: Branches | null;
 }
 
 export const SETUP_METHOD = "setupStatus";
@@ -157,6 +160,33 @@ export interface SetupDeps {
   secretStore: string;
   lastSync: SyncReport | null;
   lang: "en" | "ru";
+  /** The person's choice and what the sync applied; known from the start of the first sync. */
+  branchState?: BranchState;
+}
+
+/** The branch part of the page: what the build offers and what this machine gets. */
+export function branchSetup(onboarding: StoredOnboarding, state: BranchState): BranchSetup | null {
+  const branches = onboarding.branches ?? undefined;
+  if (branches === undefined) return null;
+  const branch = chosenBranch(branches, state.choice);
+  const planned = new Set(onboarding.planned);
+  const wanted = (id: string) => pluginWanted(branches, state, id);
+  return {
+    list: branches.list.map((entry) => ({ id: entry.id, title: entry.title, hint: entry.hint ?? null })),
+    chosen: branch?.id ?? null,
+    dropped: picked(state.choice) && branch === null,
+    waiting: branches.optional.some((entry) => wanted(entry.id) === "wait"),
+    plugins: branches.optional.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      hint: entry.hint ?? null,
+      on: wanted(entry.id) === "on",
+      waiting: wanted(entry.id) === "wait",
+      recommended: branchDefault(branch, entry.id),
+      own: state.choice?.plugins[entry.id] !== undefined,
+      planned: planned.has(entry.id),
+    })),
+  };
 }
 
 /**
@@ -177,9 +207,15 @@ export function stepLeft(step: SetupStep): boolean {
 export async function collectSetup(deps: SetupDeps): Promise<Setup> {
   const secretStore = deps.secretStore;
   const manifestSet = deps.manifestSet;
-  if (deps.onboarding === null) return { configured: false, manifestSet, steps: [], remaining: 0, complete: false, secretStore };
+  if (deps.onboarding === null) return { configured: false, manifestSet, steps: [], remaining: 0, complete: false, secretStore, branches: null };
   const planned = new Set(deps.onboarding.planned);
-  const asksPlugins = deps.onboarding.steps.some((step) => step.plugin !== undefined && !planned.has(step.plugin));
+  const state = deps.branchState ?? noBranchState();
+  const branches = branchSetup(deps.onboarding, state);
+  // A plugin left out of this machine's set has no step: it is not installed, or turned off, or waits for a branch.
+  const shown = deps.onboarding.steps.filter(
+    (step) => step.plugin === undefined || pluginWanted(deps.onboarding!.branches ?? undefined, state, step.plugin) === "on",
+  );
+  const asksPlugins = shown.some((step) => step.plugin !== undefined && !planned.has(step.plugin));
   let installed: Map<string, { enabled: boolean }> | null = null;
   if (asksPlugins) {
     try {
@@ -214,9 +250,10 @@ export async function collectSetup(deps: SetupDeps): Promise<Setup> {
     return { ...own, state: answer.state, summary: answer.summary, path: answer.path ?? own.path };
   };
 
-  const steps = await Promise.all(deps.onboarding.steps.map(one));
-  const remaining = steps.filter(stepLeft).length;
-  return { configured: true, manifestSet, steps, remaining, complete: remaining === 0, secretStore };
+  const steps = await Promise.all(shown.map(one));
+  // Picking a branch is a step of its own only while plugins wait for it; elsewhere everything stays as it was.
+  const remaining = steps.filter(stepLeft).length + (branches?.waiting ? 1 : 0);
+  return { configured: true, manifestSet, steps, remaining, complete: remaining === 0, secretStore, branches };
 }
 
 /** Why a mark is refused, or null. `answer`: what the step's plugin said last (null: not asked yet). */

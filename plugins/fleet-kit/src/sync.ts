@@ -27,6 +27,7 @@ import {
   type Manifest,
   type ManifestPlugin,
 } from "./manifest.js";
+import { appliedNow, picked, pluginWanted, type BranchChoice, type BranchStart, type BranchState } from "./branches.js";
 import { fetchManifestText, parseManifestJson, parseManifestLocation } from "./fetch-manifest.js";
 import type { SecretStore } from "./secret-store.js";
 import { planOpenCode, readOwnedValue, writeOpenCodeConfig, openCodeMajor, type OpenCodePlan } from "./host/opencode-config.js";
@@ -111,6 +112,10 @@ export interface ManagedState {
   opencodeFailures?: { version: string; count: number; at: number } | null;
   /** The same for OpenCode's settings and bb's agent entry: there is nothing to fetch, only a timer to stop. */
   opencodeSetupFailures?: { version: string; count: number; at: number } | null;
+  /** Decided once, when a build with branches first meets this machine without a choice (see BranchStart). */
+  branchStart?: BranchStart | null;
+  /** The optional plugins as the last sync under an existing branch left them: a dropped branch keeps them so. */
+  branchApplied?: Record<string, boolean>;
 }
 
 /** After this many failures in a row: only the odd scheduled try, or a sync the person asks for. */
@@ -154,8 +159,13 @@ export interface SyncDeps {
   selfUpdateStartedAt?: number | undefined;
   /** Called as soon as the state of the OpenCode install changes: an install takes minutes and the panel shows it. */
   onOpenCode?: ((status: OpenCodeStatus) => Promise<void>) | undefined;
-  /** The manifest has been read. A first sync installs plugins for many minutes; the person can enter a key meanwhile. */
-  onManifest?: ((manifest: Manifest) => Promise<void>) | undefined;
+  /**
+   * The manifest has been read. A first sync installs plugins for many minutes; the person can enter a key
+   * meanwhile, and the First run page already knows whether this machine waits for a branch.
+   */
+  onManifest?: ((manifest: Manifest, branches: BranchState) => Promise<void>) | undefined;
+  /** The person's branch and plugin switches; null before a choice. */
+  choice?: BranchChoice | null;
   /** For tests. */
   now?: () => number;
   /** For tests. */
@@ -240,6 +250,8 @@ function loadManaged(saved: ManagedState): ManagedState {
     agents: { disabled: copy.agents?.disabled ?? [] },
     opencodeFailures: copy.opencodeFailures ?? null,
     opencodeSetupFailures: copy.opencodeSetupFailures ?? null,
+    branchStart: copy.branchStart ?? null,
+    branchApplied: copy.branchApplied ?? {},
   };
 }
 
@@ -310,7 +322,13 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
   }
   const manifest = check.manifest;
   steps.add("manifest", display, "ok", say("manifestRead", { name: manifest.name, version: manifest.version }));
-  await deps.onManifest?.(manifest);
+  if (manifest.branches !== undefined && !picked(deps.choice ?? null) && (managed.branchStart ?? null) === null) {
+    // A machine that already has the build's plugins keeps all of them until the person picks a branch.
+    const had = Object.keys(managed.plugins).some((id) => id !== SELF_ID);
+    managed.branchStart = had ? "all" : "wait";
+  }
+  managed.branchApplied = appliedNow(manifest.branches, branchState(deps, managed));
+  await deps.onManifest?.(manifest, branchState(deps, managed));
 
   const version = (await within(deps.sdk.system.version(), CALL_MS, "Reading the bb version")).currentVersion;
   if (version !== "0.0.0" && compareVersions(version, manifest.bb.minVersion) < 0) {
@@ -511,6 +529,19 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
       steps.add("plugin", entry.id, "skipped", say("pluginPlanned"));
       continue;
     }
+    const wanted = wantedHere(deps, manifest, managed, entry.id);
+    if (wanted === "off") {
+      try {
+        await turnOff(deps, entry.id, byId, steps);
+      } catch (error) {
+        steps.add("plugin", entry.id, "error", say("pluginTurnOffFailed", { error: errorText(error) }));
+      }
+      continue;
+    }
+    if (wanted === "wait" && !byId.has(entry.id)) {
+      steps.add("plugin", entry.id, "skipped", say("pluginAwaitsChoice"));
+      continue;
+    }
     try {
       await syncOnePlugin(deps, manifest, managed, entry, byId, steps, notices);
     } catch (error) {
@@ -525,7 +556,15 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
   // A switch or first install left unfinished for a plugin the build no longer
   // installs (dropped from plugins, or now planned) is finished here, so the
   // plugin is not left removed.
-  const active = new Set(manifest.plugins.filter((entry) => entry.status !== "planned").map((entry) => entry.id));
+  const active = new Set(
+    manifest.plugins
+      .filter((entry) => entry.status !== "planned")
+      .filter((entry) => {
+        const wanted = wantedHere(deps, manifest, managed, entry.id);
+        return wanted === "on" || (wanted === "wait" && byId.has(entry.id));
+      })
+      .map((entry) => entry.id),
+  );
   for (const id of Object.keys(managed.installs)) if (!active.has(id)) delete managed.installs[id];
   for (const [id, record] of Object.entries(managed.sourceChanges)) {
     if (active.has(id)) continue;
@@ -558,6 +597,37 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
       steps.add("plugin", id, "error", say("pluginRemoveFailed", { error: errorText(error) }));
     }
   }
+}
+
+export function branchState(deps: Pick<SyncDeps, "choice">, managed: Pick<ManagedState, "branchStart" | "branchApplied">): BranchState {
+  return { choice: deps.choice ?? null, start: managed.branchStart ?? "all", applied: managed.branchApplied ?? {} };
+}
+
+function wantedHere(deps: SyncDeps, manifest: Manifest, managed: ManagedState, id: string) {
+  return pluginWanted(manifest.branches, branchState(deps, managed), id);
+}
+
+/**
+ * The person's choice leaves the plugin out. One not installed stays so; an
+ * installed one is turned off, not removed: bb keeps its settings, secrets
+ * and data, and turning it on again brings it back as it was.
+ */
+async function turnOff(deps: SyncDeps, id: string, byId: Map<string, Installed>, steps: Steps) {
+  const installed = byId.get(id);
+  if (installed === undefined) {
+    steps.add("plugin", id, "skipped", say("pluginNotChosen"));
+    return;
+  }
+  if (isBuiltin(installed)) {
+    steps.add("plugin", id, "warning", say("pluginIdBundled"));
+    return;
+  }
+  if (!installed.enabled) {
+    steps.add("plugin", id, "skipped", say("pluginOffByChoice"));
+    return;
+  }
+  await within(deps.sdk.plugins.disable({ pluginId: id }), CALL_MS, "Turning the plugin off");
+  steps.add("plugin", id, "changed", say("pluginTurnedOff"));
 }
 
 /** Install from `args` and make sure bb installed the plugin the manifest names. */
@@ -1065,6 +1135,8 @@ async function applyPluginConfig(deps: SyncDeps, manifest: Manifest, entry: Mani
   // Build-wide values every plugin can opt into by declaring the setting.
   if ("allowedProviders" in schema) desired.allowedProviders = manifest.allowedProviders.join(",");
   if ("opencodeConfigDir" in schema) desired.opencodeConfigDir = deps.settings.opencodeConfigDir;
+  // The person's branch, for a plugin that shapes itself by it (such as an MCP catalog's defaults).
+  if ("buildBranch" in schema && manifest.branches !== undefined) desired.buildBranch = deps.choice?.branch ?? "";
   for (const [key, value] of Object.entries(entry.config ?? {})) desired[key] = value;
 
   const changes: Record<string, string | number | boolean> = {};

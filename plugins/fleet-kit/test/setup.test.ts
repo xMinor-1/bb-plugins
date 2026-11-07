@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { SyncReport } from "../contract";
 import { checkManifest } from "../src/manifest";
 import { collectSetup, markProblem, SetupAsker, type AskerOptions, type SetupDeps, type StoredOnboarding } from "../src/setup";
+import type { BranchState } from "../src/branches";
 import { clone, sampleManifest } from "./fixtures";
 
 type Answer = { state: string; summary: string; path?: string } | Error | "hang" | { after: number; answer: { state: string; summary: string } };
@@ -321,5 +322,81 @@ describe("manifest onboarding", () => {
       'onboarding.mail: refers to the plugin "mail-x", which is not in plugins; the step is not shown',
       "onboarding.notes: is listed twice; the step is not shown",
     ]);
+  });
+});
+
+describe("branches on the First run page", () => {
+  // mail is shared by every branch; reports differs between them.
+  const onboarding = (): StoredOnboarding => ({
+    steps: [
+      { id: "mail", title: "Mail", plugin: "mail" },
+      { id: "reports", title: "Reports", plugin: "reports" },
+      { id: "voice", title: "Voice", plugin: "voice", optional: true },
+    ],
+    planned: ["voice"],
+    branches: {
+      optional: [
+        { id: "mail", title: "Mail" },
+        { id: "reports", title: "Reports" },
+        { id: "voice", title: "Voice" },
+      ],
+      list: [
+        { id: "sales", title: "Sales", hint: "Reports and contacts" },
+        { id: "engineering", title: "Engineering", plugins: { reports: false } },
+      ],
+    },
+  });
+  const answers = { mail: { state: "done", summary: "Signed in" }, reports: { state: "done", summary: "3 reports" } };
+  const installed = [{ id: "mail", enabled: true }, { id: "reports", enabled: true }];
+  const withState = (branchState: BranchState) => ({ ...deps({ onboarding: onboarding(), answers, installed }).value, branchState });
+
+  it("a new machine shows the shared steps at once and counts the branch as a step while plugins wait", async () => {
+    const setup = await collectSetup(withState({ choice: null, start: "wait", applied: {} }));
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail", "voice"]);
+    expect(setup.branches).toMatchObject({ chosen: null, waiting: true, dropped: false });
+    expect(setup.branches!.plugins.find((plugin) => plugin.id === "reports")).toMatchObject({ on: false, waiting: true });
+    expect(setup.remaining).toBe(1);
+  });
+
+  it("a machine that had the build keeps every step, and the branch is not a step left", async () => {
+    const setup = await collectSetup(withState({ choice: null, start: "all", applied: {} }));
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail", "reports", "voice"]);
+    expect(setup.branches).toMatchObject({ chosen: null, waiting: false });
+    expect(setup.branches!.plugins.every((plugin) => plugin.on)).toBe(true);
+    expect(setup.remaining).toBe(0);
+    expect(setup.complete).toBe(true);
+  });
+
+  it("drops the steps of plugins off in the choice and marks the person's own switches", async () => {
+    const choice = { branch: "engineering", plugins: { voice: false }, at: "2026-11-07T10:00:00Z" };
+    const setup = await collectSetup(withState({ choice, start: "wait", applied: {} }));
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail"]);
+    expect(setup.complete).toBe(true);
+    expect(setup.branches).toEqual({
+      list: [
+        { id: "sales", title: "Sales", hint: "Reports and contacts" },
+        { id: "engineering", title: "Engineering", hint: null },
+      ],
+      chosen: "engineering",
+      dropped: false,
+      waiting: false,
+      plugins: [
+        { id: "mail", title: "Mail", hint: null, on: true, waiting: false, recommended: true, own: false, planned: false },
+        { id: "reports", title: "Reports", hint: null, on: false, waiting: false, recommended: false, own: false, planned: false },
+        { id: "voice", title: "Voice", hint: null, on: false, waiting: false, recommended: true, own: true, planned: true },
+      ],
+    });
+  });
+
+  it("a dropped branch keeps the plugins as they were and does not nag", async () => {
+    const choice = { branch: "gone", plugins: {}, at: "2026-11-07T10:00:00Z" };
+    const setup = await collectSetup(withState({ choice, start: "wait", applied: { mail: true, reports: false, voice: true } }));
+    expect(setup.branches).toMatchObject({ chosen: null, dropped: true, waiting: false });
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail", "voice"]);
+    expect(setup.remaining).toBe(0);
+  });
+
+  it("a build without branches has none on the page", async () => {
+    expect((await collectSetup(deps({ answers }).value)).branches).toBeNull();
   });
 });
