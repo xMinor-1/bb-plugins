@@ -3,7 +3,7 @@ import { useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { intlLocale, useLang, useMessages } from "@/lib/i18n";
-import type { Issue, Person } from "../shared/model";
+import { boardCards, type Issue, type Person } from "../shared/model";
 import type { Display, Source } from "../shared/prefs";
 import type { rpcContract } from "../server/rpc-contract";
 import { boardColumns, BoardView, ListView } from "./Board";
@@ -251,7 +251,7 @@ export function BoardPage() {
     if (prefs.display.view === "list") {
       body = <ListView visible={filtered} rootKey={board.root?.key ?? null} />;
     } else {
-      visible = filtered.filter((issue) => issue.kind !== "epic" && issue.key !== board.root?.key);
+      visible = boardCards(filtered, board.root?.key ?? null);
       const configured = new Set(config.statuses.map((status) => status.key));
       body = <BoardView visible={visible} columns={boardColumns(board.statuses, configured, visible)} />;
     }

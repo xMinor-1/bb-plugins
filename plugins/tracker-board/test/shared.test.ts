@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { parseSource } from "../src/server/board";
 import { fillJson, fillPath, fillQuery, getPath, scalar } from "../src/shared/json-path";
-import { findKey, issueFrom, splitPrefix } from "../src/shared/model";
+import { boardCards, findKey, issueFrom, splitPrefix } from "../src/shared/model";
 import { categoryOf, normalizeBaseUrl, parseProfile } from "../src/shared/profile";
 import { childTitle, expandLabel, mergeTemplates, parseTemplates, planRows } from "../src/shared/templates";
 import { MOCK_PROFILE, MOCK_TEMPLATES } from "./fixtures/mock-tracker";
@@ -91,6 +91,16 @@ describe("issues", () => {
     const raw = { key: "PAY-9", summary: "x", type: "task", status: "cancelled", status_category: "in_progress" };
     expect(issueFrom(raw, profile)?.category).toBe("progress");
     expect(issueFrom(raw, configured)?.category).toBe("done");
+  });
+
+  it("keeps epics on a board and leaves out only the board's own root", () => {
+    const issues = [
+      issueFrom({ key: "PAY-101", summary: "Card payment", type: "epic", status: "open" }, profile)!,
+      issueFrom({ key: "PAY-130", summary: "Refunds", type: "epic", status: "open" }, profile)!,
+      issueFrom({ key: "PAY-120", summary: "[S] Saved cards", type: "story", status: "ready", parent_key: "PAY-101" }, profile)!,
+    ];
+    expect(boardCards(issues, null).map((issue) => issue.key)).toEqual(["PAY-101", "PAY-130", "PAY-120"]);
+    expect(boardCards(issues, "PAY-101").map((issue) => issue.key)).toEqual(["PAY-130", "PAY-120"]);
   });
 
   it("finds keys and prefixes", () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { splitPrefix, type Issue, type Kind } from "../shared/model";
+import { KINDS, splitPrefix, type Issue, type Kind } from "../shared/model";
 import { CARD_FIELDS, DEFAULT_FIELDS, sourceFromText, type CardField, type Display, type Prefs, type Source } from "../shared/prefs";
 import type { ConfigView } from "../server/rpc-contract";
 import type { Messages } from "./messages";
@@ -93,7 +93,7 @@ export function Toolbar({
         <button className="tb-mi" type="button" onClick={() => (setFilters({ ...filters, kind: null }), close())}>
           {t.all}
         </button>
-        {(["story", "task", "bug"] as const).map((kind) => (
+        {KINDS.map((kind) => (
           <button key={kind} className="tb-mi" type="button" onClick={() => (setFilters({ ...filters, kind }), close())}>
             <TypeTile kind={kind} t={t} />
             {t[`type_${kind}`]}

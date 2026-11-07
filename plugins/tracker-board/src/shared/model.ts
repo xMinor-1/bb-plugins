@@ -4,6 +4,7 @@ import { displayName, getPath, listOf, scalar, textOf } from "./json-path";
 import { categoryOf, type Category, type Profile } from "./profile";
 
 export type Kind = "epic" | "story" | "task" | "bug";
+export const KINDS: readonly Kind[] = ["epic", "story", "task", "bug"];
 
 export interface Issue {
   key: string;
@@ -152,6 +153,14 @@ export function commentFrom(raw: unknown, profile: Profile): Comment | null {
     authorName: (c.authorName ? displayName(getPath(raw, c.authorName)) : null) ?? (typeof authorValue === "object" ? displayName(authorValue) : null),
     created: c.created ? date(getPath(raw, c.created)) : null,
   };
+}
+
+/**
+ * The cards of a board: everything except the board's own root, which the header
+ * already shows. Epics stay: on a queue board they are cards like any other issue.
+ */
+export function boardCards(issues: readonly Issue[], rootKey: string | null): Issue[] {
+  return issues.filter((issue) => issue.key !== rootKey);
 }
 
 /** The chain of parents above an issue, nearest last, within the given set. */
