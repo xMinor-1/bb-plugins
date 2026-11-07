@@ -37,7 +37,7 @@ import {
   type Rpc,
 } from "./store";
 import { TemplatesDialog } from "./Templates";
-import { applyFilters, NO_FILTERS, statusOptions, Toolbar, typeOptions, type Filters } from "./Toolbar";
+import { applyFilters, closedKept, NO_FILTERS, statusOptions, Toolbar, typeOptions, type Filters } from "./Toolbar";
 import { Spinner } from "./ui";
 import { childrenOf, compositionParts, personTemplates, ViewContext, type ViewData } from "./view";
 
@@ -250,7 +250,7 @@ export function BoardPage() {
       addFromTemplates: setTemplatesFor,
     };
     const filtered = applyFilters(board.issues, filters, board.me?.id ?? null, data.personName);
-    closedCount = applyFilters(board.issues, { ...filters, hideClosed: false }, board.me?.id ?? null, data.personName).filter((issue) => issue.category === "done" && !filters.statuses.includes(issue.status)).length;
+    closedCount = closedKept(board.issues, filters, board.me?.id ?? null, data.personName);
     if (prefs.display.view === "list") {
       body = <ListView visible={filtered} rootKey={board.root?.key ?? null} />;
     } else {

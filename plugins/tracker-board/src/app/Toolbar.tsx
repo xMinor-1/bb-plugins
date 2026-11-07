@@ -93,6 +93,11 @@ export function applyFilters(issues: readonly Issue[], filters: Filters, me: str
   });
 }
 
+/** Closed tasks the other filters keep, statuses aside: the count beside "Hide closed" stays the same whatever statuses are picked. */
+export function closedKept(issues: readonly Issue[], filters: Filters, me: string | null, personName: (id: string | null) => string): number {
+  return applyFilters(issues, { ...filters, statuses: [], hideClosed: false }, me, personName).filter((issue) => issue.category === "done").length;
+}
+
 export function Toolbar({
   t,
   filters,
@@ -112,7 +117,7 @@ export function Toolbar({
   types: TypeOption[];
   statuses: StatusOption[];
   colors: ReadonlyMap<string, string>;
-  /** Closed tasks the other filters keep, which hiding closed takes away. */
+  /** Closed tasks the other filters keep, statuses aside: what hiding closed takes away. */
   closedCount: number;
   display: Display;
   setDisplay: (next: Display) => void;

@@ -1,7 +1,7 @@
 // The board's filters: the type filter offers every type the build lists and any other
 // type the board's tasks have, and filters by the tracker's own type.
 import { describe, expect, it } from "vitest";
-import { applyFilters, NO_FILTERS, statusOptions, typeOptions } from "../src/app/Toolbar";
+import { applyFilters, closedKept, NO_FILTERS, statusOptions, typeOptions } from "../src/app/Toolbar";
 import { issueFrom, type Issue } from "../src/shared/model";
 import { parseProfile } from "../src/shared/profile";
 import { MOCK_PROFILE } from "./fixtures/mock-tracker";
@@ -50,6 +50,15 @@ describe("the status filter", () => {
   it("keeps only the picked statuses, a picked closed one too", () => {
     expect(keys({ statuses: ["in_progress", "done"] })).toEqual(["B-2", "B-3", "B-4"]);
     expect(keys({ statuses: ["open"], hideClosed: false })).toEqual(["B-1"]);
+  });
+
+  it("counts the hidden closed tasks the same whatever statuses are picked", () => {
+    const count = (filters: Partial<typeof NO_FILTERS>) => closedKept(board, { ...NO_FILTERS, ...filters }, null, () => "");
+    expect(count({})).toBe(2);
+    // An open status picked: the closed ones are still there to show, not zero.
+    expect(count({ statuses: ["in_progress"] })).toBe(2);
+    expect(count({ statuses: ["in_progress", "done"] })).toBe(2);
+    expect(count({ text: "B-3" })).toBe(1);
   });
 
   it("offers the statuses the board's tasks are in, in board order, others after by category", () => {
