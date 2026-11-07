@@ -182,7 +182,7 @@ async function mountGallery(handlers: Handlers = baseRpc()): Promise<RenderedSlo
 async function mountTabGallery(handlers: Handlers = baseRpc()): Promise<RenderedSlot> {
   const slot = renderSlot(
     { component: tabAction.component },
-    { threadId: "thr_1", params: null },
+    { threadId: "thr_1", environment: null, params: null },
     { rpc: handlers as PluginRpcTestHandlers<FileManagerContract> },
   ) as RenderedSlot;
   await slot.findByTestId("fm-gallery");
@@ -262,7 +262,7 @@ describe("switching views", () => {
   it("puts the switch in the overflow menu of a panel tab, where space is short", async () => {
     const slot = renderSlot(
       { component: tabAction.component },
-      { threadId: "thr_1", params: null },
+      { threadId: "thr_1", environment: null, params: null },
       { rpc: baseRpc({ viewMode: "list" }) as PluginRpcTestHandlers<FileManagerContract> },
     ) as RenderedSlot;
     await slot.findByText("notes.txt");

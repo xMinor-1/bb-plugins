@@ -28,6 +28,17 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// Downloads go through bb's own save path; record what each one asked for.
+const saved = vi.hoisted(() => [] as { fileName: string; url: string }[]);
+
+vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@get-bb/plugin-sdk/app")>()),
+  experimental_saveFile: (request: { fileName: string; url: string }) => {
+    saved.push(request);
+    return Promise.resolve("started" as const);
+  },
+}));
+
 const app = await loadPluginApp(() => import("../../app"));
 const { resetUploadManager } = await import("../../hooks/useUploads");
 const { resetPanelSnapshot } = await import("../../components/panel-bus");
@@ -226,6 +237,7 @@ function callsTo(slot: RenderedSlot, method: string): RpcCall[] {
 const clipboardWrites: string[] = [];
 
 beforeEach(() => {
+  saved.length = 0;
   toasts.error.length = 0;
   toasts.success.length = 0;
   clipboardWrites.length = 0;
@@ -418,61 +430,43 @@ describe("row context menu (§8.2)", () => {
   });
 
   it("Download starts the byte-transfer route for the selected file", async () => {
-    const clicked: string[] = [];
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      clicked.push(this.href);
-    });
-
     const slot = await mountPanel();
     clickItem(await openRowMenu(slot, NOTES.path), "Download");
 
     await waitFor(() => {
-      expect(clicked).toHaveLength(1);
+      expect(saved).toHaveLength(1);
     });
-    expect(clicked[0]).toContain(
+    expect(saved[0]?.fileName).toBe("notes.txt");
+    expect(saved[0]?.url).toContain(
       `/api/v1/plugins/file-manager/http/download?path=${encodeURIComponent(NOTES.path)}`,
     );
   });
 
   it("Download sends several selected files as one zip, not a burst of downloads", async () => {
-    const clicked: string[] = [];
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      clicked.push(this.href);
-    });
-
     const slot = await mountPanel();
     fireEvent.click(rowFor(slot, NOTES.path));
     fireEvent.click(rowFor(slot, OTHER.path), { ctrlKey: true });
     clickItem(await openRowMenu(slot, NOTES.path), "Download as zip");
 
     await waitFor(() => {
-      expect(clicked).toHaveLength(1);
+      expect(saved).toHaveLength(1);
     });
-    const url = new URL(clicked[0] ?? "");
+    expect(saved[0]?.fileName).toBe("coder.zip");
+    const url = new URL(saved[0]?.url ?? "", "http://bb.test");
     expect(url.pathname).toBe("/api/v1/plugins/file-manager/http/download-zip");
     expect(url.searchParams.get("dir")).toBe(ROOT);
     expect(url.searchParams.getAll("name").sort()).toEqual(["notes.txt", "other.txt"]);
   });
 
   it("Download takes a folder too, as a zip", async () => {
-    const clicked: string[] = [];
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      clicked.push(this.href);
-    });
-
     const slot = await mountPanel();
     clickItem(await openRowMenu(slot, FOLDER.path), "Download as zip");
 
     await waitFor(() => {
-      expect(clicked).toHaveLength(1);
+      expect(saved).toHaveLength(1);
     });
-    const url = new URL(clicked[0] ?? "");
+    expect(saved[0]?.fileName).toBe("docs.zip");
+    const url = new URL(saved[0]?.url ?? "", "http://bb.test");
     expect(url.searchParams.getAll("name")).toEqual(["docs"]);
   });
 
