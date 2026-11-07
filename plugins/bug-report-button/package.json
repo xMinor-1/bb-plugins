@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-bug-report-button",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "bb": ">=0.48",
@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Bug Report Button",
-    "description": "A small bug button in the top bar of bb, on every screen, that opens your bug report form in the browser. Address and caption come from plugin settings.",
+    "description": "A bug item in the bb sidebar that opens a report page: subject, description and screenshots by drop, paste or file picker, sent to your form. Addresses and field names come from plugin settings.",
     "branding": {
       "icon": "./icon.svg"
     },
