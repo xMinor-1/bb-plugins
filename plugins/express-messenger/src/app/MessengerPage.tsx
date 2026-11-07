@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { intlLocale, LanguageSwitch, useLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { ASKS } from "./asks";
 import { useHostError } from "./errors";
 import { messages } from "./messages";
 
@@ -207,6 +208,25 @@ export function MessengerPage() {
               {t.forget}
             </Button>
           </div>
+        </Section>
+
+        <Section title={t.askTitle}>
+          <p className="text-sm text-muted-foreground">{t.askIntro}</p>
+          {status && status.signedIn !== true ? <Notice tone="info">{t.askNeedsSignIn}</Notice> : null}
+          <ul className="divide-y divide-border">
+            {ASKS[lang].map((ask) => (
+              <li key={ask.title} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">{ask.title}</div>
+                  <div className="text-xs text-muted-foreground">{ask.prompt}</div>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => navigate.toCompose({ initialPrompt: ask.prompt, focusPrompt: true, ...(hostId ? { hostId } : {}) })}>
+                  {t.askOpen}
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground">{t.askAgentNote}</p>
         </Section>
 
         <Section title={t.agentsTitle}>

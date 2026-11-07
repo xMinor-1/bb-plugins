@@ -56,6 +56,14 @@ Chromium (Yandex Browser works too). bb must run on Node.js 22 or newer.
    joined new ones. If the directory could not be built right after signing
    in, the page says why, and this button tries again.
 
+### Ask an agent
+
+The page lists ready-made requests: what is new for you, catching up on a chat,
+questions waiting for you, a reply in a chat, watching a chat. **Open in chat**
+starts a new thread on the chosen machine with the request in the message
+field; change the "…" parts and send it. Only the allowed agents get the
+messenger tools, so pick one of them in that thread.
+
 ## Agent tools
 
 | Tool | What it does |

@@ -10,6 +10,7 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.{ts,tsx}"],
     exclude: ["test/**/*.e2e.test.ts", "node_modules/**", "dist/**"],
+    setupFiles: ["./vitest.setup.ts"],
     testTimeout: 20_000,
   },
 });
