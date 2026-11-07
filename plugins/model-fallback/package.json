@@ -1,0 +1,44 @@
+{
+  "name": "bb-plugin-model-fallback",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.49",
+    "bbPluginSdk": ">=0.6.132"
+  },
+  "bb": {
+    "name": "Model Fallback",
+    "description": "When an agent's model hits a rate limit, overloads or stops answering, the thread continues on the next model of your fallback ladder. Only models from the allowed list, with a countdown you can cancel.",
+    "branding": {
+      "icon": "ArrowTurnForward"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.132",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^12.0.0",
+    "hono": "^4.11.9",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.12"
+  },
+  "license": "MIT",
+  "author": "Foma",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xMinor-1/bb-plugins.git",
+    "directory": "plugins/model-fallback"
+  },
+  "scripts": {
+    "build": "env -u BB_CLI bb plugin build .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  }
+}

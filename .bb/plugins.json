@@ -48,6 +48,10 @@
       "source": "./plugins/mcp-catalog"
     },
     {
+      "name": "model-fallback",
+      "source": "./plugins/model-fallback"
+    },
+    {
       "name": "qlik-sense",
       "source": "./plugins/qlik-sense"
     },
