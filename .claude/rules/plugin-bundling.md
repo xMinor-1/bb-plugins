@@ -18,3 +18,7 @@ paths:
   фронтенда, где его нет: `bb plugin install` падает «Could not resolve
   "@get-bb/plugin-sdk"», хотя `tsc` и тесты зелёные. Общие константы — в модуле без
   импортов (`src/shared/limits.ts` в exchange-mail 0.2.0, 31.10.2026).
+- Установка по пути в docker (`bb plugin install path:…`) собирает `dist/` в каталоге плагина:
+  каталог, смонтированный только на чтение, даёт EROFS. Монтировать копию на запись.
+- `bb plugin rpc call <id> <метод>` без `--input-file` шлёт `null`: метод со входом-объектом
+  отвечает `invalid_input`. Вход `{}` — файлом (model-usage 0.1.0, 08.11.2026).

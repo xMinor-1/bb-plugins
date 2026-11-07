@@ -1,0 +1,67 @@
+{
+  "name": "bb-plugin-model-usage",
+  "version": "0.1.0",
+  "description": "One usage panel: plan limits of every provider, tokens per model for Claude Code and OpenCode over 5 hours, a day and a week, and Claude Code activity.",
+  "license": "MIT",
+  "author": "Foma",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xMinor-1/bb-plugins.git",
+    "directory": "plugins/model-usage"
+  },
+  "type": "module",
+  "keywords": [
+    "bb-plugin",
+    "usage",
+    "limits",
+    "tokens",
+    "claude-code",
+    "opencode"
+  ],
+  "engines": {
+    "bb": ">=0.49",
+    "bbPluginSdk": ">=0.6.132"
+  },
+  "bb": {
+    "name": "Model Usage",
+    "description": "Plan limits of every provider, tokens per model for Claude Code and OpenCode over the last 5 hours, day and week, and where Claude Code's usage went. OpenCode is read on each machine, laptops connected to a remote bb included.",
+    "branding": {
+      "icon": "ChartColumn"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "host": "./src/host.ts"
+  },
+  "files": [
+    "dist",
+    "server.ts",
+    "app.tsx",
+    "contract.ts",
+    "src",
+    "components",
+    "lib",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "env -u BB_CLI bb plugin build .",
+    "dev": "bb plugin dev .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.132",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^12.0.0",
+    "hono": "^4.11.9",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.12"
+  }
+}
