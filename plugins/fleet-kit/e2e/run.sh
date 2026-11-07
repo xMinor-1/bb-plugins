@@ -14,7 +14,7 @@ name=${FLEET_KIT_E2E_CONTAINER:-fleet-kit-e2e}
 docker build -t fleet-kit-e2e "$@" "$here"
 docker rm -f "$name" >/dev/null 2>&1 || true
 docker run -d --name "$name" \
-  --memory 2g --memory-swap 2g --cpus 2 --pids-limit 2048 \
+  --memory 3g --memory-swap 3g --cpus 2 --pids-limit 2048 \
   --oom-score-adj 1000 --security-opt no-new-privileges \
   fleet-kit-e2e >/dev/null
 
@@ -31,6 +31,7 @@ if [ -n "${FLEET_KIT_BASE_REF:-}" ]; then
 fi
 docker cp "$here/release-current.sh" "$name:/tmp/release-current.sh"
 docker cp "$here/scenario.sh" "$name:/tmp/scenario.sh"
+docker cp "$here/own-agents.sh" "$name:/tmp/own-agents.sh"
 docker cp "$here/fake-gateway.mjs" "$name:/tmp/fake-gateway.mjs"
 docker cp "$here/inside-setup.sh" "$name:/tmp/inside-setup.sh"
 

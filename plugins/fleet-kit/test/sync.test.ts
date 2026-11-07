@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InstallOutcome } from "../src/host/install-opencode.js";
 import { emptyManaged, runSync, type ManagedState, type SyncDeps } from "../src/sync.js";
+import { consentKey } from "../src/own-agents.js";
 import { openFileSecretStore } from "../src/secret-store.js";
 import { clone, sampleManifest } from "./fixtures.js";
 
@@ -632,6 +633,51 @@ describe("bb agents", () => {
     expect(three.report.steps.find((step) => step.item === "Codex")).toMatchObject({ outcome: "warning", code: "agentDisabledAgain" });
   });
 
+  describe("own agents", () => {
+    const withOwn = () => ({ ...withAgents(["acp-opencode"]), ownAgents: { providers: ["codex", "claude-code"], warning: "Your agent reads what this bb holds." } });
+    const on = { on: true, at: "2026-11-07T10:00:00.000Z", key: consentKey(withOwn().ownAgents) };
+
+    it("turns them off like any other agent until the person turns them on", async () => {
+      const first = await setup(withOwn(), [self()]);
+      await runSync({ ...first.deps, ownAgents: null }, "start");
+      expect(callsOf(first.calls, "agent ")).toEqual(["agent codex off", "agent claude-code off"]);
+      first.calls.length = 0;
+      first.agents.find((entry) => entry.id === "codex")!.enabled = true;
+      await runSync({ ...first.deps, ownAgents: { on: false, at: on.at } }, "schedule");
+      expect(callsOf(first.calls, "agent ")).toEqual(["agent codex off"]);
+    });
+
+    it("once on, neither turns them off nor on, and still turns off the rest", async () => {
+      const first = await setup(withOwn(), [self()]);
+      const one = await runSync({ ...first.deps, ownAgents: on }, "start");
+      // Codex was on and stays on; Claude Code cannot run here and is left as it is; Cursor stays off.
+      expect(callsOf(first.calls, "agent ")).toEqual([]);
+      expect(one.managed.agents.disabled).toEqual(["cursor"]);
+      first.agents.find((entry) => entry.id === "cursor")!.enabled = true;
+      first.agents.find((entry) => entry.id === "codex")!.enabled = false;
+      first.calls.length = 0;
+      const two = await runSync({ ...first.deps, managed: one.managed, ownAgents: on }, "schedule");
+      expect(callsOf(first.calls, "agent ")).toEqual(["agent cursor off"]);
+      expect(two.notices.map((notice) => notice.id)).toEqual(["agent-disabled:cursor"]);
+    });
+
+    it("turns them off again when the person turns own agents off, without a 'turned on by hand' notice", async () => {
+      const first = await setup(withOwn(), [self()]);
+      const one = await runSync({ ...first.deps, ownAgents: on }, "start");
+      first.calls.length = 0;
+      const two = await runSync({ ...first.deps, managed: one.managed, ownAgents: { on: false, at: "2026-11-07T11:00:00.000Z" } }, "schedule");
+      expect(callsOf(first.calls, "agent ")).toEqual(["agent codex off", "agent claude-code off"]);
+      expect(two.notices).toEqual([]);
+      expect(two.report.steps.find((step) => step.item === "Codex")).toMatchObject({ outcome: "changed", code: "agentDisabled" });
+    });
+
+    it("ignores the person's switch when the build offers no own agents", async () => {
+      const first = await setup(withAgents(["acp-opencode"]), [self()]);
+      await runSync({ ...first.deps, ownAgents: on }, "start");
+      expect(callsOf(first.calls, "agent ")).toEqual(["agent codex off", "agent claude-code off"]);
+    });
+  });
+
   it("turns an allowed agent back on", async () => {
     const first = await setup(withAgents(["acp-opencode"]), [self()]);
     first.agents.find((entry) => entry.id === "acp-opencode")!.enabled = false;
@@ -639,45 +685,57 @@ describe("bb agents", () => {
     expect(callsOf(first.calls, "agent ")).toContain("agent acp-opencode on");
   });
 
-  it("turns nothing off while the allowed agent is on but cannot run (OpenCode not installed)", async () => {
+  it("turns the other agents off even while the allowed agent cannot run (OpenCode not installed)", async () => {
     const first = await setup(withAgents(["acp-opencode"]), [self()]);
     first.agents.find((entry) => entry.id === "acp-opencode")!.available = false;
     const one = await runSync(first.deps, "start");
-    expect(callsOf(first.calls, "agent ")).toEqual([]);
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent codex off", "agent claude-code off"]);
     expect(one.report.steps.find((step) => step.code === "agentUnavailable")).toMatchObject({ outcome: "warning", item: "OpenCode" });
     expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
-    expect(first.agents.filter((entry) => entry.enabled).map((entry) => entry.id)).toEqual(["acp-opencode", "codex", "claude-code"]);
+    expect(first.agents.filter((entry) => entry.enabled).map((entry) => entry.id)).toEqual(["acp-opencode"]);
   });
 
-  it("does not try to turn on an allowed agent whose plugin is off, turns nobody off, and does not repeat on the next sync", async () => {
+  it("OpenCode not ready and Codex turned on without the person's yes: Codex is turned off", async () => {
+    const first = await setup({ ...withAgents(["acp-opencode"]), ownAgents: { providers: ["codex"], warning: "Your agent reads what this bb holds." } }, [self()]);
+    Object.assign(first.agents.find((entry) => entry.id === "acp-opencode")!, { enabled: false, available: false });
+    await runSync({ ...first.deps, ownAgents: null }, "start");
+    expect(callsOf(first.calls, "agent ")).toContain("agent codex off");
+    expect(first.agents.find((entry) => entry.id === "codex")!.enabled).toBe(false);
+  });
+
+  it("does not try to turn on an allowed agent whose plugin is off, still turns the others off, and does not repeat on the next sync", async () => {
     const first = await setup(withAgents(["acp-opencode"]), [self()]);
     const opencode = first.agents.find((entry) => entry.id === "acp-opencode")!;
     Object.assign(opencode, { enabled: false, pluginEnabled: false });
     const one = await runSync(first.deps, "start");
-    expect(callsOf(first.calls, "agent ")).toEqual([]);
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent codex off", "agent claude-code off"]);
     expect(one.report.steps.find((step) => step.code === "agentPluginOff")).toMatchObject({ outcome: "warning", item: "OpenCode" });
     expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
+    first.calls.length = 0;
     const two = await runSync({ ...first.deps, managed: one.managed }, "schedule");
     expect(callsOf(first.calls, "agent ")).toEqual([]);
     expect(two.report.outcome).toBe("error");
 
-    // Its plugin is on again: the next sync turns it on and only then turns the others off.
+    // Its plugin is on again: the next sync turns it on.
     opencode.pluginEnabled = true;
     await runSync({ ...first.deps, managed: two.managed }, "schedule");
-    expect(callsOf(first.calls, "agent ")).toEqual(["agent acp-opencode on", "agent codex off", "agent claude-code off"]);
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent acp-opencode on"]);
   });
 
-  it("turns nobody off when bb refuses to turn the allowed agent on", async () => {
+  it("still tries to turn the others off when bb refuses to turn the allowed agent on", async () => {
     const first = await setup(withAgents(["acp-opencode"]), [self()]);
     first.agents.find((entry) => entry.id === "acp-opencode")!.enabled = false;
-    first.deps.sdk.providers.setEnabled = async () => {
-      first.calls.push("agent refused");
-      throw new Error("Provider is unavailable (provider_unavailable)");
-    };
+    first.deps.sdk.providers.setEnabled = (async ({ providerId, enabled }: { providerId: string; enabled: boolean }) => {
+      first.calls.push(`agent ${providerId} ${enabled ? "on" : "off"}`);
+      if (enabled) throw new Error("Provider is unavailable (provider_unavailable)");
+      first.agents.find((entry) => entry.id === providerId)!.enabled = false;
+      return clone(first.agents);
+    }) as never;
     const one = await runSync(first.deps, "start");
-    expect(callsOf(first.calls, "agent ")).toEqual(["agent refused"]);
+    // The early pass turns the others off before plugins install; the later one tries the allowed agent.
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent codex off", "agent claude-code off", "agent acp-opencode on"]);
     expect(one.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneReady" });
-    expect(first.agents.filter((entry) => entry.enabled).map((entry) => entry.id)).toEqual(["codex", "claude-code"]);
+    expect(first.agents.filter((entry) => entry.enabled).map((entry) => entry.id)).toEqual([]);
   });
 
   it("an error in the AI service or agent step does not stop the rest of the sync", async () => {
@@ -694,11 +752,11 @@ describe("bb agents", () => {
     expect(outcome.report.steps.some((step) => step.area === "opencode")).toBe(true);
   });
 
-  it("turns nothing off when none of the allowed agents exists here", async () => {
+  it("turns the other agents off and reports an error when none of the allowed agents exists here", async () => {
     const first = await setup(withAgents(["acp-missing"]), [self()]);
     const outcome = await runSync(first.deps, "start");
-    expect(callsOf(first.calls, "agent ")).toEqual([]);
-    expect(outcome.report.steps.find((step) => step.area === "agent")).toMatchObject({ outcome: "error", code: "agentsNoneHere" });
+    expect(callsOf(first.calls, "agent ")).toEqual(["agent acp-opencode off", "agent codex off", "agent claude-code off"]);
+    expect(outcome.report.steps.find((step) => step.item === "agents")).toMatchObject({ outcome: "error", code: "agentsNoneHere" });
   });
 });
 

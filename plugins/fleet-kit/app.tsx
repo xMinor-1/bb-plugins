@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { definePluginApp, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
-import type { Status, Step } from "./contract";
+import type { OwnAgentsOutcome, Status, Step } from "./contract";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
@@ -55,6 +55,26 @@ const messages = defineMessages(
     unknownOwner: "unknown",
     resetLock: "Reset lock",
     item: (name: string) => name,
+    ownTitle: "Your own agents",
+    ownAgents: (names: string) => `Agents: ${names}`,
+    ownDelegate: (provider: string, model: string) => `Steps for company systems go to ${provider} with the model ${model}.`,
+    ownOn: (when: string) => `On since ${when}. Turn the agents on in Settings → Providers; Fleet Kit no longer turns them off.`,
+    ownOff: "Off: Fleet Kit keeps only the build's agents.",
+    ownTurnOn: "Turn on…",
+    ownTurnOff: "Turn off",
+    ownWaiting: "Confirm in the system window…",
+    ownRefused: (count: number, until: string | null) => `Windows cancelled or left unanswered: ${count}.${until ? ` The next one can open after ${until}.` : ""}`,
+    ownOutcome: (outcome: OwnAgentsOutcome) =>
+      ({
+        on: "Turned on.",
+        off: "Turned off. Fleet Kit turns these agents off at this sync.",
+        cancelled: "Not turned on: the system window was cancelled.",
+        timeout: "Not turned on: nobody answered the system window.",
+        unavailable: "Not turned on: this computer could not show the confirmation window.",
+        busy: "Another confirmation window is open. Answer it first.",
+        paused: "Not turned on: the last window was cancelled or left unanswered. Try again in 10 minutes.",
+        "not-offered": "This build does not offer your own agents.",
+      })[outcome],
   },
   {
     never: "ещё не было",
@@ -95,6 +115,26 @@ const messages = defineMessages(
     unknownOwner: "неизвестно кто",
     resetLock: "Снять блокировку",
     item: (name) => ITEM_RU[name] ?? name,
+    ownTitle: "Свои агенты",
+    ownAgents: (names) => `Агенты: ${names}`,
+    ownDelegate: (provider, model) => `Шаги в корпоративных системах уходят агенту ${provider} с моделью ${model}.`,
+    ownOn: (when) => `Включено с ${when}. Самих агентов включите в Settings → Providers; Fleet Kit их больше не выключает.`,
+    ownOff: "Выключено: Fleet Kit оставляет только агентов сборки.",
+    ownTurnOn: "Включить…",
+    ownTurnOff: "Выключить",
+    ownWaiting: "Подтвердите в системном окне…",
+    ownRefused: (count, until) => `Окон отменено или оставлено без ответа: ${count}.${until ? ` Следующее можно открыть после ${until}.` : ""}`,
+    ownOutcome: (outcome) =>
+      ({
+        on: "Включено.",
+        off: "Выключено. Fleet Kit выключит этих агентов на этой сверке.",
+        cancelled: "Не включено: в системном окне нажата отмена.",
+        timeout: "Не включено: системное окно осталось без ответа.",
+        unavailable: "Не включено: этот компьютер не смог показать окно подтверждения.",
+        busy: "Уже открыто другое окно подтверждения. Сначала ответьте в нём.",
+        paused: "Не включено: прошлое окно отменено или осталось без ответа. Повторить можно через 10 минут.",
+        "not-offered": "Сборка не предлагает своих агентов.",
+      })[outcome],
   },
 );
 type Texts = (typeof messages)["en"];
@@ -202,6 +242,52 @@ function ModelsLine({ opencode }: { opencode: NonNullable<Status["opencode"]> })
         {t.modelsOpen(providers)} {render(lang, { message: opencode.models.message })}
       </span>
     </p>
+  );
+}
+
+function OwnAgentsSection({ own, onChange }: { own: NonNullable<Status["ownAgents"]>; onChange: () => void }) {
+  const t = useMessages(messages);
+  const lang: Lang = useLang();
+  const rpc = useRpc<typeof rpcContract>();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const toggle = (on: boolean) => {
+    setBusy(true);
+    setNote(on ? t.ownWaiting : null);
+    rpc.call("own_agents_set", { on, lang }).then(
+      (answer) => {
+        setNote(t.ownOutcome(answer.outcome));
+        onChange();
+      },
+      (cause: unknown) => setNote(cause instanceof Error ? cause.message : String(cause)),
+    ).finally(() => setBusy(false));
+  };
+  return (
+    <Section
+      title={own.title ?? t.ownTitle}
+      icon="User"
+      aside={
+        <Button size="sm" variant={own.on ? "outline" : "default"} disabled={busy} onClick={() => toggle(!own.on)}>
+          {own.on ? t.ownTurnOff : t.ownTurnOn}
+        </Button>
+      }
+    >
+      <div className="flex flex-col gap-1.5">
+        <p className={own.on ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}>
+          {own.on ? t.ownOn(own.at ? new Date(own.at).toLocaleString(intlLocale(lang)) : "—") : t.ownOff}
+        </p>
+        <p className="text-muted-foreground">{t.ownAgents(own.providers.map((entry) => entry.name).join(", "))}</p>
+        {own.delegate ? <p className="text-muted-foreground">{t.ownDelegate(own.delegate.provider, own.delegate.model)}</p> : null}
+        <p className="mt-1 flex items-start gap-2 whitespace-pre-line rounded-md border border-amber-500/40 px-3 py-2">
+          <Icon name="AlertTriangle" className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span>{own.warning}</span>
+        </p>
+        {own.refusals ? (
+          <p className="text-muted-foreground">{t.ownRefused(own.refusals, own.retryAt ? new Date(own.retryAt).toLocaleTimeString(intlLocale(lang)) : null)}</p>
+        ) : null}
+        {note ? <p role="status" className="text-muted-foreground">{note}</p> : null}
+      </div>
+    </Section>
   );
 }
 
@@ -320,6 +406,8 @@ function FleetKitPage() {
             </div>
           </Section>
         ) : null}
+
+        {status.ownAgents ? <OwnAgentsSection own={status.ownAgents} onChange={refetch} /> : null}
 
         {last ? (
           <Section
