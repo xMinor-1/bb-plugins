@@ -27,6 +27,8 @@ const NOTES_SOURCE = "git:https://git.example.test/plugins.git@semver:notes/:^1.
 function idFor(source: string): string {
   if (source.includes("wrong")) return "wrong";
   if (source.includes("notes")) return "notes";
+  if (source.includes("reports")) return "reports";
+  if (source.includes("extra")) return "extra";
   return "other";
 }
 
@@ -120,6 +122,12 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
         calls.push(`remove ${pluginId}`);
         plugins.delete(pluginId);
         return { ok: true };
+      },
+      disable: async ({ pluginId }: { pluginId: string }) => {
+        calls.push(`disable ${pluginId}`);
+        const plugin = plugins.get(pluginId)!;
+        plugin.enabled = false;
+        return view(plugin);
       },
       enable: async ({ pluginId }: { pluginId: string }) => {
         calls.push(`enable ${pluginId}`);
@@ -971,5 +979,112 @@ describe("OpenCode installed by Fleet Kit", () => {
     expect(outcome.report.steps.find((step) => step.code === "opencodeMissing")).toMatchObject({ outcome: "warning" });
     expect(JSON.parse(await readFile(join(first.deps.environment.HOME!, ".config", "opencode", "opencode.json"), "utf8")).enabled_providers).toEqual(["corp"]);
     expect(outcome.opencode?.install ?? null).toBeNull();
+  });
+});
+
+describe("branches", () => {
+  const REPORTS_SOURCE = "git:https://git.example.test/plugins.git@semver:reports/:^1.0.0";
+  /** notes is optional and off in "dev"; reports is optional and on in both; fleet-kit is the common set. */
+  function branched() {
+    const manifest = sampleManifest();
+    (manifest.plugins as unknown[]).push({ id: "reports", source: REPORTS_SOURCE, status: "required" });
+    manifest.branches = {
+      optional: [
+        { id: "notes", title: "Notes" },
+        { id: "reports", title: "Reports" },
+      ],
+      list: [
+        { id: "business", title: "Business" },
+        { id: "dev", title: "Development", plugins: { notes: false } },
+      ],
+    };
+    return manifest;
+  }
+  const reports = (): FakePlugin => ({ id: "reports", source: REPORTS_SOURCE, version: "1.0.0", enabled: true, schema: {}, values: {} });
+  const choice = (branch: string, plugins: Record<string, boolean> = {}) => ({ branch, plugins, at: "2026-11-07T10:00:00Z" });
+
+  it("on a machine that already has the build: installs everything as before and turns nothing off until a branch is picked", async () => {
+    const managed = emptyManaged();
+    managed.plugins.notes = { manifestSource: NOTES_SOURCE, bbSource: NOTES_SOURCE };
+    const { deps, calls } = await setup(branched(), [self(), notes()], managed);
+    const outcome = await runSync(deps, "start");
+    expect(outcome.managed.branchStart).toBe("all");
+    expect(callsOf(calls, "disable")).toEqual([]);
+    expect(callsOf(calls, "install")).toEqual(["install reports"]);
+    expect(outcome.report.steps.filter((step) => step.outcome === "error")).toEqual([]);
+  });
+
+  it("on a new machine: installs only the common set until a branch is picked", async () => {
+    const { deps, calls } = await setup(branched(), [self()]);
+    const outcome = await runSync(deps, "start");
+    expect(outcome.managed.branchStart).toBe("wait");
+    expect(callsOf(calls, "install")).toEqual([]);
+    const notesStep = outcome.report.steps.find((step) => step.item === "notes");
+    expect(notesStep).toMatchObject({ outcome: "skipped", code: "pluginAwaitsChoice" });
+    // The decision holds: plugins installed later do not turn this machine into an old one.
+    deps.managed = outcome.managed;
+    deps.choice = choice("dev");
+    const picked = await runSync(deps, "manual");
+    expect(callsOf(calls, "install")).toEqual(["install reports"]);
+    expect(picked.report.steps.find((step) => step.item === "notes")).toMatchObject({ outcome: "skipped", code: "pluginNotChosen" });
+  });
+
+  it("turns an installed plugin off without removing it or touching its settings, and back on", async () => {
+    const { deps, calls, plugins } = await setup(branched(), [self(), notes({ values: { greeting: "hello", allowedProviders: "corp", token: "kept" } }), reports()]);
+    deps.choice = choice("dev");
+    const off = await runSync(deps, "manual");
+    expect(callsOf(calls, "disable")).toEqual(["disable notes"]);
+    expect(callsOf(calls, "remove notes")).toEqual([]);
+    expect(callsOf(calls, "config notes")).toEqual([]);
+    expect(plugins.get("notes")).toMatchObject({ enabled: false, values: { token: "kept" } });
+    expect(off.report.steps.find((step) => step.item === "notes")).toMatchObject({ outcome: "changed", code: "pluginTurnedOff" });
+    // The next sync leaves it off and quiet.
+    calls.length = 0;
+    deps.managed = off.managed;
+    const again = await runSync(deps, "schedule");
+    expect(callsOf(calls, "disable")).toEqual([]);
+    expect(callsOf(calls, "enable")).toEqual([]);
+    expect(again.report.steps.find((step) => step.item === "notes")).toMatchObject({ outcome: "skipped", code: "pluginOffByChoice" });
+    // The person turns it on again: the same plugin comes back, nothing is installed.
+    calls.length = 0;
+    deps.managed = again.managed;
+    deps.choice = choice("dev", { notes: true });
+    await runSync(deps, "manual");
+    expect(callsOf(calls, "enable")).toEqual(["enable notes"]);
+    expect(callsOf(calls, "install")).toEqual([]);
+    expect(plugins.get("notes")).toMatchObject({ enabled: true, values: { token: "kept" } });
+  });
+
+  it("keeps the person's switches over a branch default and gives a new branch plugin its default", async () => {
+    const { deps, calls } = await setup(branched(), [self(), notes(), reports()]);
+    // Reports is on in both branches; the person turned it off.
+    deps.choice = choice("business", { reports: false });
+    await runSync(deps, "manual");
+    expect(callsOf(calls, "disable")).toEqual(["disable reports"]);
+    // A manifest update adds a branch plugin: it follows the branch default, the person's switch stays.
+    const next = branched();
+    (next.plugins as unknown[]).push({ id: "extra", source: "git:https://git.example.test/plugins.git@semver:extra/:^1.0.0", status: "required" });
+    (next.branches as { optional: unknown[] }).optional.push({ id: "extra", title: "Extra" });
+    const { deps: later, calls: laterCalls } = await setup(next, [self(), notes(), { ...reports(), enabled: false }]);
+    later.choice = choice("business", { reports: false });
+    await runSync(later, "schedule");
+    expect(callsOf(laterCalls, "install")).toEqual(["install extra"]);
+    expect(callsOf(laterCalls, "enable")).toEqual([]);
+  });
+
+  it("a build without branches ignores a stored choice", async () => {
+    const { deps, calls } = await setup(sampleManifest(), [self()]);
+    deps.choice = choice("dev", { notes: false });
+    const outcome = await runSync(deps, "start");
+    expect(callsOf(calls, "install")).toEqual(["install notes"]);
+    expect(outcome.managed.branchStart).toBeNull();
+  });
+
+  it("gives the branch to a plugin that declares buildBranch", async () => {
+    const { deps, calls, plugins } = await setup(branched(), [self(), notes({ schema: { greeting: { type: "string" }, buildBranch: { type: "string" } }, values: { greeting: "hello" } }), reports()]);
+    deps.choice = choice("business");
+    await runSync(deps, "manual");
+    expect(callsOf(calls, "config notes")).toEqual(["config notes buildBranch"]);
+    expect(plugins.get("notes")!.values.buildBranch).toBe("business");
   });
 });

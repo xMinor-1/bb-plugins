@@ -113,6 +113,30 @@ export const setupStepSchema = z.object({
 });
 export type SetupStep = z.infer<typeof setupStepSchema>;
 
+/** The build's branches and the person's choice, for the First run page. */
+export const branchSetupSchema = z.object({
+  list: z.array(z.object({ id: z.string(), title: z.string(), hint: z.string().nullable() })),
+  /** The branch the person picked; null before a choice. */
+  chosen: z.string().nullable(),
+  /** No choice yet, and this machine holds the optional plugins back until there is one. */
+  waiting: z.boolean(),
+  /** The optional plugins: whether this machine gets each one, and what the chosen branch recommends. */
+  plugins: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      hint: z.string().nullable(),
+      on: z.boolean(),
+      recommended: z.boolean(),
+      /** The person switched it by hand. */
+      own: z.boolean(),
+      /** Not built yet: shown, cannot be switched. */
+      planned: z.boolean(),
+    }),
+  ),
+});
+export type BranchSetup = z.infer<typeof branchSetupSchema>;
+
 export const setupSchema = z.object({
   /** Fleet Kit has read a build manifest at least once. */
   configured: z.boolean(),
@@ -125,6 +149,8 @@ export const setupSchema = z.object({
   secretStore: z.string(),
   /** OpenCode installed by Fleet Kit while it is not ready; the page says what is going on. */
   opencodeInstall: opencodeStatusSchema.shape.install,
+  /** Null when the build has no branches. */
+  branches: branchSetupSchema.nullable().optional(),
 });
 export type Setup = z.infer<typeof setupSchema>;
 
@@ -147,6 +173,14 @@ export const rpcContract = defineRpcContract({
   },
   lock_reset: { input: z.null(), output: z.object({ reset: z.boolean() }) },
   setup_status: { input: z.object({ lang: z.enum(["en", "ru"]) }).strict(), output: setupSchema },
+  branch_choose: {
+    input: z.object({ branch: z.string().regex(/^[a-z0-9][a-z0-9-]*$/) }).strict(),
+    output: z.object({ chosen: z.string() }),
+  },
+  branch_toggle: {
+    input: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), on: z.boolean() }).strict(),
+    output: z.object({ on: z.boolean() }),
+  },
   setup_mark: {
     input: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), mark: setupMarkSchema.nullable() }).strict(),
     output: z.object({ marked: z.boolean() }),

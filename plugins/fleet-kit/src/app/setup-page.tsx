@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useBbNavigate, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { ExperimentalBadge } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../../server";
-import type { Setup, SetupMark, SetupStep } from "../../contract";
+import type { BranchSetup, Setup, SetupMark, SetupStep } from "../../contract";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
@@ -37,7 +37,7 @@ export function setupEntryWanted(): boolean {
 
 function rememberSteps(setup: Setup): void {
   // Read but not synced yet: keep what was seen before.
-  const has = setup.configured ? setup.steps.length > 0 : setup.manifestSet ? null : false;
+  const has = setup.configured ? setup.steps.length > 0 || (setup.branches ?? null) !== null : setup.manifestSet ? null : false;
   if (has === null) return;
   try {
     window.localStorage.setItem(SETUP_SEEN_KEY, has ? "steps" : "none");
@@ -86,6 +86,17 @@ const messages = defineMessages(
     left: (n: number) => `First run: ${n} ${n === 1 ? "step" : "steps"} left`,
     continue: "Continue",
     badge: (n: number) => `${n} setup ${n === 1 ? "step" : "steps"} left`,
+    branchTitle: "Your set of plugins",
+    branchPick: "Pick the branch closest to your work. It turns on the plugins it recommends; you can switch any of them below and change the branch later.",
+    branchWaiting: "Plugins that depend on the branch are installed once you pick one.",
+    branchNotPicked: "Not picked yet. Until you pick a branch, every plugin stays installed.",
+    branchChange: "Changing the branch puts the switches back to its recommendations.",
+    included: "Included",
+    recommended: "recommended",
+    notRecommended: "not in this branch by default",
+    yours: "your choice",
+    plannedPlugin: "coming later",
+    offNote: "A plugin you turn off is not installed, or is turned off if it already is. Its settings, data and keys stay; turn it on to get it back.",
   },
   {
     title: "Первый запуск",
@@ -116,6 +127,17 @@ const messages = defineMessages(
     left: (n) => `Первый запуск: осталось ${n} ${stepsRu(n)}`,
     continue: "Продолжить",
     badge: (n) => `Осталось шагов настройки: ${n}`,
+    branchTitle: "Ваш набор плагинов",
+    branchPick: "Выберите ветку, ближе всего к вашей работе. Она включит рекомендуемые плагины; любой из них можно переключить ниже, а ветку сменить позже.",
+    branchWaiting: "Плагины, которые зависят от ветки, поставятся после выбора.",
+    branchNotPicked: "Ветка ещё не выбрана. Пока её нет, все плагины остаются на месте.",
+    branchChange: "При смене ветки переключатели вернутся к её рекомендациям.",
+    included: "Что входит",
+    recommended: "рекомендуется",
+    notRecommended: "в этой ветке по умолчанию выключен",
+    yours: "ваш выбор",
+    plannedPlugin: "появится позже",
+    offNote: "Выключенный плагин не ставится, а уже поставленный выключается. Его настройки, данные и ключи остаются: включите его снова, и он вернётся как был.",
   },
 );
 type Texts = (typeof messages)["en"];
@@ -273,6 +295,81 @@ function StepCard({ step, secretStore, onMark, onSecret }: {
   );
 }
 
+/** The branch and the optional plugins: picked here first, changed here later. */
+function BranchCard({ branches, onChoose, onToggle }: {
+  branches: BranchSetup;
+  onChoose: (branch: string) => void;
+  onToggle: (id: string, on: boolean) => void;
+}) {
+  const t = useMessages(messages);
+  const picked = branches.chosen !== null;
+  return (
+    <section className="mt-4 rounded-lg border border-border bg-card px-4 py-3 text-sm" data-branches={branches.chosen ?? ""}>
+      <div className="flex items-start gap-2">
+        <Icon name={picked ? "CircleCheck" : "Circle"} className={cn("mt-0.5 size-4 shrink-0", picked ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")} />
+        <div className="min-w-0 flex-1">
+          <h2 className="font-medium">{t.branchTitle}</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t.branchPick}</p>
+          {!picked ? <p className="mt-0.5 text-xs text-muted-foreground">{branches.waiting ? t.branchWaiting : t.branchNotPicked}</p> : null}
+        </div>
+      </div>
+      <div role="radiogroup" aria-label={t.branchTitle} className="mt-3 grid gap-2 pl-6 sm:grid-cols-2">
+        {branches.list.map((branch) => {
+          const active = branch.id === branches.chosen;
+          return (
+            <button
+              key={branch.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              data-branch={branch.id}
+              onClick={() => (active ? undefined : onChoose(branch.id))}
+              className={cn(
+                "rounded-md border px-3 py-2 text-left transition-colors",
+                active ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50",
+              )}
+            >
+              <span className="flex items-center gap-2 font-medium">
+                <Icon name={active ? "CircleCheck" : "Circle"} className={cn("size-4", active ? "text-primary" : "text-muted-foreground")} />
+                {branch.title}
+              </span>
+              {branch.hint ? <span className="mt-0.5 block text-xs text-muted-foreground">{branch.hint}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+      {picked ? (
+        <>
+          <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.branchChange}</p>
+          <h3 className="mt-3 pl-6 text-xs font-medium text-muted-foreground">{t.included}</h3>
+          <ul className="mt-1 flex flex-col gap-1 pl-6">
+            {branches.plugins.map((plugin) => (
+              <li key={plugin.id} data-plugin={plugin.id} data-on={plugin.on} className="flex items-start gap-2 py-1">
+                <input
+                  id={`fleet-kit-plugin-${plugin.id}`}
+                  type="checkbox"
+                  className="mt-0.5 size-4 shrink-0 accent-primary"
+                  checked={plugin.on}
+                  disabled={plugin.planned}
+                  onChange={(event) => onToggle(plugin.id, event.target.checked)}
+                />
+                <label htmlFor={`fleet-kit-plugin-${plugin.id}`} className="min-w-0 flex-1">
+                  <span>{plugin.title}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {plugin.planned ? t.plannedPlugin : plugin.own ? t.yours : plugin.recommended ? t.recommended : t.notRecommended}
+                  </span>
+                  {plugin.hint ? <span className="block text-xs text-muted-foreground">{plugin.hint}</span> : null}
+                </label>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.offNote}</p>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 export function SetupPage() {
   const pageLang = useLang();
   const { rpc, setup, error, setError, checking, refetch } = useSetup(PAGE_POLL_MS);
@@ -307,7 +404,7 @@ export function SetupPage() {
         error ? null : <p className="mt-4 text-sm text-muted-foreground">{t.loading}</p>
       ) : !setup.configured ? (
         <div className="mt-4 rounded-lg border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">{t.notSynced}</div>
-      ) : setup.steps.length === 0 ? (
+      ) : setup.steps.length === 0 && !setup.branches ? (
         <div className="mt-4 rounded-lg border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">{t.noSteps}</div>
       ) : (
         <>
@@ -323,6 +420,13 @@ export function SetupPage() {
                 {t.start}
               </Button>
             </div>
+          ) : null}
+          {setup.branches ? (
+            <BranchCard
+              branches={setup.branches}
+              onChoose={(branch) => void rpc.call("branch_choose", { branch }).then(() => refetch(), fail)}
+              onToggle={(id, on) => void rpc.call("branch_toggle", { id, on }).then(() => refetch(), fail)}
+            />
           ) : null}
           <ol className="mt-4 flex flex-col gap-3">
             {setup.steps.map((step) => (

@@ -92,6 +92,33 @@ const onboardingStep = z
   });
 export type OnboardingStep = z.infer<typeof onboardingStep>;
 
+/**
+ * Build branches: the optional plugins and, per branch, which of them are on
+ * by default. Plugins outside `optional` go to every machine.
+ */
+const branchesBlock = z
+  .object({
+    /** Plugins the person may turn on or off, with the name the First run page shows. */
+    optional: z.array(z.object({ id, title: z.string().min(1), hint: z.string().optional() }).strict()).min(1),
+    list: z
+      .array(
+        z
+          .object({
+            id,
+            title: z.string().min(1),
+            hint: z.string().optional(),
+            /** Defaults of optional plugins in this branch; one left out is on. */
+            plugins: z.record(id, z.boolean()).optional(),
+            /** Defaults of `mcp` servers in this branch, over each entry's own `default`. */
+            mcp: z.record(id, z.boolean()).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .refine((list) => new Set(list.map((branch) => branch.id)).size === list.length, "a branch id is listed twice"),
+  })
+  .strict();
+
 const providerBlock = z
   .object({
     name: z.string().min(1).optional(),
@@ -218,6 +245,8 @@ const rootShape = {
   agents: z.object({ allowed: z.array(providerId).min(1) }).strict().optional(),
   /** Steps of the "First run" page, in order. */
   onboarding: z.array(onboardingStep).optional(),
+  /** Sets of plugins the person picks from on the First run page. */
+  branches: branchesBlock.optional(),
   /**
    * Rules for OpenCode's agents, one Markdown line per item. Fleet Kit writes
    * them to its own file in the OpenCode configuration directory and lists
@@ -498,9 +527,47 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
       return problem === null;
     });
   }
+  if (manifest.branches !== undefined) checkBranches(manifest, ids, warnings);
   if (compareVersions(manifest.install.bb, manifest.bb.minVersion) < 0) {
     errors.push("install.bb: lower than bb.minVersion");
   }
   if (/-/.test(manifest.version)) warnings.push(`version: ${manifest.version} is a pre-release`);
   return { manifest: errors.length === 0 ? manifest : null, errors, warnings, newerFormat: false };
+}
+
+/**
+ * A wrong name in `branches` only drops that name, with a warning: a branch is
+ * a default, and it must not hold back the rest of the build. Fleet Kit itself
+ * is never optional; a planned plugin may be, and its default applies once it ships.
+ */
+function checkBranches(manifest: Manifest, ids: Set<string>, warnings: string[]) {
+  const block = manifest.branches!;
+  const seen = new Set<string>();
+  block.optional = block.optional.filter((entry) => {
+    const problem =
+      entry.id === SELF_ID
+        ? "Fleet Kit cannot be optional"
+        : seen.has(entry.id)
+          ? "is listed twice"
+          : !ids.has(entry.id)
+            ? "is not in plugins"
+            : null;
+    seen.add(entry.id);
+    if (problem !== null) warnings.push(`branches.optional.${entry.id}: ${problem}; ignored`);
+    return problem === null;
+  });
+  const optional = new Set(block.optional.map((entry) => entry.id));
+  const servers = new Set(manifest.mcp.map((server) => server.id));
+  for (const branch of block.list) {
+    for (const id of Object.keys(branch.plugins ?? {})) {
+      if (optional.has(id)) continue;
+      warnings.push(`branches.${branch.id}.plugins.${id}: not in branches.optional; ignored`);
+      delete branch.plugins![id];
+    }
+    for (const id of Object.keys(branch.mcp ?? {})) {
+      if (servers.has(id)) continue;
+      warnings.push(`branches.${branch.id}.mcp.${id}: not in mcp; ignored`);
+      delete branch.mcp![id];
+    }
+  }
 }

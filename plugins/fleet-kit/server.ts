@@ -16,6 +16,7 @@ import { opencodeConfigDirSchema, opencodeInstallDirSchema } from "./src/shared/
 import { resolveOpenCodeLocation } from "./src/host/opencode-location.js";
 import { lockState, resetStuckLock } from "./src/host/lock-state.js";
 import { collectSetup, markProblem, SetupAsker, type StoredOnboarding } from "./src/setup.js";
+import { chooseBranch, togglePlugin, type BranchChoice } from "./src/branches.js";
 
 export { rpcContract };
 
@@ -117,6 +118,9 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
+  /** The person's branch: kept on this machine, never replaced by a manifest update. */
+  const readChoice = async () => (await kv.get<BranchChoice>("branchChoice")) ?? null;
+
   const setupAnswers = new Map<"en" | "ru", { at: number; answer: Promise<Setup> }>();
 
   function publish() {
@@ -142,6 +146,8 @@ export default async function plugin(bb: BbPluginApi) {
         secretStore: store.label,
         lastSync: (await kv.get<SyncReport>("lastSync")) ?? null,
         lang,
+        choice: await readChoice(),
+        branchStart: (await kv.get<ManagedState>("managed"))?.branchStart ?? null,
       })),
       opencodeInstall: (await kv.get<OpenCodeStatus>("opencode"))?.install ?? null,
     }))();
@@ -209,6 +215,7 @@ export default async function plugin(bb: BbPluginApi) {
         environment,
         bbConfigDir: process.env.OPENCODE_CONFIG_DIR,
         selfUpdateStartedAt,
+        choice: await readChoice(),
         onOpenCode: async (value) => {
           await kv.set("opencode", value);
           publish();
@@ -343,8 +350,36 @@ export default async function plugin(bb: BbPluginApi) {
     await kv.set("onboarding", {
       steps: manifest.onboarding ?? [],
       planned: manifest.plugins.filter((entry) => entry.status === "planned").map((entry) => entry.id),
+      branches: manifest.branches ?? null,
     } satisfies StoredOnboarding);
   }
+
+  async function storedBranches() {
+    const branches = (await kv.get<StoredOnboarding>("onboarding"))?.branches ?? null;
+    if (branches === null) throw new Error("The build has no branches.");
+    return branches;
+  }
+
+  /** Save the choice and bring the plugins to it now. */
+  async function saveChoice(choice: BranchChoice) {
+    await kv.set("branchChoice", choice);
+    publish();
+    void requestSync("manual");
+  }
+
+  async function pickBranch(branch: string) {
+    const choice = chooseBranch(await storedBranches(), branch);
+    await saveChoice(choice);
+    return choice;
+  }
+
+  async function switchPlugin(id: string, on: boolean) {
+    await saveChoice(togglePlugin(await storedBranches(), await readChoice(), id, on));
+  }
+
+  const refuse = (error: unknown): never => {
+    throw new experimental_PluginRpcRefusal({ code: "invalid", message: error instanceof Error ? error.message : String(error) });
+  };
 
   async function setSecret(name: string, value: string) {
     const known = ((await kv.get<StoredSecrets>("secrets")) ?? { list: [] }).list.some((secret) => secret.name === name);
@@ -388,6 +423,11 @@ export default async function plugin(bb: BbPluginApi) {
       return { reset };
     },
     setup_status: ({ lang }) => setup(lang),
+    branch_choose: async ({ branch }) => ({ chosen: (await pickBranch(branch).catch(refuse)).branch }),
+    branch_toggle: async ({ id, on }) => {
+      await switchPlugin(id, on).catch(refuse);
+      return { on };
+    },
     setup_mark: async ({ id, mark }) => {
       const onboarding = (await kv.get<StoredOnboarding>("onboarding")) ?? null;
       const step = onboarding?.steps.find((candidate) => candidate.id === id);
@@ -456,6 +496,50 @@ export default async function plugin(bb: BbPluginApi) {
             });
             lines.unshift(value.complete ? "First run: all set." : `First run: ${value.remaining} ${value.remaining === 1 ? "step" : "steps"} left.`);
             return { exitCode: 0, stdout: lines.join("\n") };
+          },
+        }),
+        branch: cliCommand({
+          summary: "Show the build's branches and which optional plugins this machine gets",
+          options: { json: { type: "boolean", description: "Print JSON" } },
+          async run(input) {
+            const value = (await setup("en")).branches ?? null;
+            if (input.options.json) return { exitCode: 0, stdout: JSON.stringify(value, null, 2) };
+            if (value === null) return { exitCode: 0, stdout: "This build has no branches." };
+            const lines = [`Branch: ${value.chosen ?? (value.waiting ? "not picked; optional plugins wait for it" : "not picked; everything stays installed")}`];
+            for (const branch of value.list) lines.push(`  ${branch.id === value.chosen ? "*" : " "} ${branch.id}: ${branch.title}`);
+            for (const plugin of value.plugins) {
+              lines.push(`  ${(plugin.on ? "on" : "off").padEnd(4)} ${plugin.id}: ${plugin.title}${plugin.own ? " (your switch)" : ""}${plugin.planned ? " (not built yet)" : ""}`);
+            }
+            return { exitCode: 0, stdout: lines.join("\n") };
+          },
+        }),
+        "branch choose": cliCommand({
+          summary: "Pick a branch; your plugin switches start over from its defaults",
+          positionals: [{ name: "branch", description: "Branch id", required: true }],
+          async run(input) {
+            try {
+              await pickBranch(input.positionals.branch);
+            } catch (error) {
+              throw new PluginCliError(error instanceof Error ? error.message : String(error), { code: "no_such_branch" });
+            }
+            return { exitCode: 0, stdout: `Branch ${input.positionals.branch} picked; syncing.` };
+          },
+        }),
+        "branch plugin": cliCommand({
+          summary: "Turn an optional plugin on or off: bb fleet-kit branch plugin <id> on|off",
+          positionals: [
+            { name: "id", description: "Plugin id", required: true },
+            { name: "state", description: "on or off", required: true },
+          ],
+          async run(input) {
+            const state = input.positionals.state;
+            if (state !== "on" && state !== "off") throw new PluginCliError("use on or off", { code: "invalid_state" });
+            try {
+              await switchPlugin(input.positionals.id, state === "on");
+            } catch (error) {
+              throw new PluginCliError(error instanceof Error ? error.message : String(error), { code: "not_switched" });
+            }
+            return { exitCode: 0, stdout: `${input.positionals.id} ${state}; syncing.` };
           },
         }),
         sync: cliCommand({

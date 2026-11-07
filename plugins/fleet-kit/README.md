@@ -35,6 +35,12 @@ brings bb to that description and keeps it there.
   done or skipped, the sidebar entry shows how many are left and the Fleet Kit
   page shows a reminder. A build without steps has no First run entry in the
   sidebar. An installer can open bb on `/plugins/fleet-kit/setup`.
+- **Branches** (optional): a build can offer sets of plugins — say, one for
+  sales and one for engineering. The person picks a branch on the First run
+  page, gets the plugins it recommends, can switch any optional plugin on or
+  off, and can change the branch later. A plugin switched off is not
+  installed, or is turned off if it already is; its settings, keys and data
+  stay. See [Branches](#branches).
 
 ## Install
 
@@ -72,6 +78,9 @@ does nothing.
 bb fleet-kit status [--json]      # build, last sync, OpenCode protection, secrets
 bb fleet-kit sync [--json]        # sync now and wait; exits 1 when the sync had errors
 bb fleet-kit setup [--json]       # the First run steps and which are done
+bb fleet-kit branch [--json]      # the build's branches and which optional plugins are on
+bb fleet-kit branch choose <id>   # pick a branch; your switches start over from its defaults
+bb fleet-kit branch plugin <id> on|off
 bb fleet-kit secret set <name> --value-stdin < key.txt
 bb fleet-kit secret clear <name>
 ```
@@ -193,6 +202,15 @@ a newer Fleet Kit can still deliver it.
   names an unknown secret or plugin, or repeats an id, is left out with a
   warning; the rest of the build still applies. Fleet Kit 0.2.x ignores the
   block with a warning.
+- `branches` — sets of plugins the person picks from (see
+  [Branches](#branches)): `optional`, the plugins a person may switch, each
+  with `id` (from `plugins`), `title` and `hint`; and `list`, the branches,
+  each with `id`, `title`, `hint`, `plugins` (`{ "<optional id>": true |
+  false }`, on when left out) and `mcp` (`{ "<mcp id>": true | false }`, over
+  the entry's `default`). Plugins outside `optional` go to every machine;
+  Fleet Kit itself is never optional. A name that is not in `plugins`, not in
+  `optional` or not in `mcp` is left out with a warning. Fleet Kit 0.5.x and
+  earlier ignore the block with a warning and install every plugin.
 
 A manifest whose remote MCP server has no URL yet, or that names a pre-release
 bb, gets a warning.
@@ -242,6 +260,44 @@ fleet-kit`, then the installer). The key stays in the OS credential store.
 
 Fleet Kit removes only plugins listed in `removePlugins`, never one bundled
 with bb. A plugin dropped from `plugins` stays and the sync says so once.
+
+### Branches
+
+```json
+"branches": {
+  "optional": [{ "id": "reports", "title": "Reports" }, { "id": "crm", "title": "CRM" }, { "id": "tracker", "title": "Task board" }],
+  "list": [
+    { "id": "sales", "title": "Sales", "plugins": { "tracker": false } },
+    { "id": "engineering", "title": "Engineering", "plugins": { "reports": false, "crm": false } }
+  ]
+}
+```
+
+The choice is the person's and lives on the machine, in Fleet Kit's storage:
+a manifest update never resets it. It holds the branch and the plugins the
+person switched by hand; every other optional plugin follows the branch, so a
+plugin the build adds to a branch arrives with the branch's default. Picking
+another branch starts the switches over from its defaults. When the build
+drops the chosen branch, the person's switches stay, nothing else is turned
+off, and First run asks for a branch again.
+
+A plugin the choice leaves out is not installed. One that is installed is
+turned off (bb's disable), never removed, so bb keeps its settings, secrets
+and data; turning it on again enables the same plugin. Its First run step is
+not shown. Fleet Kit's own secrets are not touched.
+
+Before the person picks a branch:
+
+- a machine that already had the build's plugins when it first met a
+  manifest with branches keeps installing everything, as before, and turns
+  nothing off;
+- a new machine installs only the common set, and the optional plugins wait
+  for the choice. Picking a branch is a First run step of its own.
+
+A plugin that declares a plain setting `buildBranch` gets the chosen branch's
+id (empty before a choice), so it can shape itself by it — for example, an
+MCP catalog applying the branch's `mcp` defaults. Fleet Kit does not apply
+`mcp` itself yet.
 
 ### bb's AI services
 

@@ -323,3 +323,71 @@ describe("manifest onboarding", () => {
     ]);
   });
 });
+
+describe("branches on the First run page", () => {
+  const onboarding = (): StoredOnboarding => ({
+    steps: [
+      { id: "mail", title: "Mail", plugin: "mail" },
+      { id: "qlik", title: "Qlik", plugin: "qlik" },
+      { id: "voice", title: "Voice", plugin: "voice", optional: true },
+    ],
+    planned: ["voice"],
+    branches: {
+      optional: [
+        { id: "qlik", title: "Qlik" },
+        { id: "voice", title: "Voice" },
+      ],
+      list: [
+        { id: "business", title: "Business", hint: "Reports and CRM" },
+        { id: "dev", title: "Development", plugins: { qlik: false } },
+      ],
+    },
+  });
+  const answers = { mail: { state: "done", summary: "Signed in" }, qlik: { state: "done", summary: "3 reports" } };
+
+  it("asks for a branch first; a new machine hides the optional steps until then", async () => {
+    const value = { ...deps({ onboarding: onboarding(), answers }).value, branchStart: "wait" as const };
+    const setup = await collectSetup(value);
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail"]);
+    expect(setup.branches).toMatchObject({ chosen: null, waiting: true });
+    expect(setup.remaining).toBe(1);
+    expect(setup.complete).toBe(false);
+  });
+
+  it("on an old machine keeps every step until a branch is picked", async () => {
+    const setup = await collectSetup({ ...deps({ onboarding: onboarding(), answers }).value, branchStart: "all" });
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail", "qlik", "voice"]);
+    expect(setup.branches!.plugins.every((plugin) => plugin.on)).toBe(true);
+  });
+
+  it("drops the steps of plugins off in the choice and marks the person's own switches", async () => {
+    const choice = { branch: "dev", plugins: { voice: false }, at: "2026-11-07T10:00:00Z" };
+    const setup = await collectSetup({ ...deps({ onboarding: onboarding(), answers }).value, choice, branchStart: "wait" });
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail"]);
+    expect(setup.complete).toBe(true);
+    expect(setup.branches).toEqual({
+      list: [
+        { id: "business", title: "Business", hint: "Reports and CRM" },
+        { id: "dev", title: "Development", hint: null },
+      ],
+      chosen: "dev",
+      waiting: false,
+      plugins: [
+        { id: "qlik", title: "Qlik", hint: null, on: false, recommended: false, own: false, planned: false },
+        { id: "voice", title: "Voice", hint: null, on: false, recommended: true, own: true, planned: true },
+      ],
+    });
+  });
+
+  it("asks again when the build drops the chosen branch", async () => {
+    const choice = { branch: "gone", plugins: {}, at: "2026-11-07T10:00:00Z" };
+    const setup = await collectSetup({ ...deps({ onboarding: onboarding(), answers }).value, choice });
+    expect(setup.branches!.chosen).toBeNull();
+    expect(setup.steps.map((step) => step.id)).toContain("qlik");
+    expect(setup.remaining).toBe(1);
+  });
+
+  it("a build without branches has none on the page", async () => {
+    expect((await collectSetup(deps({ answers }).value)).branches).toBeNull();
+  });
+});
