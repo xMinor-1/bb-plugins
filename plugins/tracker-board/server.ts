@@ -23,13 +23,13 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { hostContract, type FailureCode, type KeyStatus } from "./contract";
 import { loadBoard, loadParents, parseSource, sourceKey, type Board, type Source } from "./src/server/board";
-import { parseDefaultBoards, withTitle } from "./src/shared/boards";
+import { parseDefaultBoards, rankQueues, withTitle } from "./src/shared/boards";
 import { apply, describe, mapLimit, plan, readIssues, stillAsSet } from "./src/server/engine";
 import { rpcContract, type AppliedView, type BoardView, type ConfigView, type IssueView, type StatusView } from "./src/server/rpc-contract";
 import { Tracker, TrackerError, type StatusInfo } from "./src/server/tracker";
 import { changeSchema, SKIP_TEXT, type Change, type ChangeResult, type PlannedChange } from "./src/shared/changes";
 import { LIMITS } from "./src/shared/limits";
-import { epicAbove, findKey, KEY_PATTERN, splitPrefix, type Issue, type Person } from "./src/shared/model";
+import { epicAbove, findKey, KEY_PATTERN, kindOf, splitPrefix, type Issue, type Person } from "./src/shared/model";
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
 import { fromExport, prefsSchema, type Prefs } from "./src/shared/prefs";
 import { categoryOf, normalizeBaseUrl, parseProfile, ProfileError, type Profile } from "./src/shared/profile";
@@ -69,6 +69,8 @@ interface Execution {
 /** "What are you interested in" looks at this many of the person's tasks. */
 const SUGGEST_FROM = 300;
 const SUGGEST_QUEUES = 6;
+/** Queues a search shows; the tracker may give more, the best of them go first. */
+const QUEUES_SHOWN = 20;
 const SUGGEST_EPICS = 8;
 
 interface Config {
@@ -961,7 +963,7 @@ export default async function plugin(bb: BbPluginApi) {
         webUrl: profile?.webUrl ?? null,
         keyHelp: profile?.keyHelp ?? null,
         statuses: statusViews(new Map(), [], true),
-        types: (profile?.types ?? []).map((type) => ({ key: type.key, name: type.name ?? type.key })),
+        types: profile ? profile.types.map((type) => ({ key: type.key, name: type.name ?? type.key, kind: kindOf(type.key, profile) })) : [],
         priorities: (profile?.priorities ?? []).map((priority) => ({ key: priority.key, name: priority.name ?? priority.key })),
         templates: templatesFor(prefs),
         bundles: config.templates.bundles,
@@ -1109,7 +1111,10 @@ export default async function plugin(bb: BbPluginApi) {
       if (trimmed.length < 2) return { queues: [] };
       const tracker = await trackerOn(await panelHost());
       if (!tracker.has("queues")) return { queues: [] };
-      return { queues: await tracker.queues(trimmed) };
+      const prefs = await loadPrefs().catch(() => null);
+      const sources = [...config.defaultBoards, ...(prefs ? [prefs.source, ...prefs.boards.map((board) => board.source), ...prefs.recent.map((item) => item.source)] : [])];
+      const mine = new Set(sources.flatMap((source) => (source?.kind === "queue" ? [source.queue] : [])));
+      return { queues: rankQueues(await tracker.queues(trimmed), trimmed, mine).slice(0, QUEUES_SHOWN) };
     },
     suggestBoards: async () => {
       const query = config.profile?.queries.mine;

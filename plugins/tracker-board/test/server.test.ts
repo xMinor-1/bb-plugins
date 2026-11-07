@@ -234,6 +234,17 @@ describe("the board", () => {
     expect(errorText(messages.en, new Error('tracker-board:unauthorized:401 {"detail":null,"machine":"Mac"}'))).toBe("The tracker refused the API key. Save a new one in Settings. The request went from Mac.");
   });
 
+  it("lists the build's types with the kind each shows as, for the type filter", async () => {
+    const profile = { ...MOCK_PROFILE, kinds: { ...MOCK_PROFILE.kinds, bug: ["bug", "incident"] }, types: [...MOCK_PROFILE.types, { key: "incident", name: "Incident" }, { key: "release" }] };
+    const { rpc } = await setup({ apiProfile: JSON.stringify(profile) });
+    const config = await rpc<{ types: { key: string; name: string; kind: string }[] }>("config");
+    expect(config.types.slice(-3)).toEqual([
+      { key: "epic", name: "Epic", kind: "epic" },
+      { key: "incident", name: "Incident", kind: "bug" },
+      { key: "release", name: "release", kind: "task" },
+    ]);
+  });
+
   it("keeps a board's statuses to the configured ones and those its cards are in", async () => {
     const profile = { ...MOCK_PROFILE, statuses: MOCK_PROFILE.statuses.map((status) => (status.key === "testing" ? { ...status, show: "used" } : status)) };
     const { rpc } = await setup({ apiProfile: JSON.stringify(profile) });

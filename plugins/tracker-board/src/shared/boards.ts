@@ -81,3 +81,29 @@ export function isPinned(entries: readonly BoardEntry[], source: Source): BoardE
   const id = sourceId(source);
   return entries.find((entry) => entry.id === id) ?? null;
 }
+
+/**
+ * Queues a search found, best first. A tracker lists matches in its own order, often by
+ * key, and the queue a person looks for can sit past the first page: the person's own
+ * queues (their boards, recent ones, the build's) go first, then an exact key, a key or a
+ * name that starts with the text, a word of the name that does, and the rest.
+ */
+export function rankQueues<Q extends { key: string; name: string }>(queues: readonly Q[], text: string, mine: ReadonlySet<string>): Q[] {
+  const needle = text.trim().toLowerCase();
+  const score = (queue: Q) => {
+    const key = queue.key.toLowerCase();
+    const name = queue.name.toLowerCase();
+    if (key === needle) return 0;
+    const own = mine.has(queue.key) ? 0 : 10;
+    if (key.startsWith(needle)) return own + 1;
+    if (name.startsWith(needle)) return own + 2;
+    if (name.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(needle))) return own + 3;
+    if (key.includes(needle)) return own + 4;
+    if (name.includes(needle)) return own + 5;
+    return own + 6;
+  };
+  return queues
+    .map((queue, index) => ({ queue, index, score: score(queue) }))
+    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .map((item) => item.queue);
+}

@@ -1,6 +1,6 @@
 // "My boards": the build's shared boards and the person's own, in the person's order.
 import { describe, expect, it } from "vitest";
-import { isPinned, moveBoard, myBoards, parseDefaultBoards, restoreBoard, setHidden, togglePinned, withTitle } from "../src/shared/boards";
+import { isPinned, moveBoard, myBoards, parseDefaultBoards, rankQueues, restoreBoard, setHidden, togglePinned, withTitle } from "../src/shared/boards";
 import { prefsPatchSchema, prefsSchema, type Source } from "../src/shared/prefs";
 
 const queue = (key: string): Source => ({ kind: "queue", queue: key });
@@ -69,5 +69,28 @@ describe("my boards", () => {
   it("saves the boards alone without resetting other prefs", () => {
     expect(prefsPatchSchema.parse({ boards: [] })).toEqual({ boards: [] });
     expect(prefsSchema.parse({}).boardsReady).toBe(false);
+  });
+});
+
+describe("queues a search found", () => {
+  // A tracker that lists matches by key puts the wanted queue past the first page.
+  const found = [
+    { key: "APPROVALS", name: "Payment approvals" },
+    { key: "CARDPAY", name: "Card pay" },
+    { key: "PAY", name: "Payments" },
+    { key: "PAYROLL", name: "Salaries" },
+    { key: "OPS", name: "Operations, payouts" },
+    { key: "SHOPPAYFLOW", name: "Checkout path - SHOPPAYFLOW" },
+  ];
+  const keys = (list: { key: string }[]) => list.map((queue) => queue.key);
+
+  it("puts the person's own queues first, then by how the text matches", () => {
+    expect(keys(rankQueues(found, "pay", new Set(["SHOPPAYFLOW"])))).toEqual(["PAY", "SHOPPAYFLOW", "PAYROLL", "APPROVALS", "CARDPAY", "OPS"]);
+    expect(keys(rankQueues(found, "pay", new Set()))).toEqual(["PAY", "PAYROLL", "APPROVALS", "CARDPAY", "OPS", "SHOPPAYFLOW"]);
+  });
+
+  it("keeps the tracker's order among equals", () => {
+    expect(keys(rankQueues([found[4]!, found[1]!], "pay", new Set()))).toEqual(["OPS", "CARDPAY"]);
+    expect(keys(rankQueues([found[1]!, found[4]!], "pay", new Set()))).toEqual(["CARDPAY", "OPS"]);
   });
 });

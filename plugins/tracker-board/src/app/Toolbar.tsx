@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { KINDS, type Issue, type Kind } from "../shared/model";
+import type { Issue, Kind } from "../shared/model";
 import { CARD_FIELDS, DEFAULT_FIELDS, type CardField, type Display } from "../shared/prefs";
 import type { Messages } from "./messages";
 import { Avatar, Icons, TypeTile } from "./parts";
@@ -8,11 +8,40 @@ import { Popover } from "./ui";
 export interface Filters {
   text: string;
   assignee: string | null;
-  kind: Kind | null;
+  /** A tracker type key, as the tracker reports it. */
+  type: string | null;
   mine: boolean;
 }
 
-export const NO_FILTERS: Filters = { text: "", assignee: null, kind: null, mine: false };
+export const NO_FILTERS: Filters = { text: "", assignee: null, type: null, mine: false };
+
+export interface TypeOption {
+  key: string;
+  name: string;
+  kind: Kind;
+  /** Tasks of this type on the board. */
+  count: number;
+}
+
+/**
+ * The type filter's choices: every type the build lists, in its order, even with no tasks
+ * on this board, then any other type the board's tasks have.
+ */
+export function typeOptions(types: readonly { key: string; name: string; kind: Kind }[], issues: readonly Issue[]): TypeOption[] {
+  const counts = new Map<string, { n: number; kind: Kind; key: string }>();
+  for (const issue of issues) {
+    const id = issue.type.toLowerCase();
+    const known = counts.get(id);
+    counts.set(id, { n: (known?.n ?? 0) + 1, kind: known?.kind ?? issue.kind, key: known?.key ?? issue.type });
+  }
+  const listed = types.map((type) => ({ key: type.key, name: type.name, kind: type.kind, count: counts.get(type.key.toLowerCase())?.n ?? 0 }));
+  const seen = new Set(types.map((type) => type.key.toLowerCase()));
+  const extra = [...counts]
+    .filter(([id]) => id !== "" && !seen.has(id))
+    .map(([, found]) => ({ key: found.key, name: found.key, kind: found.kind, count: found.n }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return [...listed, ...extra];
+}
 
 export function applyFilters(issues: readonly Issue[], filters: Filters, me: string | null, personName: (id: string | null) => string): Issue[] {
   const q = filters.text.trim().toLowerCase();
@@ -22,7 +51,7 @@ export function applyFilters(issues: readonly Issue[], filters: Filters, me: str
       if (!issue.key.toLowerCase().includes(q) && !issue.summary.toLowerCase().includes(q) && !issue.labels.some((label) => label.toLowerCase().includes(q)) && !name.includes(q)) return false;
     }
     if (filters.assignee === "_none" ? issue.assignee !== null : filters.assignee !== null && issue.assignee !== filters.assignee) return false;
-    if (filters.kind && issue.kind !== filters.kind) return false;
+    if (filters.type !== null && issue.type.toLowerCase() !== filters.type.toLowerCase()) return false;
     if (filters.mine && (!me || issue.assignee !== me)) return false;
     return true;
   });
@@ -33,6 +62,7 @@ export function Toolbar({
   filters,
   setFilters,
   people,
+  types,
   display,
   setDisplay,
 }: {
@@ -40,6 +70,7 @@ export function Toolbar({
   filters: Filters;
   setFilters: (next: Filters) => void;
   people: { id: string; name: string }[];
+  types: TypeOption[];
   display: Display;
   setDisplay: (next: Display) => void;
 }) {
@@ -81,20 +112,21 @@ export function Toolbar({
         open={menu === "type"}
         onClose={close}
         trigger={
-          <button className={`tb-fchip${filters.kind ? " tb-on" : ""}`} type="button" onClick={() => setMenu(menu === "type" ? null : "type")} aria-expanded={menu === "type"}>
+          <button className={`tb-fchip${filters.type !== null ? " tb-on" : ""}`} type="button" onClick={() => setMenu(menu === "type" ? null : "type")} aria-expanded={menu === "type"}>
             {t.type}
-            {filters.kind ? `: ${t[`type_${filters.kind}`].toLowerCase()}` : ""}
+            {filters.type !== null ? `: ${(types.find((type) => type.key.toLowerCase() === filters.type!.toLowerCase())?.name ?? filters.type).toLowerCase()}` : ""}
           </button>
         }
         className="tb-menu"
       >
-        <button className="tb-mi" type="button" onClick={() => (setFilters({ ...filters, kind: null }), close())}>
+        <button className="tb-mi" type="button" onClick={() => (setFilters({ ...filters, type: null }), close())}>
           {t.all}
         </button>
-        {KINDS.map((kind) => (
-          <button key={kind} className="tb-mi" type="button" onClick={() => (setFilters({ ...filters, kind }), close())}>
-            <TypeTile kind={kind} t={t} />
-            {t[`type_${kind}`]}
+        {types.map((type) => (
+          <button key={type.key} className="tb-mi" type="button" aria-pressed={filters.type?.toLowerCase() === type.key.toLowerCase()} onClick={() => (setFilters({ ...filters, type: type.key }), close())}>
+            <TypeTile kind={type.kind} t={t} />
+            <span className="tb-mi-t">{type.name}</span>
+            <span className="tb-mi-n">{type.count}</span>
           </button>
         ))}
       </Popover>

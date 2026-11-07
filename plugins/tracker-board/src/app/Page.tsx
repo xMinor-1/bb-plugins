@@ -37,7 +37,7 @@ import {
   type Rpc,
 } from "./store";
 import { TemplatesDialog } from "./Templates";
-import { applyFilters, NO_FILTERS, Toolbar, type Filters } from "./Toolbar";
+import { applyFilters, NO_FILTERS, Toolbar, typeOptions, type Filters } from "./Toolbar";
 import { Spinner } from "./ui";
 import { childrenOf, compositionParts, personTemplates, ViewContext, type ViewData } from "./view";
 
@@ -274,7 +274,7 @@ export function BoardPage() {
         </div>
       ) : null}
       {board ? (
-        <Toolbar t={t} filters={filters} setFilters={setFilters} people={people} display={prefs.display} setDisplay={(display) => void savePrefs(rpc, { display })} />
+        <Toolbar t={t} filters={filters} setFilters={setFilters} people={people} types={typeOptions(config.types, board.issues)} display={prefs.display} setDisplay={(display) => void savePrefs(rpc, { display })} />
       ) : null}
       {error ? (
         <div className="tb-banner tb-banner-error">

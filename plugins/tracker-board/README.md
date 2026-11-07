@@ -24,7 +24,8 @@ The interface is in English and Russian.
 - **What are you interested in.** After the API key, a first-run step suggests the queues and open
   epics of the person's own tasks and fills My boards; it can be skipped.
 - **Board.** Columns by status, optionally rows by story or by person. Drag a card to change its
-  status; a toast offers Undo for that one task. Filters by text, assignee, type and "mine".
+  status; a toast offers Undo for that one task. Filters by text, assignee, type and "mine";
+  the type filter lists every type of the profile's `types`, then any other type on the board.
 - **Cards.** Which fields a card shows is up to the person: type, key, priority, description
   lines, labels, the epic, due date, assignee. The epic is a tag with a colour of its own; a click
   opens it. A story's card has one row of cells, one per template part and one for other tasks,
@@ -155,7 +156,7 @@ missing is dropped from the body. Variables in a path are URL-encoded.
 | `fields`, `userFields`, `statusFields`, `commentFields`, `componentFields`, `queueFields` | Paths into one object: `a.b`, `a[].b` for a list, `x\|y` for the first that exists, and an empty alternative for the value itself (`issue\|` reads a wrapped or a bare answer). An object in place of a value gives its `key`, `value`, `code`, `id` or `login` |
 | `statuses` | Board order with categories `todo`, `progress`, `done`. `"show": "used"` keeps a status's name and category without an empty column. A status not listed goes by its category; a tracker's own status list joins boards and menus only when it has 60 entries or fewer |
 | `kinds` | Which types are epics, stories and bugs; any other type is a task |
-| `types`, `priorities` | Menus when creating and editing |
+| `types`, `priorities` | Menus when creating and editing; `types` also fills the type filter |
 | `labelUpdate` | `set` sends the whole list as `{labels}`; `delta` sends `{labelsAdd}` and `{labelsRemove}` |
 | `createDefaults` | Values for `create` variables nobody gave, such as `{ "priority": "medium" }` when the tracker requires one |
 
@@ -163,7 +164,9 @@ Variables: `{key}` and `{issueId}` (the task's id, or its key without one) in ev
 request; `{query}`, `{limit}`, `{offset}`, `{page}` in `search`; `{queue}`, `{summary}`,
 `{type}`, `{priority}`, `{assignee}`, `{labels}`, `{description}`, `{parent}` in `create` and
 `update`; `{status}` in `transition` or `update`; `{text}` in `addComment`, `users` and
-`queues` (without `queues` queues are opened by key only, and archived ones are left out);
+`queues` (without `queues` queues are opened by key only, and archived ones are left out; ask
+for up to 100 or more: the plugin puts the person's own queues and the closest matches first and
+shows 20);
 `{id}` in `user`; `{component}` and `{componentName}` in `addComponent`.
 
 When `create` has no `{parent}` or `{assignee}`, the plugin sets them after creating with

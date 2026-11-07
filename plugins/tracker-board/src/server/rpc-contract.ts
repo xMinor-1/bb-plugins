@@ -3,7 +3,7 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { failureCodeSchema, keyStatusSchema } from "../../contract";
 import { changeSchema, type ChangeResult, type PlannedChange } from "../shared/changes";
-import type { Comment, Issue, Person } from "../shared/model";
+import type { Comment, Issue, Kind, Person } from "../shared/model";
 import { exportSchema, prefsPatchSchema, sourceSchema, type Prefs } from "../shared/prefs";
 import type { Category } from "../shared/profile";
 import type { Bundle, Template } from "../shared/templates";
@@ -22,7 +22,8 @@ export interface ConfigView {
   webUrl: string | null;
   keyHelp: string | null;
   statuses: StatusView[];
-  types: { key: string; name: string }[];
+  /** The tracker types the build lists, in menu order, with the kind each one shows as. */
+  types: { key: string; name: string; kind: Kind }[];
   priorities: { key: string; name: string }[];
   /** Build templates first, then the person's own. */
   templates: Template[];

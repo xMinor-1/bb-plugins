@@ -182,7 +182,7 @@ export class Tracker {
       if (!key || (qf.archived && getPath(raw, qf.archived) === true)) continue;
       out.push({ key, name: displayName(getPath(raw, qf.name)) ?? scalar(getPath(raw, qf.name)) ?? key });
     }
-    return out.slice(0, 20);
+    return out.slice(0, 200);
   }
 
   async user(id: string): Promise<Person | null> {

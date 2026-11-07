@@ -357,6 +357,20 @@
 .tb-mi:hover {
   background: var(--tb-hover);
 }
+.tb-root .tb-mi[aria-pressed="true"] {
+  background: var(--tb-active);
+}
+.tb-mi-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-mi-n {
+  color: var(--tb-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
 .tb-pin {
   width: 100%;
   border: 1px solid var(--tb-line);

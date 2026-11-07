@@ -65,7 +65,7 @@ export function splitPrefix(summary: string): { prefix: string; rest: string } {
   return { prefix, rest: summary.slice(end + 1).trimStart() };
 }
 
-function kindOf(type: string, profile: Profile): Kind {
+export function kindOf(type: string, profile: Pick<Profile, "kinds">): Kind {
   const lower = type.toLowerCase();
   const has = (list: readonly string[]) => list.some((item) => item.toLowerCase() === lower);
   if (has(profile.kinds.epic)) return "epic";
