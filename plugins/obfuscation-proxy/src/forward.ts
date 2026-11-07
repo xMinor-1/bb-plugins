@@ -2,7 +2,7 @@
 // is on for the thread, straight to the upstream when it is off. With masking
 // on and no proxy, the request is refused rather than sent unmasked.
 
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { isTokenCount, KEY_HEADER, THREAD_HEADER, type FeedEntry } from "./shared";
 import type { MaskMatcher, ThreadFeeds } from "./feed";
 
@@ -63,6 +63,14 @@ function modelOf(body: Uint8Array): string | null {
   return null;
 }
 
+/** Constant-time check of the routing key: the route is reachable wherever bb is. */
+function keyMatches(given: string | null, key: string): boolean {
+  if (given === null) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(key);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 function joinUrl(base: string, path: string, search: string): string {
   return `${base.replace(/\/+$/u, "")}${path}${search}`;
 }
@@ -70,7 +78,7 @@ function joinUrl(base: string, path: string, search: string): string {
 export async function forwardRequest(request: Request, path: string, deps: ForwardDeps): Promise<Response> {
   const now = deps.now ?? Date.now;
   const doFetch = deps.fetch ?? fetch;
-  if (request.headers.get(KEY_HEADER) !== deps.key) {
+  if (!keyMatches(request.headers.get(KEY_HEADER), deps.key)) {
     return apiError(403, "This request did not come from a bb agent session routed by the Obfuscation Proxy plugin.");
   }
   const threadId = request.headers.get(THREAD_HEADER)?.trim() || "unknown";
