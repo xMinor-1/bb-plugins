@@ -410,7 +410,7 @@ export const messages = defineMessages(
     addMissing: (list) => `Добавить ${list}`,
     noTaskYet: (title) => `Задачи «${title}» ещё нет`,
     andMore: (n) => `и ещё ${n}`,
-    otherShort: "прочие",
+    otherShort: "ещё",
     epicTag: (key, title) => `Эпик ${key}: ${title}`,
     noEpic: "Без эпика",
     otherTasksTitle: "Задачи вне шаблонов",
