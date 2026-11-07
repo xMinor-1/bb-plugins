@@ -1,10 +1,10 @@
 // What a board shows: a queue, a query, or one issue with everything nested under it.
 import { LIMITS } from "../shared/limits";
-import { KEY_PATTERN, QUEUE_PATTERN, type Issue } from "../shared/model";
+import type { Issue } from "../shared/model";
 import type { Tracker } from "./tracker";
 
 export type { Source } from "../shared/prefs";
-import type { Source } from "../shared/prefs";
+import { sourceFromText, type Source } from "../shared/prefs";
 
 export interface Board {
   source: Source;
@@ -28,17 +28,9 @@ export function sourceKey(source: Source): string {
 }
 
 /** A typed source: an issue key or a link to one, a queue key, or a query. */
+/** What a typed or pasted text opens; see `sourceFromText`. */
 export function parseSource(text: string, allowQuery: boolean): Source | null {
-  const trimmed = text.trim().slice(0, 1000);
-  if (trimmed === "") return null;
-  if (KEY_PATTERN.test(trimmed)) return { kind: "issue", key: trimmed.toUpperCase() };
-  if (QUEUE_PATTERN.test(trimmed)) return { kind: "queue", queue: trimmed.toUpperCase() };
-  if (/^https?:\/\//i.test(trimmed)) {
-    const last = trimmed.split(/[/?#]/).filter((part) => part !== "");
-    for (const part of last.reverse()) if (KEY_PATTERN.test(part)) return { kind: "issue", key: part.toUpperCase() };
-    return null;
-  }
-  return allowQuery ? { kind: "query", query: trimmed } : null;
+  return sourceFromText(text, allowQuery);
 }
 
 function fill(template: string, vars: Record<string, string>): string {

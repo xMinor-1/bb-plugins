@@ -100,6 +100,10 @@ describe("issues", () => {
     expect(parseSource("https://tracker.example.com/PAY-7", true)).toEqual({ kind: "issue", key: "PAY-7" });
     expect(parseSource("status = open", true)).toEqual({ kind: "query", query: "status = open" });
     expect(parseSource("status = open", false)).toBeNull();
+    // A pasted link without its scheme opens the issue, and a link without a key is never a query.
+    expect(parseSource("tracker.example.com/PAY-7", true)).toEqual({ kind: "issue", key: "PAY-7" });
+    expect(parseSource("https://tracker.example.com/agile/board/12", true)).toBeNull();
+    expect(parseSource("tracker.example.com/agile/board/12", true)).toBeNull();
   });
 });
 

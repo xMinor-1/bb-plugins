@@ -3,6 +3,7 @@
 // holds exactly this and never the API key.
 import { z } from "zod";
 import { LIMITS } from "./limits";
+import { KEY_PATTERN, QUEUE_PATTERN } from "./model";
 import { templateSchema } from "./templates";
 
 export const CARD_FIELDS = ["type", "key", "priority", "description", "composition", "labels", "components", "parent", "due", "assignee", "comments"] as const;
@@ -87,3 +88,20 @@ export function fromExport(prefs: Prefs, file: ExportFile): Prefs {
   });
 }
 export type Source = z.infer<typeof sourceSchema>;
+
+/**
+ * What a typed or pasted text opens: an issue key, a queue, a link to an issue (with or
+ * without its scheme), else a query when the build allows them. A link without a key
+ * opens nothing: sent as a query it only makes the tracker answer with a parse error.
+ */
+export function sourceFromText(text: string, allowQuery: boolean): Source | null {
+  const trimmed = text.trim().slice(0, 2000);
+  if (trimmed === "") return null;
+  if (KEY_PATTERN.test(trimmed)) return { kind: "issue", key: trimmed.toUpperCase() };
+  if (QUEUE_PATTERN.test(trimmed)) return { kind: "queue", queue: trimmed.toUpperCase() };
+  if (!/\s/.test(trimmed) && trimmed.includes("/")) {
+    for (const part of trimmed.split(/[/?#]/).reverse()) if (KEY_PATTERN.test(part)) return { kind: "issue", key: part.toUpperCase() };
+    return null;
+  }
+  return allowQuery ? { kind: "query", query: trimmed } : null;
+}

@@ -53,6 +53,8 @@ const statusSchema = z
     name: z.string().max(100).optional(),
     /** todo, progress or done; anything else counts as progress. */
     category: z.string().max(50).optional(),
+    /** `always`: a board column even when empty (default); `used`: only names and the category, a column when a card is in it. */
+    show: z.enum(["always", "used"]).default("always"),
   })
   .strict();
 export type StatusConfig = z.infer<typeof statusSchema>;

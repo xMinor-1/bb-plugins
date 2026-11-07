@@ -11,6 +11,9 @@ export type Send = (input: RequestInput) => Promise<RequestOutput>;
 export type RequestName = keyof Profile["requests"];
 
 export class TrackerError extends Error {
+  /** The bb machine the request went from, when it got that far. */
+  machine: string | null = null;
+
   constructor(
     readonly code: FailureCode | "notConfigured" | "badAnswer",
     readonly status: number | null = null,
@@ -18,6 +21,22 @@ export class TrackerError extends Error {
   ) {
     super(detail ? `${code}: ${detail}` : code);
   }
+}
+
+/** The useful part of an error body: a JSON answer's `message` or `error`, else the text, kept short. */
+export function readableDetail(detail: string | null): string | null {
+  if (!detail) return null;
+  let text = detail.trim();
+  if (text.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      const message = [parsed.message, parsed.error, parsed.detail].find((value) => typeof value === "string" && value.trim() !== "");
+      if (typeof message === "string") text = message.trim();
+    } catch {
+      // Not JSON after all: keep the text.
+    }
+  }
+  return text === "" ? null : text.length > 300 ? `${text.slice(0, 300)}…` : text;
 }
 
 export interface StatusInfo {
@@ -31,6 +50,8 @@ export class Tracker {
     readonly baseUrl: string,
     private readonly send: Send,
     private readonly statusNames: ReadonlyMap<string, StatusInfo> = new Map(),
+    /** The bb machine requests go from, named in errors. */
+    readonly machine: string | null = null,
   ) {}
 
   has(name: RequestName): boolean {
@@ -45,6 +66,15 @@ export class Tracker {
   }
 
   async call(name: RequestName, vars: Vars, exposeHeaders: string[] = []): Promise<{ json: unknown; headers: Record<string, string> }> {
+    try {
+      return await this.callOnce(name, vars, exposeHeaders);
+    } catch (error) {
+      if (error instanceof TrackerError && error.machine === null) error.machine = this.machine;
+      throw error;
+    }
+  }
+
+  private async callOnce(name: RequestName, vars: Vars, exposeHeaders: string[]): Promise<{ json: unknown; headers: Record<string, string> }> {
     const template: RequestTemplate | undefined = this.profile.requests[name];
     if (!template) throw new TrackerError("notConfigured", null, `The API profile has no "${name}" request`);
     let path: string;
@@ -53,7 +83,7 @@ export class Tracker {
     } catch (error) {
       throw new TrackerError("notConfigured", null, error instanceof TemplateError ? error.message : String(error));
     }
-    const bodyJson = template.body === undefined ? (template.method === "GET" ? null : {}) : fillJson(template.body, vars);
+    const bodyJson = template.body === undefined ? (template.method === "GET" || template.method === "DELETE" ? null : {}) : fillJson(template.body, vars);
     const body = bodyJson === null ? null : JSON.stringify(bodyJson);
     if (body !== null && body.length > LIMITS.requestBody) throw new TrackerError("badRequest", null, "The request is too large");
     const output = await this.send({
@@ -66,7 +96,7 @@ export class Tracker {
       headers: this.profile.headers,
       exposeHeaders,
     });
-    if (!output.ok) throw new TrackerError(output.code, output.status, output.detail);
+    if (!output.ok) throw new TrackerError(output.code, output.status, readableDetail(output.detail));
     if (output.truncated) throw new TrackerError("badAnswer", output.status, "The answer is larger than the plugin reads");
     let json: unknown = null;
     if (output.text.trim() !== "") {

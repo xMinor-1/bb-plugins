@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { KEY_PATTERN, QUEUE_PATTERN, splitPrefix, type Issue, type Kind } from "../shared/model";
-import { CARD_FIELDS, DEFAULT_FIELDS, type CardField, type Display, type Prefs, type Source } from "../shared/prefs";
+import { splitPrefix, type Issue, type Kind } from "../shared/model";
+import { CARD_FIELDS, DEFAULT_FIELDS, sourceFromText, type CardField, type Display, type Prefs, type Source } from "../shared/prefs";
 import type { ConfigView } from "../server/rpc-contract";
 import type { Messages } from "./messages";
 import { Avatar, Icons, TypeTile } from "./parts";
@@ -208,8 +208,10 @@ export function SourcePicker({ t, rpc, config, prefs, title, root, onPick }: { t
     onPick(source);
   };
   const trimmed = text.trim();
-  const queue = QUEUE_PATTERN.test(trimmed) ? trimmed.toUpperCase() : null;
-  const key = KEY_PATTERN.test(trimmed) ? trimmed.toUpperCase() : null;
+  // A key, a queue or a link to an issue; a link without a key never goes to the tracker as a query.
+  const parsed = sourceFromText(trimmed, config.allowQuery);
+  const queue = parsed?.kind === "queue" ? parsed.queue : null;
+  const key = parsed?.kind === "issue" ? parsed.key : null;
   return (
     <Popover
       open={open}
@@ -235,8 +237,7 @@ export function SourcePicker({ t, rpc, config, prefs, title, root, onPick }: { t
           if (event.key !== "Enter") return;
           if (key) pick({ kind: "issue", key });
           else if (found[0]) pick({ kind: "issue", key: found[0].key });
-          else if (queue) pick({ kind: "queue", queue });
-          else if (config.allowQuery && trimmed) pick({ kind: "query", query: trimmed });
+          else if (parsed) pick(parsed);
         }}
       />
       {found.map((issue) => (
@@ -252,13 +253,13 @@ export function SourcePicker({ t, rpc, config, prefs, title, root, onPick }: { t
           {t.wholeQueue(queue)}
         </button>
       ) : null}
-      {config.allowQuery && trimmed && !key && !queue ? (
+      {parsed?.kind === "query" ? (
         <button className="tb-mi" type="button" onClick={() => pick({ kind: "query", query: trimmed })}>
           <Icons.search />
           {t.queryItem}
         </button>
       ) : null}
-      {trimmed.length >= 2 && found.length === 0 && !queue && !key && !config.allowQuery ? <div className="tb-mh">{t.nothingFound}</div> : null}
+      {trimmed.length >= 2 && found.length === 0 && !parsed ? <div className="tb-mh">{t.nothingFound}</div> : null}
       {trimmed === "" ? (
         <>
           {config.can.mine ? (

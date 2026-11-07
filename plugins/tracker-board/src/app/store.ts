@@ -110,14 +110,33 @@ export function errorCode(error: unknown): string | null {
   return end < 0 ? rest : rest.slice(0, end);
 }
 
+/** Codes where the tracker's own words help: what exactly it refused. */
+const SHOW_DETAIL = new Set(["badRequest", "serverError", "forbidden", "conflict"]);
+
+/** The JSON a server error carries after its code: the tracker's words and the machine. */
+function errorExtra(message: string): { detail: string | null; machine: string | null } {
+  const start = message.indexOf("tracker-board:");
+  const brace = start < 0 ? -1 : message.indexOf("{", start);
+  if (brace < 0) return { detail: null, machine: null };
+  try {
+    const parsed = JSON.parse(message.slice(brace)) as { detail?: unknown; machine?: unknown };
+    return { detail: typeof parsed.detail === "string" ? parsed.detail : null, machine: typeof parsed.machine === "string" ? parsed.machine : null };
+  } catch {
+    return { detail: null, machine: null };
+  }
+}
+
 export function errorText(t: Messages, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
   const code = errorCode(error);
   if (code) {
     const known = (t as unknown as Record<string, unknown>)[`error_${code}`];
-    if (typeof known === "string") return known;
+    if (typeof known === "string") {
+      const { detail, machine } = errorExtra(message);
+      return [known, detail && SHOW_DETAIL.has(code) ? t.trackerSaid(detail) : null, machine ? t.fromMachine(machine) : null].filter(Boolean).join(" ");
+    }
   }
-  const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/^tracker-board:\S*\s?/, "") || String(error);
+  return message.replace(/^.*?tracker-board:\S*\s?/, "") || String(error);
 }
 
 export function failureText(t: Messages, code: string | null, detail: string | null): string {

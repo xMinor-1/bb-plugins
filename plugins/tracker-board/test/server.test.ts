@@ -7,6 +7,8 @@ import { createFakePluginHost, makeMessageDispatchHookContext, makePluginAgentCo
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import plugin from "../server";
 import type { BoardView, IssueView } from "../src/server/rpc-contract";
+import { messages } from "../src/app/messages";
+import { errorText } from "../src/app/store";
 import { TrackerHost } from "../src/host/service";
 import { MOCK_KEY, MOCK_PROFILE, MOCK_TEMPLATES, startMockTracker } from "./fixtures/mock-tracker";
 import { memoryStore } from "./memory-store";
@@ -149,6 +151,28 @@ describe("the board", () => {
     expect(await unchecked.harness.behavior.callRpc("setupStatus", {}, asPlugin)).toMatchObject({ state: "todo", summary: "The key is saved but not checked yet" });
     const fresh = await setup({ baseUrl: "" });
     expect(await fresh.harness.behavior.callRpc("setupStatus", {}, asPlugin)).toMatchObject({ state: "problem", summary: "This build does not set up the tracker yet" });
+  });
+
+  it("words a refused request with the tracker's own message and the machine it went from", async () => {
+    const { rpc } = await setup({ allowQuery: true });
+    const error = await rpc("board", { source: { kind: "query", query: "summary like nothing" } }).catch((cause: unknown) => cause as Error);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("tracker-board:badRequest:400 ");
+    expect(JSON.parse(message.slice(message.indexOf("{")))).toEqual({ detail: "parse error: unexpected clause: summary like nothing", machine: "Mac" });
+    const ru = errorText(messages.ru, error);
+    expect(ru).toBe("Трекер отклонил запрос. Ответ трекера: «parse error: unexpected clause: summary like nothing». Запрос шёл с машины Mac.");
+    expect(errorText(messages.en, new Error('tracker-board:unauthorized:401 {"detail":null,"machine":"Mac"}'))).toBe("The tracker refused the API key. Save a new one in Settings. The request went from Mac.");
+  });
+
+  it("keeps a board's statuses to the configured ones and those its cards are in", async () => {
+    const profile = { ...MOCK_PROFILE, statuses: MOCK_PROFILE.statuses.map((status) => (status.key === "testing" ? { ...status, show: "used" } : status)) };
+    const { rpc } = await setup({ apiProfile: JSON.stringify(profile) });
+    const config = await rpc<{ statuses: { key: string }[] }>("config");
+    expect(config.statuses.map((status) => status.key)).not.toContain("testing");
+    expect(config.statuses.map((status) => status.key)).toContain("review");
+    const board = await rpc<{ statuses: { key: string }[] }>("board", { source: { kind: "issue", key: "PAY-101" } });
+    expect(board.statuses.map((status) => status.key)).toContain("testing");
   });
 
   it("answers no other plugin", async () => {

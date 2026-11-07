@@ -130,11 +130,13 @@ function matches(issue: MockIssue, query: string, me: string): boolean {
       if (m) return m[1]!.split(",").map((key) => key.trim()).includes(issue.parent_key ?? "");
       m = /^assignee\s*=\s*me\(\)$/i.exec(part);
       if (m) return issue.assignee_id === me;
-      m = /^summary\s*~\s*"([^"]*)"$/i.exec(part);
+      m = /^summary\s*(?:~|contains)\s*"([^"]*)"$/i.exec(part);
       if (m) return issue.summary.toLowerCase().includes(m[1]!.toLowerCase()) || issue.key.toLowerCase().includes(m[1]!.toLowerCase());
-      return false;
+      throw new QueryError(`parse error: unexpected clause: ${part.slice(0, 40)}`);
     });
 }
+
+class QueryError extends Error {}
 
 export function startMockTracker(port = 0): Promise<{ url: string; state: MockState; server: Server; close: () => Promise<void> }> {
   const state = seed();
@@ -176,7 +178,13 @@ export function startMockTracker(port = 0): Promise<{ url: string; state: MockSt
     }
     if (req.method === "POST" && p === "/issues/_search") {
       const { query = "", limit = 50, offset = 0 } = (body ?? {}) as { query?: string; limit?: number; offset?: number };
-      const all = state.issues.filter((issue) => matches(issue, query, me));
+      let all: MockIssue[];
+      try {
+        all = state.issues.filter((issue) => matches(issue, query, me));
+      } catch (error) {
+        if (error instanceof QueryError) return send(res, 400, { error: "Bad Request", message: error.message });
+        throw error;
+      }
       return send(res, 200, { data: { issues: all.slice(offset, offset + limit), total: all.length } });
     }
     if (req.method === "POST" && p === "/issues") {

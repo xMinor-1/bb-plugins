@@ -47,6 +47,8 @@ const CONFIRM_TIMEOUT_MS = 60 * 60_000;
 const MAX_FORK_DEPTH = 100;
 const ME_TTL_MS = 10 * 60_000;
 const STATUS_TTL_MS = 60 * 60_000;
+/** A tracker's own status list joins boards and menus only up to this size. */
+const MAX_LISTED_STATUSES = 60;
 const PEOPLE_TTL_MS = 10 * 60_000;
 
 interface Execution {
@@ -100,9 +102,15 @@ function readConfig(raw: RawSettings): Config {
   return { name: raw.trackerName.trim() || "Tracker", baseUrl, profile, templates, guide: raw.guide, allowQuery: raw.allowQuery, problem: problems[0] ?? null };
 }
 
-/** An error the panel can word: `tracker-board:<code>` and the tracker's own detail. */
-function panelError(error: unknown): Error {
-  if (error instanceof TrackerError) return new Error(`tracker-board:${error.code}${error.status ? `:${error.status}` : ""}${error.detail ? ` ${error.detail}` : ""}`);
+/**
+ * An error the panel can word: `tracker-board:<code>[:<status>]`, then JSON with the
+ * tracker's own words and the machine the request went from.
+ */
+function panelError(error: unknown, machineName: (id: string) => string): Error {
+  if (error instanceof TrackerError) {
+    const extra = { detail: error.detail, machine: error.machine ? machineName(error.machine) : null };
+    return new Error(`tracker-board:${error.code}${error.status ? `:${error.status}` : ""} ${JSON.stringify(extra)}`);
+  }
   return error instanceof Error ? error : new Error(String(error));
 }
 
@@ -263,7 +271,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   function rawTracker(hostId: string, signal?: AbortSignal, statuses?: Map<string, StatusInfo>): Tracker {
     const { profile, baseUrl } = ready();
-    return new Tracker(profile, baseUrl, (input) => host.call("request", input, { hostId, timeoutMs: CALL_TIMEOUT_MS, ...(signal ? { signal } : {}) }), statuses);
+    return new Tracker(profile, baseUrl, (input) => host.call("request", input, { hostId, timeoutMs: CALL_TIMEOUT_MS, ...(signal ? { signal } : {}) }), statuses, hostId);
   }
 
   async function statusesOn(hostId: string, signal?: AbortSignal): Promise<Map<string, StatusInfo>> {
@@ -297,15 +305,22 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  function statusViews(map: ReadonlyMap<string, StatusInfo>, issues: readonly Issue[] = []): StatusView[] {
+  /**
+   * Statuses for a board, its menus and the agent guide: the configured ones in their order,
+   * then any other status a card is in. A tracker's whole list joins only when it is short:
+   * some list every status of every workflow, hundreds of them.
+   */
+  function statusViews(map: ReadonlyMap<string, StatusInfo>, issues: readonly Issue[] = [], onlyColumns = false): StatusView[] {
     const out = new Map<string, StatusView>();
     for (const status of config.profile?.statuses ?? []) {
+      if (onlyColumns && status.show !== "always") continue;
       out.set(status.key, { key: status.key, name: status.name ?? map.get(status.key)?.name ?? status.key, category: categoryOf(status.category ?? map.get(status.key)?.category) });
     }
+    if (onlyColumns) return [...out.values()];
     for (const issue of issues) {
       if (!out.has(issue.status)) out.set(issue.status, { key: issue.status, name: issue.statusName ?? map.get(issue.status)?.name ?? issue.status, category: issue.category });
     }
-    for (const [key, info] of map) if (!out.has(key)) out.set(key, { key, name: info.name, category: categoryOf(info.category) });
+    if (map.size <= MAX_LISTED_STATUSES) for (const [key, info] of map) if (!out.has(key)) out.set(key, { key, name: info.name, category: categoryOf(info.category) });
     return [...out.values()];
   }
 
@@ -725,7 +740,8 @@ export default async function plugin(bb: BbPluginApi) {
           try {
             return await handler(input, context);
           } catch (error) {
-            throw panelError(error);
+            const hosts = error instanceof TrackerError && error.machine ? await liveHosts().catch(() => []) : [];
+            throw panelError(error, (id) => hosts.find((candidate) => candidate.id === id)?.name ?? id);
           }
         }) satisfies Handler,
       ]),
@@ -771,7 +787,7 @@ export default async function plugin(bb: BbPluginApi) {
         address: config.baseUrl,
         webUrl: profile?.webUrl ?? null,
         keyHelp: profile?.keyHelp ?? null,
-        statuses: statusViews(new Map()),
+        statuses: statusViews(new Map(), [], true),
         types: (profile?.types ?? []).map((type) => ({ key: type.key, name: type.name ?? type.key })),
         priorities: (profile?.priorities ?? []).map((priority) => ({ key: priority.key, name: priority.name ?? priority.key })),
         templates: templatesFor(prefs),
