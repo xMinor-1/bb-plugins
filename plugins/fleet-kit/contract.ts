@@ -11,7 +11,7 @@ const textFields = {
 };
 
 export const stepSchema = z.object({
-  area: z.enum(["manifest", "bb", "ai", "agent", "marketplace", "plugin", "opencode", "secret"]),
+  area: z.enum(["manifest", "bb", "ai", "agent", "marketplace", "plugin", "app", "opencode", "secret"]),
   item: z.string(),
   outcome: z.enum(["ok", "changed", "skipped", "warning", "error"]),
   ...textFields,

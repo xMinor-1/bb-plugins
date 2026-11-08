@@ -1,0 +1,98 @@
+# Fleet Kit's `apps` on real machines, with LibreOffice as the program (a document viewer converts Word and
+# PowerPoint with it):
+#
+# - windows-package: the official MSI is unpacked with an administrative install (msiexec /a: files only, nothing
+#   written to the system) and zipped with its LibreOffice folder. The zip is an artifact: whoever mirrors it for
+#   their own users uploads it in parts and lists the parts in the manifest's `apps`.
+# - windows-test: a standard user (no administrator rights, non-ASCII name with a space) installs the zip with
+#   Fleet Kit's own code (src/host/install-app.ts), then doc-review's own code (src/libreoffice.ts) converts a
+#   .docx and a .pptx to PDF. Nothing may appear in Program Files or the uninstall list.
+# - mac-test: on Apple silicon and Intel, the same code installs the official .dmg into the home folder without sudo,
+#   then converts the same.
+name: fleet-kit apps
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/fleet-kit-apps.yml"
+      - "plugins/fleet-kit/e2e/apps/**"
+      - "plugins/fleet-kit/src/host/install-app.ts"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-package:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package from the MSI
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File plugins\fleet-kit\e2e\apps\build-libreoffice-win.ps1 -Out C:\lo-pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libreoffice-win-x64
+          path: C:\lo-pkg
+          retention-days: 14
+          compression-level: 0
+
+  windows-test:
+    needs: windows-package
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: libreoffice-win-x64
+          path: C:\lo-pkg
+      - name: Sample documents
+        shell: powershell
+        run: |
+          python -m pip install --quiet python-docx python-pptx
+          python plugins\fleet-kit\e2e\apps\make-docs.py C:\lo-docs
+      - name: Install and convert as a standard user
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File plugins\fleet-kit\e2e\apps\test-win.ps1 -Package C:\lo-pkg -Docs C:\lo-docs -Plugins "$env:GITHUB_WORKSPACE\plugins" -Out C:\lo-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libreoffice-report-${{ matrix.os }}
+          path: C:\lo-out
+          retention-days: 14
+
+  mac-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Apple silicon and Intel: each gets its own official .dmg.
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Sample documents
+        run: |
+          python3 -m venv /tmp/lo-venv
+          /tmp/lo-venv/bin/pip install --quiet python-docx python-pptx
+          /tmp/lo-venv/bin/python plugins/fleet-kit/e2e/apps/make-docs.py /tmp/lo-docs
+      - name: Install from the .dmg and convert
+        run: bash plugins/fleet-kit/e2e/apps/test-mac.sh "$GITHUB_WORKSPACE/plugins" /tmp/lo-docs /tmp/lo-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libreoffice-report-${{ matrix.os }}
+          path: /tmp/lo-out
+          retention-days: 14

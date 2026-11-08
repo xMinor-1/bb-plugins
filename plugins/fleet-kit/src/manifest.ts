@@ -202,6 +202,47 @@ const opencodeFile = z
   })
   .strict();
 
+const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/, "use a sha256 in lowercase hex");
+const appUrl = z.string().regex(/^(https:\/\/|file:\/\/\/|http:\/\/(localhost|127\.0\.0\.1)[:/])\S+$/, "use an https:// address");
+/** A path inside the package: forward slashes, no "..", not absolute. */
+const appProgram = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine((value) => !value.startsWith("/") && !value.includes("\\") && !/^[A-Za-z]:/.test(value) && value.split("/").every((part) => part !== "" && part !== "." && part !== ".."), "use a relative path with forward slashes");
+
+/** A program's package for one operating system and processor, in parts no bigger than the server takes. */
+const appFile = z
+  .object({
+    format: z.enum(["zip", "dmg"]),
+    parts: z.array(z.object({ url: appUrl, sha256: sha256Hex }).strict()).min(1).max(100),
+    sha256: sha256Hex,
+    program: appProgram,
+  })
+  .strict();
+
+/**
+ * A program a plugin needs on the machine, such as an office suite a document viewer converts with. Fleet Kit puts
+ * it in the person's own folder, without administrator rights, and writes the program's path to the plugin's setting.
+ */
+const appEntry = z
+  .object({
+    id,
+    title: z.string().min(1).max(100),
+    version: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z._-]*$/).max(50),
+    /** Installed only while this plugin is on here. */
+    plugin: id,
+    /** The plugin's setting that takes the program's full path. */
+    setting: z.string().regex(/^[A-Za-z][A-Za-z0-9]*$/),
+    /** Install just before this plugin's turn, after the ones before it; without it, after all plugins. */
+    before: id.optional(),
+    /** By <platform>-<arch>, as Node names them: darwin-arm64, win32-x64. A machine with none goes without. */
+    files: z.record(z.string().regex(/^[a-z0-9]+-[a-z0-9]+$/), appFile),
+    note: z.string().optional(),
+  })
+  .strict();
+export type ManifestApp = z.infer<typeof appEntry>;
+
 const rootShape = {
   /** Where Fleet Kit gets the OpenCode of install.opencode, by <platform>-<arch>; "-baseline" is for processors without AVX2. */
   opencodeInstall: z
@@ -233,6 +274,8 @@ const rootShape = {
     .array(z.object({ source: z.string().min(1), subdirectory: z.string().min(1).optional() }).strict())
     .optional(),
   plugins: z.array(pluginEntry),
+  /** Programs plugins need, installed for the person in plugin order (see `before`). */
+  apps: z.array(appEntry).optional(),
   removePlugins: z.array(id).optional(),
   secrets: z.array(z.object({ name: id, title: z.string().min(1), hint: z.string().optional() }).strict()),
   allowedProviders: z.array(id).min(1),
@@ -566,6 +609,7 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
     }
     if (new Set(manifest.agents.allowed).size !== manifest.agents.allowed.length) errors.push("agents.allowed: an agent is listed twice");
   }
+  checkApps(manifest, errors);
   for (const replaced of manifest.branding?.replaces ?? []) {
     if (ids.has(replaced)) errors.push(`branding.replaces: "${replaced}" is also in plugins; it would be installed and removed on every sync`);
     if (replaced === SELF_ID) errors.push("branding.replaces: Fleet Kit cannot remove itself");
@@ -623,6 +667,31 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
   }
   if (/-/.test(manifest.version)) warnings.push(`version: ${manifest.version} is a pre-release`);
   return { manifest: errors.length === 0 ? manifest : null, errors, warnings, newerFormat: false };
+}
+
+function checkApps(manifest: Manifest, errors: string[]) {
+  const order = manifest.plugins.map((entry) => entry.id);
+  const seen = new Set<string>();
+  for (const app of manifest.apps ?? []) {
+    const where = `apps.${app.id}`;
+    if (seen.has(app.id)) errors.push(`${where}: listed twice`);
+    seen.add(app.id);
+    const at = order.indexOf(app.plugin);
+    const entry = manifest.plugins[at];
+    if (entry === undefined) errors.push(`${where}.plugin: "${app.plugin}" is not in plugins`);
+    else if (app.plugin === SELF_ID) errors.push(`${where}.plugin: a program for Fleet Kit itself is not supported`);
+    else if (entry.config !== undefined && app.setting in entry.config) {
+      errors.push(`${where}.setting: plugins.${app.plugin}.config sets "${app.setting}" too; the installed program's path would be overwritten`);
+    }
+    if (app.before !== undefined) {
+      const before = order.indexOf(app.before);
+      if (before < 0) errors.push(`${where}.before: "${app.before}" is not in plugins`);
+      else if (at >= 0 && before <= at) errors.push(`${where}.before: "${app.before}" comes before "${app.plugin}" in plugins, so the program would install before its plugin`);
+    }
+    for (const [key, file] of Object.entries(app.files)) {
+      if (file.format === "dmg" && !key.startsWith("darwin-")) errors.push(`${where}.files.${key}: a .dmg opens only on macOS`);
+    }
+  }
 }
 
 /**
