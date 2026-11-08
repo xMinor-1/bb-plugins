@@ -82,8 +82,28 @@ export const statusSchema = z.object({
   secrets: z.array(secretStatusSchema),
   opencode: opencodeStatusSchema.nullable(),
   notices: z.array(noticeSchema),
+  /** The build's offer of the person's own agents; null when the build has none. */
+  ownAgents: z
+    .object({
+      title: z.string().nullable(),
+      warning: z.string(),
+      providers: z.array(z.object({ id: z.string(), name: z.string() })),
+      delegate: z.object({ provider: z.string(), model: z.string() }).nullable(),
+      on: z.boolean(),
+      at: z.string().nullable(),
+      /** Windows cancelled or left unanswered on this machine. */
+      refusals: z.number().optional(),
+      /** Until when a new window waits after the last refusal; null when it can open now. */
+      retryAt: z.string().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 export type Status = z.infer<typeof statusSchema>;
+
+/** What turning "Own agents" on or off came to. Only `on` changed anything when turning on. */
+export const ownAgentsOutcomeSchema = z.enum(["on", "off", "cancelled", "timeout", "unavailable", "busy", "paused", "not-offered"]);
+export type OwnAgentsOutcome = z.infer<typeof ownAgentsOutcomeSchema>;
 
 /** `checking`: the plugin has not answered within the page's wait; its answer comes with the next update. */
 export const setupStateSchema = z.enum(["done", "todo", "problem", "installing", "later", "checking"]);
@@ -113,6 +133,34 @@ export const setupStepSchema = z.object({
 });
 export type SetupStep = z.infer<typeof setupStepSchema>;
 
+/** The build's branches and the person's choice, for the First run page. */
+export const branchSetupSchema = z.object({
+  list: z.array(z.object({ id: z.string(), title: z.string(), hint: z.string().nullable() })),
+  /** The branch the person picked; null before a choice, or when the build dropped it. */
+  chosen: z.string().nullable(),
+  /** The picked branch left the build: the person's plugins stay as they were. */
+  dropped: z.boolean(),
+  /** Plugins that differ between branches wait on this machine until a branch is picked. */
+  waiting: z.boolean(),
+  /** The optional plugins: whether this machine gets each one, and what the chosen branch recommends. */
+  plugins: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      hint: z.string().nullable(),
+      on: z.boolean(),
+      /** Waits for a branch: it differs between branches. */
+      waiting: z.boolean(),
+      recommended: z.boolean(),
+      /** The person switched it by hand. */
+      own: z.boolean(),
+      /** Not built yet: shown, cannot be switched. */
+      planned: z.boolean(),
+    }),
+  ),
+});
+export type BranchSetup = z.infer<typeof branchSetupSchema>;
+
 export const setupSchema = z.object({
   /** Fleet Kit has read a build manifest at least once. */
   configured: z.boolean(),
@@ -125,6 +173,8 @@ export const setupSchema = z.object({
   secretStore: z.string(),
   /** OpenCode installed by Fleet Kit while it is not ready; the page says what is going on. */
   opencodeInstall: opencodeStatusSchema.shape.install,
+  /** Null when the build has no branches. */
+  branches: branchSetupSchema.nullable().optional(),
 });
 export type Setup = z.infer<typeof setupSchema>;
 
@@ -147,6 +197,20 @@ export const rpcContract = defineRpcContract({
   },
   lock_reset: { input: z.null(), output: z.object({ reset: z.boolean() }) },
   setup_status: { input: z.object({ lang: z.enum(["en", "ru"]) }).strict(), output: setupSchema },
+  /** Without `confirmed`, a choice that would turn plugins off is not saved: the answer lists them for the person to confirm. */
+  branch_choose: {
+    input: z.object({ branch: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), confirmed: z.boolean().optional() }).strict(),
+    output: z.object({ chosen: z.string().nullable(), turnsOff: z.array(z.string()) }),
+  },
+  branch_toggle: {
+    input: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), on: z.boolean() }).strict(),
+    output: z.object({ on: z.boolean() }),
+  },
+  /** Turning on asks the person in a system window first: a call alone changes nothing. */
+  own_agents_set: {
+    input: z.object({ on: z.boolean(), lang: z.enum(["en", "ru"]).optional() }).strict(),
+    output: z.object({ on: z.boolean(), outcome: ownAgentsOutcomeSchema }),
+  },
   setup_mark: {
     input: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), mark: setupMarkSchema.nullable() }).strict(),
     output: z.object({ marked: z.boolean() }),

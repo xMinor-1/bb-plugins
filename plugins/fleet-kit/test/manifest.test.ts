@@ -155,3 +155,66 @@ describe("opencodeInstall", () => {
     expect(checkManifest({ ...sampleManifest(), opencodeInstall: { files: { "win32-x64": { ...file, integrity: "abc" } } } }).errors.length).toBeGreaterThan(0);
   });
 });
+
+describe("branches in the manifest", () => {
+  const withBranches = () => {
+    const manifest = clone(sampleManifest()) as Record<string, any>;
+    manifest.branches = {
+      optional: [{ id: "notes", title: "Notes" }, { id: "later", title: "Later" }],
+      list: [
+        { id: "business", title: "Business", plugins: { later: false }, mcp: { wiki: true } },
+        { id: "dev", title: "Development", plugins: { notes: false } },
+      ],
+    };
+    return manifest;
+  };
+
+  it("accepts branches over optional and planned plugins", () => {
+    const result = checkManifest(withBranches());
+    expect(result.errors).toEqual([]);
+    expect(result.manifest!.branches!.list.map((branch) => branch.id)).toEqual(["business", "dev"]);
+  });
+
+  it("drops wrong names with a warning and keeps the rest of the build", () => {
+    const manifest = withBranches();
+    manifest.branches.optional.push({ id: "fleet-kit", title: "Fleet Kit" }, { id: "ghost", title: "Ghost" });
+    manifest.branches.list[1].plugins.ghost = true;
+    manifest.branches.list[1].mcp = { nowhere: true };
+    const result = checkManifest(manifest);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        "branches.optional.fleet-kit: Fleet Kit cannot be optional; ignored",
+        "branches.optional.ghost: is not in plugins; ignored",
+        "branches.dev.plugins.ghost: not in branches.optional; ignored",
+        "branches.dev.mcp.nowhere: not in mcp; ignored",
+      ]),
+    );
+    expect(result.manifest!.branches!.optional.map((entry) => entry.id)).toEqual(["notes", "later"]);
+    expect(result.manifest!.branches!.list[1]!.plugins).toEqual({ notes: false });
+  });
+
+  it("with a common list, warns about a plugin that is neither common nor optional", () => {
+    const manifest = withBranches();
+    manifest.branches.common = ["fleet-kit", "notes", "ghost"];
+    const result = checkManifest(manifest);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        "branches.common.ghost: is not in plugins",
+        "branches.common.notes: is also optional; it stays optional",
+      ]),
+    );
+    manifest.branches.common = ["notes"];
+    expect(checkManifest(manifest).warnings).toContain('branches: "fleet-kit" is in neither common nor optional; every machine gets it');
+  });
+
+  it("refuses a repeated branch id and an unknown field in a branch", () => {
+    const repeated = withBranches();
+    repeated.branches.list[1].id = "business";
+    expect(checkManifest(repeated).errors.join("\n")).toContain("a branch id is listed twice");
+    const extra = withBranches();
+    extra.branches.list[0].colour = "blue";
+    expect(checkManifest(extra).manifest).toBeNull();
+  });
+});

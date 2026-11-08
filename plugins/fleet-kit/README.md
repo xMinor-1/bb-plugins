@@ -35,6 +35,12 @@ brings bb to that description and keeps it there.
   done or skipped, the sidebar entry shows how many are left and the Fleet Kit
   page shows a reminder. A build without steps has no First run entry in the
   sidebar. An installer can open bb on `/plugins/fleet-kit/setup`.
+- **Branches** (optional): a build can offer sets of plugins — say, one for
+  sales and one for engineering. The person picks a branch on the First run
+  page, gets the plugins it recommends, can switch any optional plugin on or
+  off, and can change the branch later. A plugin switched off is not
+  installed, or is turned off if it already is; its settings, keys and data
+  stay. See [Branches](#branches).
 
 ## Install
 
@@ -72,6 +78,10 @@ does nothing.
 bb fleet-kit status [--json]      # build, last sync, OpenCode protection, secrets
 bb fleet-kit sync [--json]        # sync now and wait; exits 1 when the sync had errors
 bb fleet-kit setup [--json]       # the First run steps and which are done
+bb fleet-kit branch [--json]      # the build's branches and which optional plugins are on
+bb fleet-kit branch choose <id> [--yes]  # pick a branch; --yes confirms turning plugins off
+bb fleet-kit branch plugin <id> on|off
+bb fleet-kit own-agents [on|off] # the person's own agents; on asks in a system window
 bb fleet-kit secret set <name> --value-stdin < key.txt
 bb fleet-kit secret clear <name>
 ```
@@ -151,6 +161,19 @@ a newer Fleet Kit can still deliver it.
 - `agents.allowed` — the bb agents (providers, `bb provider list`) that stay
   enabled; every other agent is turned off, including ones a later bb adds.
   `bb.settings.defaultProviderId`, when set, must be in the list.
+- `branding` — the build's name and logo in bb's page: `appName` (page
+  title), `logoSvg` (SVG source, up to 64 KB: logo and favicon), `replaces`
+  (plugins that did this before, such as App Branding). See
+  [Branding](#branding).
+- `ownAgents` — more agents the person may turn on: `providers` (such as
+  `claude-code`, `codex`), `warning` (shown in the panel and in the system
+  window), optional `title` and `delegate` (`provider` from `agents.allowed`,
+  `model` from `allowedProviders`: the build's agent an own agent hands steps
+  to). Off until the person turns it on; see [Own agents](#own-agents).
+  A root field: an older Fleet Kit only warns about it.
+- `skills` — skills for agents: `name`, `description`, `body` (Markdown) and
+  `audience`: `allowed` (default, the build's agents), `own` (the person's own
+  agents, once turned on) or `all`. An entry with `id` alone does nothing.
 - `marketplaces` — bb marketplaces to add if missing.
 - `plugins` — `source` is a `git:https://` source. For one plugin from a
   monorepo with tags like `notes/v1.2.0`, write the tag prefix into the source:
@@ -193,6 +216,16 @@ a newer Fleet Kit can still deliver it.
   names an unknown secret or plugin, or repeats an id, is left out with a
   warning; the rest of the build still applies. Fleet Kit 0.2.x ignores the
   block with a warning.
+- `branches` — sets of plugins the person picks from (see
+  [Branches](#branches)): `common`, an optional list of the required plugins
+  for checking; `optional`, the plugins a person may switch, each
+  with `id` (from `plugins`), `title` and `hint`; and `list`, the branches,
+  each with `id`, `title`, `hint`, `plugins` (`{ "<optional id>": true |
+  false }`, on when left out) and `mcp` (`{ "<mcp id>": true | false }`, over
+  the entry's `default`). Plugins outside `optional` go to every machine;
+  Fleet Kit itself is never optional. A name that is not in `plugins`, not in
+  `optional` or not in `mcp` is left out with a warning. Fleet Kit 0.5.x and
+  earlier ignore the block with a warning and install every plugin.
 
 A manifest whose remote MCP server has no URL yet, or that names a pre-release
 bb, gets a warning.
@@ -243,6 +276,79 @@ fleet-kit`, then the installer). The key stays in the OS credential store.
 Fleet Kit removes only plugins listed in `removePlugins`, never one bundled
 with bb. A plugin dropped from `plugins` stays and the sync says so once.
 
+### Branches
+
+```json
+"branches": {
+  "common": ["fleet-kit", "branding"],
+  "optional": [
+    { "id": "mail", "title": "Mail" },
+    { "id": "reports", "title": "Reports" },
+    { "id": "contacts", "title": "Contacts" },
+    { "id": "board", "title": "Task board" }
+  ],
+  "list": [
+    { "id": "sales", "title": "Sales", "plugins": { "board": false } },
+    { "id": "engineering", "title": "Engineering", "plugins": { "reports": false, "contacts": false } }
+  ]
+}
+```
+
+Three kinds of plugins:
+
+- **Required**: everything outside `optional` (here Fleet Kit and the
+  branding). Every machine gets them, and they cannot be turned off.
+  `common`, when given, only checks the manifest: a plugin in neither list
+  is a warning, and it is required.
+- **Shared**: optional plugins every branch leaves on (here mail). They are
+  installed at once, before any branch is picked, and the person can turn
+  each of them off, before or after picking a branch.
+- **Branch plugins**: optional plugins the branches differ on (here
+  reports, contacts and the board). They follow the chosen branch, and the
+  person can switch each of them.
+
+The choice is the person's and lives on the machine, in Fleet Kit's storage:
+a manifest update never resets it. It holds the branch and the plugins the
+person switched by hand; every other optional plugin follows the branch.
+Picking another branch puts the switches of branch plugins back to its
+defaults and keeps the person's switches of shared plugins. A choice that
+would turn plugins off is saved only after the person confirms the list
+(`branch_choose` answers with the titles; `bb fleet-kit branch choose <id>
+--yes` on the command line). Changes are applied one at a time, so two quick
+clicks never overwrite each other.
+
+A plugin the choice leaves out is not installed. One that is installed is
+turned off (bb's disable), never removed, so bb keeps its settings, secrets
+and data; turning it on again enables the same plugin. Its First run step is
+not shown. Fleet Kit's own secrets are not touched.
+
+Before the person picks a branch:
+
+- a machine that already had the build's plugins when it first met a
+  manifest with branches keeps installing everything, as before, and turns
+  nothing off; picking a branch is offered, not required, and is not counted
+  as a step left;
+- a new machine installs the required and the shared plugins at once; only
+  branch plugins wait, and picking a branch is a First run step until then.
+  Which case applies is decided once, when the first sync reads the manifest,
+  and the First run page knows it from that moment.
+
+When the manifest changes:
+
+| Change | On the machine |
+| --- | --- |
+| A plugin is added | Installed with its branch's default (shared or required: installed); the person's other switches stay |
+| A plugin gets a new version | Only plugins that are on are updated; one turned off stays off at its version |
+| A plugin leaves `plugins` | Stays as it is, on or off; only `removePlugins` removes a plugin |
+| A plugin moves between required and optional | Follows its new kind: a required plugin is on whatever the person switched |
+| The chosen branch is renamed or dropped | Every optional plugin stays as the person had it; First run offers to pick a branch again |
+| A branch default changes | Plugins the person did not switch follow it |
+
+A plugin that declares a plain setting `buildBranch` gets the chosen branch's
+id (empty before a choice), so it can shape itself by it, for example an
+MCP catalog applying the branch's `mcp` defaults. Fleet Kit does not apply
+`mcp` itself yet.
+
 ### bb's AI services
 
 bb sends thread titles, commit messages and voice input to the service each
@@ -262,16 +368,78 @@ any other agent that is on is turned off. When an agent Fleet Kit already
 turned off is on again, the sync reports it and the panel shows one notice
 naming the agents the build allows.
 
-The person must never be left without a working agent. An allowed agent counts
-only when bb can run it (its program is found and its plugin is on). Until one
-allowed agent is on and ready, Fleet Kit turns nothing off and the sync reports
-an error; it does not ask bb to turn on an allowed agent bb cannot run, so it
-does not repeat a refused call on every sync. The same holds when none of the
-allowed agents is in this bb's catalog.
+An allowed agent counts only when bb can run it (its program is found and its
+plugin is on). When no allowed agent is on and ready, or none is in this bb's
+catalog, the sync reports an error and still turns off every agent outside the
+list: an agent the build does not allow never stays on because the build's own
+is broken. Fleet Kit does not ask bb to turn on an allowed agent bb cannot run,
+so it does not repeat a refused call on every sync.
 
 Removing the `agents` block from the manifest stops this check but does not
 turn the agents Fleet Kit turned off back on: turn them on in bb's settings or
 with `bb provider enable <id>`.
+
+### Branding
+
+`branding` puts the build's name and logo over bb's own in the page: the page
+title, the logo image and the favicon. bb's files stay as they are. A content
+script applies it, so it shows on bb's onboarding screen too; it asks Fleet
+Kit's server (`GET /branding`) on load and every 30 seconds, so a new manifest
+reaches an open window. The logo is drawn as an image: scripts in the SVG do
+not run.
+
+`replaces` lists plugins that did the same before. Fleet Kit removes them from
+the sync after the one that saved the branding: an open page reads the
+branding within 30 seconds, so it shows the build's logo before the old
+plugin's goes. Do
+not put such a plugin in `removePlugins`: an older Fleet Kit, which has no
+branding, would remove it and leave the page without a logo until it updates.
+An older Fleet Kit ignores `branding` with a warning and keeps the plugin.
+
+### Own agents
+
+A build can offer the person their own agents next to its own, such as Claude
+Code or Codex with their own account (`ownAgents`). They stay off until the
+person turns **Own agents** on in the panel or with `bb fleet-kit own-agents
+on`. Turning on shows the build's warning in a window drawn by the operating
+system (macOS `osascript`, Windows WinForms, Linux `zenity`); the default
+button is the one that cancels, so Enter does not turn them on. Only **Turn
+on** in that window saves the choice: bb shows the panel, the CLI and an agent
+with a shell as the same caller, so a call alone never turns them on.
+
+The window is an obstacle, not a protection. A program that runs as the same
+user can press the button itself, and the settings of Fleet Kit and of every
+other plugin (`bb plugin config`, including `manifestUrl` and `allowedModels`)
+change with bb commands without any window. A machine with no desktop session
+cannot turn them on. Turning off needs no window.
+
+The yes covers the warning and the list of agents it was given for. When the
+build changes the warning, adds an agent, or drops the offer and brings it
+back, Own agents is off again until a new yes. After a cancelled or
+unanswered window the next one opens no sooner than 10 minutes later; the
+status counts these refusals.
+
+Once on, Fleet Kit neither turns the listed agents on nor off: the person
+turns them on in bb's settings. Every other agent is still turned off. When
+the person turns Own agents off, or the build stops offering them, the next
+sync turns them off again. The choice is kept on this machine; a manifest
+update that leaves the warning and the agents as they were does not reset it.
+
+Turning them on does not change what other plugins give to agents: a plugin
+that limits its tools to some models keeps doing so. It does not stop an
+agent with a shell from running `bb` commands either: such an agent can read
+what plugins give through the CLI, past any limit by model, and everything
+else the person can reach on this computer. That is why the build writes its
+own warning.
+
+### Build skills
+
+`skills` entries with a body reach agents through bb's agent configuration:
+the agent's instructions list each skill it gets (name and description), and
+the `build_skill` tool returns the body. Each agent gets the skills of its
+audience: `allowed` — the agents in `agents.allowed`; `own` — the agents in
+`ownAgents.providers`, only while Own agents is on; `all` — both. A skill's
+body is not a secret: anyone who can read the manifest reads it.
 
 ### opencode.json
 
@@ -462,7 +630,7 @@ plugin's own form. **Start working** on the finished page opens a new thread.
   profile (MDM plist) is not read.
 - Removing Fleet Kit leaves what it wrote in `opencode.json` and the secret
   plugin in place; the original file is in `opencode.json.before-fleet-kit.bak`.
-- `mcp` and `skills` entries are validated but not applied yet.
+- `mcp` entries are validated but not applied yet.
 - In the Russian panel, manifest check messages and error details that come
   from bb stay in English.
 
@@ -496,6 +664,11 @@ and read its log from the container:
 docker exec -d fleet-kit-e2e bash -c 'bash /tmp/scenario.sh > /tmp/scenario.log 2>&1; echo "exit=$?" >> /tmp/scenario.log'
 docker exec fleet-kit-e2e cat /tmp/scenario.log
 ```
+
+`e2e/own-agents.sh` runs after `scenario.sh`: it offers Codex as an own
+agent, presses the real confirmation window (zenity on the container's
+virtual display) with `xdotool`, and reads what Codex and OpenCode were given
+from their requests (Codex goes to a local capture server).
 
 `e2e/scenario.sh` installs Fleet Kit from the container's git repository, sets
 `allowDevSources` (the fixture uses a local git source and a gateway on

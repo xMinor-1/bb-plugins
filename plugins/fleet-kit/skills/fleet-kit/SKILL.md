@@ -17,8 +17,17 @@ sidebar shows the same information as the commands below.
 bb fleet-kit status [--json]     # build version, last sync, OpenCode protection, secrets
 bb fleet-kit sync [--json]       # sync now and wait; exit 1 when the sync had errors
 bb fleet-kit setup [--json]      # First run steps: done, todo, problem, installing, later
+bb fleet-kit branch [--json]     # the build's branches, the one picked, which optional plugins are on
+bb fleet-kit branch choose <id> [--yes]  # pick a branch; the person's call: ask before running it
+bb fleet-kit branch plugin <id> on|off
+bb fleet-kit own-agents          # whether the person's own agents (Claude Code, Codex) are on, and the build's warning
 bb fleet-kit secret clear <name>
 ```
+
+- `bb fleet-kit own-agents on` is the person's decision, never yours: it opens
+  a confirmation window on their desktop. Do not run it, and do not press its
+  buttons. Tell the person where the switch is: the Fleet Kit panel, section
+  "Own agents".
 
 - Never handle a secret value yourself: do not ask for it in chat, put it in a
   command, a file or a variable, or print it. Ask the user to enter it in the
@@ -46,6 +55,9 @@ changes one and triggers a sync.
   other than `@opencode/ai/providers/*`. Never turn it on for a person.
 
 ## What not to do
+
+- Do not turn on an agent Fleet Kit turned off (`bb provider enable`), and do
+  not edit the `ownAgents` choice: the next sync turns it off again.
 
 - Do not edit `opencode.json` keys that Fleet Kit owns (`providers.<build provider>`,
   `model`, `enabled_providers`, other top-level keys from the manifest's

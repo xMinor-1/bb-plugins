@@ -13,6 +13,7 @@
 // provider's key or headers, and OpenCode's own `{env:...}` / `{file:...}`
 // substitutions are refused everywhere.
 import { z } from "zod";
+import { MAX_LOGO_LENGTH, isUsableLogo } from "./app/branding.js";
 
 /** The newest manifest format this Fleet Kit understands. */
 export const SUPPORTED_SCHEMA = 1;
@@ -91,6 +92,35 @@ const onboardingStep = z
     }
   });
 export type OnboardingStep = z.infer<typeof onboardingStep>;
+
+/**
+ * Build branches: the optional plugins and, per branch, which of them are on
+ * by default. Plugins outside `optional` go to every machine.
+ */
+const branchesBlock = z
+  .object({
+    /** The plugins every machine gets whatever the choice: optional, a check that no plugin is left undecided. */
+    common: z.array(id).optional(),
+    /** Plugins the person may turn on or off, with the name the First run page shows. */
+    optional: z.array(z.object({ id, title: z.string().min(1), hint: z.string().optional() }).strict()).min(1),
+    list: z
+      .array(
+        z
+          .object({
+            id,
+            title: z.string().min(1),
+            hint: z.string().optional(),
+            /** Defaults of optional plugins in this branch; one left out is on. */
+            plugins: z.record(id, z.boolean()).optional(),
+            /** Defaults of `mcp` servers in this branch, over each entry's own `default`. */
+            mcp: z.record(id, z.boolean()).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .refine((list) => new Set(list.map((branch) => branch.id)).size === list.length, "a branch id is listed twice"),
+  })
+  .strict();
 
 const providerBlock = z
   .object({
@@ -208,7 +238,59 @@ const rootShape = {
   allowedProviders: z.array(id).min(1),
   opencode: opencodeBlock,
   mcp: z.array(mcpEntry),
-  skills: z.array(z.object({ id }).passthrough()).optional(),
+  /**
+   * Skills for agents. One with `name`, `description` and `body` is given to
+   * the agents of its `audience` (default `allowed`); see src/own-agents.ts.
+   * An entry with `id` alone is kept for older builds and does nothing.
+   */
+  skills: z
+    .array(
+      z
+        .object({
+          id,
+          name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "use lowercase letters, digits and dashes").max(64).optional(),
+          description: z.string().min(1).max(1024).optional(),
+          audience: z.enum(["allowed", "own", "all"]).optional(),
+          body: z.string().min(1).max(64 * 1024).optional(),
+        })
+        .passthrough(),
+    )
+    .optional(),
+  /**
+   * The build's name and logo in bb's page: the title, the logo and the
+   * favicon. `replaces` names plugins that did this before (such as App
+   * Branding): Fleet Kit removes them once it has the branding, so a machine
+   * is never left without it. A root field: an older Fleet Kit only warns
+   * about it and keeps the old plugin, which it does not remove.
+   */
+  branding: z
+    .object({
+      appName: z.string().max(80).optional(),
+      logoSvg: z
+        .string()
+        .max(MAX_LOGO_LENGTH)
+        .refine((value) => isUsableLogo(value), "logoSvg must be SVG source")
+        .optional(),
+      replaces: z.array(id).optional(),
+    })
+    .strict()
+    .optional(),
+  /**
+   * More agents the person may turn on: their own Claude Code or Codex. Off
+   * until the person turns "Own agents" on and confirms `warning` in a system
+   * window. A root field, not inside `agents`: an older Fleet Kit only warns
+   * about an unknown root field, and refuses an unknown one in `agents`.
+   */
+  ownAgents: z
+    .object({
+      providers: z.array(providerId).min(1),
+      title: z.string().min(1).max(120).optional(),
+      warning: z.string().min(1).max(2000),
+      /** The build's agent an own agent hands steps to: shown in the panel, checked against `agents.allowed`. */
+      delegate: z.object({ provider: providerId, model: z.string().min(1).max(200) }).strict().optional(),
+    })
+    .strict()
+    .optional(),
   /** Choices Fleet Kit holds for bb's AI service tasks; a task left out is not touched. */
   aiServices: z.object(Object.fromEntries(AI_TASKS.map((task) => [task, aiChoice.optional()])) as Record<AiTask, z.ZodOptional<typeof aiChoice>>).strict().optional(),
   /**
@@ -218,6 +300,8 @@ const rootShape = {
   agents: z.object({ allowed: z.array(providerId).min(1) }).strict().optional(),
   /** Steps of the "First run" page, in order. */
   onboarding: z.array(onboardingStep).optional(),
+  /** Sets of plugins the person picks from on the First run page. */
+  branches: branchesBlock.optional(),
   /**
    * Rules for OpenCode's agents, one Markdown line per item. Fleet Kit writes
    * them to its own file in the OpenCode configuration directory and lists
@@ -482,6 +566,41 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
     }
     if (new Set(manifest.agents.allowed).size !== manifest.agents.allowed.length) errors.push("agents.allowed: an agent is listed twice");
   }
+  for (const replaced of manifest.branding?.replaces ?? []) {
+    if (ids.has(replaced)) errors.push(`branding.replaces: "${replaced}" is also in plugins; it would be installed and removed on every sync`);
+    if (replaced === SELF_ID) errors.push("branding.replaces: Fleet Kit cannot remove itself");
+  }
+  if (manifest.ownAgents !== undefined) {
+    const own = manifest.ownAgents;
+    if (manifest.agents === undefined) errors.push("ownAgents: needs agents.allowed, the agents that stay on without the person's choice");
+    for (const provider of own.providers) {
+      if (manifest.agents?.allowed.includes(provider)) errors.push(`ownAgents.providers: "${provider}" is already in agents.allowed`);
+    }
+    if (new Set(own.providers).size !== own.providers.length) errors.push("ownAgents.providers: an agent is listed twice");
+    if (own.delegate !== undefined) {
+      if (manifest.agents !== undefined && !manifest.agents.allowed.includes(own.delegate.provider)) {
+        errors.push(`ownAgents.delegate.provider: "${own.delegate.provider}" is not in agents.allowed`);
+      }
+      const modelProvider = own.delegate.model.split("/")[0]!;
+      if (own.delegate.model.includes("/") && !allowed.has(modelProvider)) {
+        errors.push(`ownAgents.delegate.model: provider "${modelProvider}" is not in allowedProviders`);
+      }
+    }
+  }
+  if (manifest.skills !== undefined) {
+    const names = new Set<string>();
+    for (const skill of manifest.skills) {
+      const parts = [skill.name, skill.description, skill.body].filter((value) => value !== undefined).length;
+      if (parts > 0 && parts < 3) errors.push(`skills.${skill.id}: name, description and body go together`);
+      if (skill.name !== undefined) {
+        if (names.has(skill.name)) errors.push(`skills.${skill.id}: the name "${skill.name}" is used twice`);
+        names.add(skill.name);
+      }
+      if (skill.audience === "own" && manifest.ownAgents === undefined) {
+        warnings.push(`skills.${skill.id}: for own agents, but the build has no ownAgents; no agent gets it`);
+      }
+    }
+  }
   if (manifest.onboarding !== undefined) {
     // A wrong step only hides that step: the page is a guide, and it must not hold back the rest of the build.
     const seen = new Set<string>();
@@ -498,9 +617,57 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
       return problem === null;
     });
   }
+  if (manifest.branches !== undefined) checkBranches(manifest, ids, warnings);
   if (compareVersions(manifest.install.bb, manifest.bb.minVersion) < 0) {
     errors.push("install.bb: lower than bb.minVersion");
   }
   if (/-/.test(manifest.version)) warnings.push(`version: ${manifest.version} is a pre-release`);
   return { manifest: errors.length === 0 ? manifest : null, errors, warnings, newerFormat: false };
+}
+
+/**
+ * A wrong name in `branches` only drops that name, with a warning: a branch is
+ * a default, and it must not hold back the rest of the build. Fleet Kit itself
+ * is never optional; a planned plugin may be, and its default applies once it ships.
+ */
+function checkBranches(manifest: Manifest, ids: Set<string>, warnings: string[]) {
+  const block = manifest.branches!;
+  const seen = new Set<string>();
+  block.optional = block.optional.filter((entry) => {
+    const problem =
+      entry.id === SELF_ID
+        ? "Fleet Kit cannot be optional"
+        : seen.has(entry.id)
+          ? "is listed twice"
+          : !ids.has(entry.id)
+            ? "is not in plugins"
+            : null;
+    seen.add(entry.id);
+    if (problem !== null) warnings.push(`branches.optional.${entry.id}: ${problem}; ignored`);
+    return problem === null;
+  });
+  const optional = new Set(block.optional.map((entry) => entry.id));
+  if (block.common !== undefined) {
+    const common = new Set(block.common);
+    for (const id of block.common) {
+      if (!ids.has(id)) warnings.push(`branches.common.${id}: is not in plugins`);
+      if (optional.has(id)) warnings.push(`branches.common.${id}: is also optional; it stays optional`);
+    }
+    for (const id of ids) {
+      if (!common.has(id) && !optional.has(id)) warnings.push(`branches: "${id}" is in neither common nor optional; every machine gets it`);
+    }
+  }
+  const servers = new Set(manifest.mcp.map((server) => server.id));
+  for (const branch of block.list) {
+    for (const id of Object.keys(branch.plugins ?? {})) {
+      if (optional.has(id)) continue;
+      warnings.push(`branches.${branch.id}.plugins.${id}: not in branches.optional; ignored`);
+      delete branch.plugins![id];
+    }
+    for (const id of Object.keys(branch.mcp ?? {})) {
+      if (servers.has(id)) continue;
+      warnings.push(`branches.${branch.id}.mcp.${id}: not in mcp; ignored`);
+      delete branch.mcp![id];
+    }
+  }
 }

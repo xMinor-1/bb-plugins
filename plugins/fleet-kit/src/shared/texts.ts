@@ -84,6 +84,11 @@ const en = {
 
   pluginPlanned: () => "Planned; not installed yet.",
   pluginKept: () => "No longer in the build; kept. List it in removePlugins to remove it.",
+  pluginAwaitsChoice: () => "Waits for a branch to be picked on the First run page.",
+  pluginNotChosen: () => "Off in your selection; not installed.",
+  pluginOffByChoice: () => "Off in your selection.",
+  pluginTurnedOff: () => "Turned off: off in your selection. Its settings and data are kept.",
+  pluginTurnOffFailed: (p: { error: string }) => `Could not turn it off: ${p.error}`,
   pluginBundled: () => "Bundled with bb; Fleet Kit never removes it.",
   pluginIdBundled: () => "This id belongs to a plugin bundled with bb; pick another id.",
   pluginRemoved: () => "Removed: the build lists it in removePlugins.",
@@ -205,6 +210,11 @@ const ru: Catalog = {
 
   pluginPlanned: () => "Запланирован, пока не ставится.",
   pluginKept: () => "Больше не входит в сборку, но оставлен. Чтобы снять, укажите его в removePlugins.",
+  pluginAwaitsChoice: () => "Ждёт выбора ветки на странице «Первый запуск».",
+  pluginNotChosen: () => "Выключен в вашем наборе, не ставится.",
+  pluginOffByChoice: () => "Выключен в вашем наборе.",
+  pluginTurnedOff: () => "Выключен по вашему выбору. Настройки и данные сохранены.",
+  pluginTurnOffFailed: (p) => `Не удалось выключить: ${p.error}`,
   pluginBundled: () => "Встроен в bb, Fleet Kit его не снимает.",
   pluginIdBundled: () => "Этот id занят встроенным плагином bb; выберите другой.",
   pluginRemoved: () => "Снят: сборка указывает его в removePlugins.",

@@ -1,40 +1,56 @@
 # Bug Report Button
 
-A small bug button in the top bar of bb, on every screen. A click opens your bug report form in the browser, so people can report
-a problem from wherever they noticed it. The plugin holds no address of its own and sends nothing anywhere.
+A **Bug report** item with a bug icon in the bb sidebar. It opens a page where people describe a problem and attach
+screenshots, and the plugin sends the report to your form. Until sending is set up, the page links to the form in the
+browser instead.
+
+## The page
+
+- **Subject** (required) and **Description**.
+- **Pictures**: drop them anywhere on the page, paste a screenshot from the clipboard, or choose files. Up to 6 PNG,
+  JPEG, GIF or WebP pictures, 5 MB each and 15 MB together, with previews and a remove button on each. A file that does
+  not fit is refused with a sentence that says why.
+- **Send**: after a successful send the page shows the created record (a link when the form gives one) and clears
+  itself. When sending fails, the error is shown in words and everything typed and attached stays.
 
 ## Settings
 
 | Setting | Meaning |
 | --- | --- |
-| `formUrl` | The http or https address of the form. Empty hides the button |
-| `label` | Tooltip and screen reader name of the button. Empty shows `Report a bug` |
+| `formUrl` | The form in a browser. The page links to it, and only links to it while `submitUrl` is empty |
+| `label` | A heading on the page, for example in the people's own language. Empty shows nothing extra |
+| `submitUrl` | Where the plugin posts the report as `multipart/form-data`. Empty turns sending off |
+| `submitFields` | JSON object: form field name → text with `{subject}`, `{description}` and `{context}`. Empty: `{"subject":"{subject}","description":"{description}"}` |
+| `fileField` | Form field name for the pictures (default `file`). Empty sends no pictures and hides them on the page |
+| `fileMode` | `combine` (default) joins several pictures into one, for a form that takes a single file; `separate` sends each as its own file under the same field name |
+| `recordUrl` | Address of a record with `{key}`, for a form that answers with a key such as `ABC-12` but no link |
+
+`{context}` is the plugin version, the operating system and the app's user agent and window size: handy in a bug.
 
 ```sh
-bb plugin config bug-report-button set formUrl "https://example.com/forms/bugs"
-bb plugin config bug-report-button set label "Report a bug"
+bb plugin config bug-report-button set submitUrl "https://forms.example.com/api/forms/123/submit"
+bb plugin config bug-report-button set submitFields '{"title":"{subject}","body":"{description}\n\n{context}"}'
+bb plugin config bug-report-button set fileField "attachment"
+bb plugin config bug-report-button set recordUrl "https://tracker.example.com/{key}"
 ```
-
-## Where the button is
-
-In the top bar of the window, in the free space between the thread title and the actions on the right. bb draws that
-bar on every route, so the button stays in one place on threads, Home and Settings, over dialogs, with the sidebar
-collapsed, and on the onboarding screen. A very long title in a narrow window can run under it.
-
-## Where the form opens
-
-The button is an ordinary link with `target="_blank"`:
-
-- In the desktop app, bb's window-open handler passes it to the system browser, with the user's own sign-ins.
-- In a web browser, it opens a new tab.
-
-It does not use bb's in-app browser, which keeps a separate session and would ask the user to sign in again.
 
 ## How it works
 
-A content script runs in every window, because overlays are not mounted on the onboarding screen. It reads the settings
-from this plugin's own route (`GET /config`) and checks again every 30 seconds, because settings can arrive after the
-plugin starts. Everything is undone when the plugin stops.
+- The page hands the report to the plugin server over RPC, and the server posts it: a page in the app cannot post to
+  another site because of CORS, and the server runs on the person's machine, so it reaches what they reach (VPN
+  included). Nothing is sent anywhere else.
+- `combine` stacks the pictures top to bottom in the page, on a canvas as wide as the widest picture (at most 1920 px);
+  narrower ones keep their size. The result is PNG, or JPEG when PNG is over 5 MB.
+- The record is read from the form's answer: a JSON field such as `key`, `issue_key` or `url` (also nested), or a key
+  like `ABC-12` in the text.
+- bb shows a new sidebar item to everyone who never changed the sidebar, and puts it under More for people who did.
+  The item replaces a button that was always on screen, so on its first start the plugin adds it to their visible list,
+  once. Hiding it afterwards sticks.
+
+## Updating from 0.1
+
+The floating button in the top bar is gone; the sidebar item appears by itself. `formUrl` and `label` keep working:
+with no `submitUrl` the page links to the same form the button opened.
 
 ## Development
 

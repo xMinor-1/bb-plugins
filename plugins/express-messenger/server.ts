@@ -97,7 +97,7 @@ export const rpcContract = defineRpcContract({
       .strict(),
   },
   status: { input: z.object({ hostId }).strict(), output: statusSchema },
-  signIn: { input: z.object({ hostId }).strict(), output: outcome },
+  signIn: { input: z.object({ hostId }).strict(), output: outcome.extend({ chats: z.number().int(), people: z.number().int() }).strict() },
   sync: { input: z.object({ hostId }).strict(), output: outcome.extend({ chats: z.number().int(), people: z.number().int() }).strict() },
   findChats: { input: z.object({ hostId, query: z.string().min(1).max(200) }).strict(), output: matchesSchema },
   forget: { input: z.object({ hostId }).strict(), output: outcome },
@@ -818,7 +818,7 @@ export default async function plugin(bb: BbPluginApi) {
       await kv.set("ui:lastHost", machine);
       return host.call("status", { url: await webClientUrl() }, { hostId: machine, timeoutMs: 30_000 });
     },
-    signIn: async ({ hostId: machine }) => signInChanged(host.call("signIn", { url: await webClientUrl() }, { hostId: machine, timeoutMs: 12 * 60_000 })),
+    signIn: async ({ hostId: machine }) => signInChanged(host.call("signIn", { url: await webClientUrl() }, { hostId: machine, timeoutMs: 20 * 60_000 })),
     sync: async ({ hostId: machine }) => signInChanged(host.call("sync", { url: await webClientUrl() }, { hostId: machine, timeoutMs: 8 * 60_000 })),
     findChats: async ({ hostId: machine, query }) => host.call("findChats", { url: await webClientUrl(), query, limit: 8 }, { hostId: machine, timeoutMs: TOOL_TIMEOUT_MS }),
     forget: ({ hostId: machine }) => signInChanged(host.call("forget", {}, { hostId: machine, timeoutMs: 60_000 })),
