@@ -64,6 +64,9 @@ const en = {
   bbSettingUnknown: (p: { key: string }) => `bb has no general setting "${p.key}".`,
   bbSettingType: (p: { key: string; type: string }) => `bb expects a ${p.type} for "${p.key}".`,
   bbSettingSet: (p: { value: string }) => `Set to ${p.value}.`,
+  uiSet: () => "Set as the build has it.",
+  uiKept: () => "Changed by hand on this machine; kept.",
+  uiUnsupported: () => "This bb cannot set its sidebar from a plugin; left as it is.",
 
   aiOff: () => "Turned off.",
   aiAutomatic: () => "Set to automatic: bb picks a ready service.",
@@ -191,6 +194,9 @@ const ru: Catalog = {
   bbSettingUnknown: (p) => `В bb нет общей настройки «${p.key}».`,
   bbSettingType: (p) => `Для «${p.key}» bb ждёт значение типа ${p.type}.`,
   bbSettingSet: (p) => `Установлено: ${p.value}.`,
+  uiSet: () => "Установлено, как в сборке.",
+  uiKept: () => "Изменено вручную на этом компьютере, оставлено.",
+  uiUnsupported: () => "Этот bb не даёт плагину менять боковую панель, оставлено как есть.",
 
   aiOff: () => "Выключено.",
   aiAutomatic: () => "Автоматически: bb выбирает готовый сервис.",
