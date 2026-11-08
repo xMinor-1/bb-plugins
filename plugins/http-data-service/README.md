@@ -11,6 +11,9 @@ service in its own private configuration and this plugin names no service.
   plugin's frontend loads, so the first session shows **Data Service** there and the name in
   the page header, later ones show the name everywhere):
   login, password, **Save and check**, and plain-language errors in English or Russian.
+- The sidebar icon is a database mark, or the short text a build sets in `iconText`. Unlike the
+  title, the icon switches as soon as the settings arrive, in the first session too.
+- Who may read the data: the rules as written, or the build's own words from `allowedModelsText`.
 - The address is shown read-only: it comes from settings and nobody types it.
 - An onboarding step for a build's setup page: the `setupStatus` RPC answers
   `done`, `todo` or `problem` from the saved state.
@@ -58,10 +61,12 @@ only declared methods and parameters pass.
 | `serviceName` | The name people and agents see |
 | `summary` | One line telling agents when to use the service |
 | `notice` | Optional note on the sign-in page, for example what the data covers |
+| `iconText` | Optional: up to 3 characters drawn as the sidebar icon instead of the database mark, for example the service's short name. Empty or longer text keeps the mark |
 | `baseUrl` | The `https://` address method paths are relative to |
 | `methods` | JSON list of methods, below |
 | `checkMethod` | The method the sign-in check calls: no required parameters; its answer is dropped |
 | `guide` | Markdown guide for agents |
+| `allowedModelsText` | Optional: what the sign-in page says about who may read the data instead of the raw rules, for example "Only agents on the company's models" |
 | `allowedModels` | One rule per line, `<provider-id> <model-glob>`. Empty means no agent gets the tools |
 | `accountPlugins` | Plugins that may sign you in: plugin ids separated by commas, for example `fleet-kit`. Empty: none |
 

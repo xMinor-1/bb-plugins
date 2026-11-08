@@ -19,6 +19,8 @@ const SETTINGS = {
   methods: JSON.stringify(METHODS),
   checkMethod: "stages",
   guide: "# Rules\nBe exact.",
+  iconText: "",
+  allowedModelsText: "",
 };
 
 async function setup(settings: Partial<typeof SETTINGS> = {}, answer: RequestOutput = { ok: true, text: '{"data":"COMPANY DATA"}', truncated: false }) {
@@ -259,5 +261,16 @@ describe("the panel", () => {
     expect(config).toMatchObject({ name: "Sales data", address: "https://svc.example.com/api/tools/", problem: null, canCheck: true, rules: [{ provider: "acp-opencode", model: "corp/*" }] });
     expect(text(config)).not.toContain("Be exact");
     expect(text(config)).not.toContain("agent/items");
+  });
+
+  it("passes the plain words for who may read, or null for the rules", async () => {
+    expect(await (await setup()).harness.behavior.callRpc("config", null)).toMatchObject({ rulesText: null });
+    expect(await (await setup({ allowedModelsText: " Only company models " })).harness.behavior.callRpc("config", null)).toMatchObject({ rulesText: "Only company models" });
+  });
+
+  it("passes a short icon text and drops an empty or too long one", async () => {
+    expect(await (await setup({ iconText: " AB " })).harness.behavior.callRpc("config", null)).toMatchObject({ iconText: "AB" });
+    expect(await (await setup({ iconText: "" })).harness.behavior.callRpc("config", null)).toMatchObject({ iconText: null });
+    expect(await (await setup({ iconText: "ABCD" })).harness.behavior.callRpc("config", null)).toMatchObject({ iconText: null });
   });
 });

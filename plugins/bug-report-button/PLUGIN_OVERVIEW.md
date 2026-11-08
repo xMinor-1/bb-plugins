@@ -7,5 +7,6 @@ A bug item in the bb sidebar that opens a report page and sends the report to yo
 - One click sends the report to your form; the page shows the created record and clears itself
 - Errors in plain words, and nothing typed is lost when sending fails
 - For a form that takes one file, several screenshots are joined into one picture
+- Or a tracker's REST API with each person's own API key, kept in their OS key store; screenshots are attached to the created record
 
 Set `submitUrl` and the form field names in the plugin settings. Without them, the page links to your form (`formUrl`).
