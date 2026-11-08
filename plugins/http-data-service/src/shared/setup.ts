@@ -40,6 +40,10 @@ const TEXT = {
     offline: "The machine is not reachable",
     unreadable: "The plugin could not read its state on that machine",
     noMachine: "No machine is connected to bb",
+    configProblem: "This build's service settings need a fix",
+    badLogin: "The login must not be empty or contain a colon",
+    badPassword: "The password is too long",
+    saveFailed: "The sign-in could not be saved on that machine",
   },
   ru: {
     done: "Вход выполнен",
@@ -53,6 +57,10 @@ const TEXT = {
     offline: "Машина не на связи",
     unreadable: "Плагин не смог прочитать своё состояние на этой машине",
     noMachine: "К bb не подключена ни одна машина",
+    configProblem: "Настройки сервиса в сборке нужно исправить",
+    badLogin: "Логин не должен быть пустым или содержать двоеточие",
+    badPassword: "Пароль слишком длинный",
+    saveFailed: "Не удалось сохранить вход на этой машине",
   },
 } satisfies Record<SetupLang, Record<string, string>>;
 

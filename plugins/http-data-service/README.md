@@ -15,6 +15,28 @@ service in its own private configuration and this plugin names no service.
 - An onboarding step for a build's setup page: the `setupStatus` RPC answers
   `done`, `todo` or `problem` from the saved state.
 
+## One sign-in for several plugins
+
+A build's setup plugin can ask for the company login once and hand it to every plugin
+that signs in to the same domain. The `accountSignIn` RPC takes it, only from plugins
+listed in `accountPlugins`; anyone else, the panel and the CLI included, gets a
+`forbidden` refusal that names the setting.
+
+```ts
+input:  { user: string /* 1..256 */, password: string /* 1..1024 */, lang?: "en" | "ru", hostId?: string } // strict
+output: { state: "done" | "todo" | "problem", summary: string, path?: string, rejected?: boolean }
+```
+
+- It saves the login as it came and the password on the machine (`hostId`, or the one
+  `setupStatus` would ask), to the configured `baseUrl`, then runs the sign-in check and
+  answers what `setupStatus` would answer after it. The login and password never come back.
+- `rejected: true` only when the service refused this login or password (HTTP 401). The caller
+  should not send the same pair again: a domain locks the account after a few failures.
+- A sign-in that already works is kept and only reported. While signing in is paused after a
+  refusal, nothing is sent: the person lifts the pause on the sign-in page.
+- No address, broken settings, a login with a colon or control characters, or a password over
+  500 characters: `problem` without any request.
+
 ## What agents get
 
 | Tool | What it does |
@@ -41,6 +63,7 @@ only declared methods and parameters pass.
 | `checkMethod` | The method the sign-in check calls: no required parameters; its answer is dropped |
 | `guide` | Markdown guide for agents |
 | `allowedModels` | One rule per line, `<provider-id> <model-glob>`. Empty means no agent gets the tools |
+| `accountPlugins` | Plugins that may sign you in: plugin ids separated by commas, for example `fleet-kit`. Empty: none |
 
 ```json
 [
@@ -95,7 +118,7 @@ read all of it. Say so in `notice` and in `guide`.
 ## Install
 
 ```sh
-bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.1.0 --plugin http-data-service --tag-prefix http-data-service/
+bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.2.0 --plugin http-data-service --tag-prefix http-data-service/
 ```
 
 The machine agents run on must trust the service's certificate. With a corporate root certificate,

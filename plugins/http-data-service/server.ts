@@ -14,7 +14,7 @@
 //   4. The panel's RPC methods answer the panel, the bb CLI and agents (bb shows
 //      them all as `client`), never another plugin, and none of them returns service
 //      data: the sign-in check answers only "worked" or why not. Other plugins get
-//      only `setupStatus`.
+//      only `setupStatus`, and the plugins in `accountPlugins` also `accountSignIn`.
 //
 // This guards against mistakes, not against a malicious agent: an agent with a shell
 // runs as the same user as the password store and as the `bb` command (see the README).
@@ -27,6 +27,8 @@ import { z } from "zod";
 import { checkResultSchema, connectionStatusSchema, hostContract, type ConnectionStatus, type FailureCode, type RequestOutput } from "./contract";
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
 import { buildQuery, ConfigError, methodsText, normalizeBaseUrl, parseMethods, type ParamValue, type ServiceMethod } from "./src/shared/service-config";
+import { accountSignInContract, parsePluginList } from "./src/shared/account";
+import { checkLogin, MAX_LOGIN, MAX_PASSWORD } from "./src/shared/login";
 import { setupFromStatus, setupStatusContract, setupStep } from "./src/shared/setup";
 
 const hostIdInput = z.object({ hostId: z.string().min(1).max(200) }).strict();
@@ -231,11 +233,33 @@ export default async function plugin(bb: BbPluginApi) {
         }
       }, "Each line must be: <provider-id> <model-glob>"),
     },
+    accountPlugins: {
+      type: "string",
+      label: "Plugins that may sign you in",
+      description:
+        "Plugin ids separated by commas, for example `fleet-kit`. They may hand this plugin the login and password a person entered there; they never read them back. Empty: none.",
+      default: "",
+      experimental_schema: z.string().max(2000).refine((value) => {
+        try {
+          parsePluginList(value);
+          return true;
+        } catch {
+          return false;
+        }
+      }, "Plugin ids: lowercase letters, digits and hyphens, separated by commas"),
+    },
   });
 
   let policy: Policy = createPolicy([]);
   let config: ServiceConfig = readConfig({ serviceName: "", summary: "", notice: "", baseUrl: "", methods: "", checkMethod: "", guide: "" });
-  const apply = (raw: RawSettings & { allowedModels: string }) => {
+  let accountPlugins = new Set<string>();
+  const apply = (raw: RawSettings & { allowedModels: string; accountPlugins: string }) => {
+    try {
+      accountPlugins = new Set(parsePluginList(raw.accountPlugins));
+    } catch {
+      // A broken list fails closed.
+      accountPlugins = new Set();
+    }
     try {
       policy = createPolicy(parseRules(raw.allowedModels));
     } catch (error) {
@@ -487,5 +511,69 @@ export default async function plugin(bb: BbPluginApi) {
       },
     },
     { experimental_discoverable: true, experimental_description: "Data service sign-in state for a bb build's onboarding page." },
+  );
+
+  // ---------- One sign-in for several plugins (src/shared/account.ts) ----------
+
+  /** A sign-in that already works is kept: a shared login must not replace it. */
+  const working = (status: ConnectionStatus) => status.user !== null && status.hasPassword && !status.addressChanged && !status.blocked && status.lastCheck?.ok === true;
+  const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+  bb.rpc.register(
+    accountSignInContract,
+    {
+      accountSignIn: async ({ user, password, lang = "en", hostId: requested }, context) => {
+        const caller = context.experimental_caller;
+        if (caller.kind !== "plugin" || !accountPlugins.has(caller.pluginId)) {
+          const who = caller.kind === "plugin" ? caller.pluginId : "this caller";
+          throw new experimental_PluginRpcRefusal({
+            code: "forbidden",
+            message: `HTTP Data Service does not take a sign-in from ${who}: add the plugin's id to accountPlugins ("Plugins that may sign you in") in its settings.`,
+          });
+        }
+        if (!config.baseUrl) return setupStep("problem", "notConfigured", lang);
+        if (config.problem || !config.checkMethod) return setupStep("problem", "configProblem", lang);
+        try {
+          checkLogin(user);
+        } catch {
+          return setupStep("problem", "badLogin", lang);
+        }
+        if (user.length > MAX_LOGIN) return setupStep("problem", "badLogin", lang);
+        if (password.length > MAX_PASSWORD) return setupStep("problem", "badPassword", lang);
+        const machine = await setupMachine(requested);
+        if (!machine) return setupStep("problem", "noMachine", lang);
+        const found = (await bb.sdk.hosts.list()).find((candidate) => candidate.id === machine);
+        if (!found || found.lifecycle.phase === "destroyed" || found.status !== "connected") return setupStep("problem", "offline", lang);
+        const baseUrl = config.baseUrl;
+        const path = config.checkMethod.path;
+        let before: ConnectionStatus;
+        try {
+          before = await host.call("status", { baseUrl }, { hostId: machine, timeoutMs: 60_000 });
+        } catch (error) {
+          bb.log.info(`accountSignIn: ${machine} could not read its state: ${reason(error)}`);
+          return setupStep("problem", "unreadable", lang);
+        }
+        if (working(before)) return setupFromStatus(before, lang);
+        // The service refused a password here: sending one again could lock the account.
+        // Only the person, on the sign-in page, lifts the pause.
+        if (before.blocked) return setupStep("problem", "paused", lang);
+        try {
+          await changed(host.call("saveConnection", { baseUrl, user, password }, { hostId: machine, timeoutMs: 60_000 }));
+        } catch (error) {
+          bb.log.info(`accountSignIn: ${machine} could not save the sign-in: ${reason(error)}`);
+          return setupStep("problem", "saveFailed", lang);
+        }
+        try {
+          const check = await changed(host.call("checkSignIn", { baseUrl, path }, { hostId: machine, signal: context.experimental_signal, timeoutMs: 120_000 }));
+          const after = await host.call("status", { baseUrl }, { hostId: machine, timeoutMs: 60_000 });
+          const step = setupFromStatus(after, lang);
+          return check.code === "unauthorized" ? { ...step, rejected: true } : step;
+        } catch (error) {
+          bb.log.info(`accountSignIn: ${machine} could not check the sign-in: ${reason(error)}`);
+          return setupStep("problem", "unreadable", lang);
+        }
+      },
+    },
+    { experimental_discoverable: true, experimental_description: "Signs the person in with a login another plugin collected, for plugins listed in accountPlugins." },
   );
 }
