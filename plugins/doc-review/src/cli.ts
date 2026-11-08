@@ -9,6 +9,7 @@ import {
   type PluginCliRegistration,
 } from "@get-bb/plugin-sdk";
 import type { Exchange } from "./exchange.js";
+import { isWindowsPath, normalizeAbsolute } from "./files.js";
 import { CLI_NAME, strokeLines } from "./message.js";
 import type { CommentWithDoc, DocRow, ReviewStore } from "./store.js";
 import { anchorLabel, anchorQuote, truncate, type CommentReply, type CommentStatus } from "./types.js";
@@ -108,8 +109,13 @@ export function reviewCli(options: {
 }): PluginCliRegistration {
   const { store, onChanged, exchange } = options;
 
-  const absolute = (file: string, cwd: string | undefined) =>
-    path.posix.isAbsolute(file) ? path.posix.normalize(file) : path.posix.resolve(cwd ?? "/", file);
+  const absolute = (file: string, cwd: string | undefined) => {
+    if (isWindowsPath(file)) return normalizeAbsolute(file);
+    if (path.posix.isAbsolute(file)) return path.posix.normalize(file);
+    // A bb server running on Windows reports a Windows working directory.
+    if (cwd && isWindowsPath(cwd)) return normalizeAbsolute(path.win32.resolve(cwd, file));
+    return path.posix.resolve(cwd ?? "/", file);
+  };
 
   async function docAt(file: string, cwd: string | undefined): Promise<DocRow> {
     try {

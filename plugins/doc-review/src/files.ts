@@ -81,6 +81,11 @@ export class DocFiles {
     entry.file.then(
       () => {
         entry.settledAtMs = Date.now();
+        // A large file's bytes should not outlive their moment in memory.
+        const timer = setTimeout(() => {
+          if (this.remoteReads.get(key) === entry) this.remoteReads.delete(key);
+        }, REMOTE_READ_REUSE_MS);
+        timer.unref?.();
       },
       () => {
         if (this.remoteReads.get(key) === entry) this.remoteReads.delete(key);

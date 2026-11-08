@@ -1086,14 +1086,23 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
     var href = (link.getAttribute("href") || "").trim();
     if (href.charAt(0) === "#") {
       event.preventDefault();
+      if (href.length === 1) { window.scrollTo(0, 0); return; }
+      // Changing the hash stays in this document whatever the <base> says,
+      // so :target styles and hash routers see it; the same hash again does
+      // not scroll, so scroll to it by hand.
+      var again = location.hash === href;
+      try { location.hash = href; } catch (error) { again = true; }
+      if (!again) return;
       var id = href.slice(1);
       try { id = decodeURIComponent(id); } catch (error) { /* keep the literal id */ }
-      var anchor = id ? document.getElementById(id) || document.getElementsByName(id)[0] : null;
+      var anchor = document.getElementById(id) || document.getElementsByName(id)[0];
       if (anchor) anchor.scrollIntoView();
-      else if (!id) window.scrollTo(0, 0);
       return;
     }
-    if (framed || !href || /^[?\/\\]|^[a-z][a-z0-9+.-]*:/i.test(href)) return;
+    // "plan.md:12" reads as a URL scheme; a name with an extension and a
+    // line number is a file link.
+    var lineLink = /^[^\/\\:?#]+\.[^\/\\:?#]+:\d+(?::\d+)?$/.test(href);
+    if (framed || !href || (!lineLink && /^[?\/\\]|^[a-z][a-z0-9+.-]*:/i.test(href))) return;
     event.preventDefault();
     post({ type: "file-link", href: href });
   }, false);

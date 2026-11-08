@@ -189,17 +189,24 @@ export class ReviewStore {
     // Windows paths are case-insensitive and take either separator, and
     // before 0.8.1 they were stored as the host spelled them: reuse the row a
     // file already has so its comments stay attached.
+    let id = docIdFor(hostId, absPath);
     if (/^[a-z]:[\\/]/i.test(absPath)) {
       const known = this.db
         .prepare(
-          `SELECT abs_path FROM docs
+          `SELECT id, abs_path FROM docs
            WHERE host_id IS ? AND lower(replace(abs_path, char(92), '/')) = lower(?)
            ORDER BY created_at, id LIMIT 1`,
         )
-        .get(hostId, absPath.replace(/\\/g, "/")) as { abs_path: string } | undefined;
-      if (known) absPath = known.abs_path;
+        .get(hostId, absPath.replace(/\\/g, "/")) as { id: string; abs_path: string } | undefined;
+      if (known) {
+        // The row keeps its id (and comments) and takes the one spelling the
+        // rest of the plugin works with: forward slashes.
+        id = known.id;
+        if (known.abs_path !== absPath) {
+          this.db.prepare(`UPDATE docs SET abs_path = ? WHERE id = ?`).run(absPath, id);
+        }
+      }
     }
-    const id = docIdFor(hostId, absPath);
     const now = Date.now();
     this.db
       .prepare(

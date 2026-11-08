@@ -20,6 +20,12 @@ describe("relative links in an HTML document", () => {
       path: "/home/me/reports/src/app.ts",
       location: { kind: "line", line: 40, column: null },
     });
+    expect(htmlFileLink("plan.md:12", report)).toEqual({
+      kind: "file",
+      path: "/home/me/reports/plan.md",
+      location: { kind: "line", line: 12, column: null },
+    });
+    expect(htmlFileLink("tel:123456", report)).toBeNull();
     expect(htmlFileLink("My%20notes.md?raw=1", report)).toEqual({
       kind: "file",
       path: "/home/me/reports/My notes.md",

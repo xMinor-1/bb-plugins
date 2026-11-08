@@ -48,7 +48,11 @@ function lineOf(hash: string, filePath: string): { path: string; location: Exper
 export function htmlFileLink(href: unknown, documentPath: string): HtmlFileLink | null {
   if (typeof href !== "string" || href.length > MAX_HREF) return null;
   const link = href.trim();
-  if (!link || /^[#?/\\]|^[a-z][a-z0-9+.-]*:/i.test(link) || /[\u0000-\u001f]/.test(link)) return null;
+  // "plan.md:12" parses as a URL scheme; a name with an extension and a line
+  // number is a file link, as the bridge reads it too.
+  const lineLink = /^[^/\\:?#]+\.[^/\\:?#]+:\d+(?::\d+)?$/.test(link);
+  if (!link || /^[#?/\\]/.test(link) || (!lineLink && /^[a-z][a-z0-9+.-]*:/i.test(link))) return null;
+  if (/[\u0000-\u001f]/.test(link)) return null;
 
   const hashAt = link.indexOf("#");
   const hash = hashAt >= 0 ? link.slice(hashAt) : "";

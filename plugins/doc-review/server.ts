@@ -346,7 +346,9 @@ export default async function plugin(bb: BbPluginApi) {
           script: BRIDGE_SCRIPT,
         });
         page = await preparePage(injected, leaseFromMs + PREVIEW_LEASE_MS);
-        htmlPages.put(doc.id, wanted, page);
+        // Without a folder preview the page's relative files are broken:
+        // the next open tries again instead of serving it like this.
+        if (baseUrl) htmlPages.put(doc.id, wanted, page);
       }
       const gzipped = acceptsGzip(context.req.header("accept-encoding"));
       return new Response(new Uint8Array(gzipped ? page.gzipped : page.body), {
