@@ -27,4 +27,4 @@ for title in ("First slide", "Второй слайд"):
     slide.shapes.title.text = title
     slide.placeholders[1].text = "Slide text"
 deck.save(os.path.join(out, "слайды.pptx"))
-print("docs:", sorted(os.listdir(out)))
+print("docs:", len(os.listdir(out)))

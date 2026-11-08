@@ -5,7 +5,7 @@
 //   node --experimental-transform-types try-install.mjs <install-app.ts> <package> <zip|dmg> <program> <directory> [result file]
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { openSync, readSync, closeSync, statSync, writeFileSync } from "node:fs";
+import { openSync, readSync, closeSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const [fleet, pkg, format, program, directory, resultFile] = process.argv.slice(2);
@@ -46,7 +46,8 @@ const { ensureApp } = await import(pathToFileURL(fleet).href);
 const started = Date.now();
 const outcome = await ensureApp({
   directory,
-  version: "test",
+  // The real version: the folder name it makes counts towards the path length on Windows.
+  version: JSON.parse(readFileSync(new URL("./versions.json", import.meta.url), "utf8")).version,
   file: { format, parts: parts.map((part, index) => ({ url: `${base}/${index}`, sha256: part.sha256 })), sha256: whole.digest("hex"), program },
   signal: new AbortController().signal,
 });

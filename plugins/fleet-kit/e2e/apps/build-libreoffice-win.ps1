@@ -35,14 +35,18 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 Copy-Item -LiteralPath $root -Destination $dest -Recurse
 Get-ChildItem -LiteralPath $dest -Recurse -Filter '*.msi' | Remove-Item -Force
 
-# The Visual C++ runtime: the MSI installs it to System32, so unpacked it lands in a folder of its own. Next to the
-# program it lets LibreOffice start on a machine without the redistributable.
-foreach ($name in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
-  $target = Join-Path $dest "program\$name"
-  if (Test-Path -LiteralPath $target) { Say "already in program: $name"; continue }
-  $found = Get-ChildItem -LiteralPath $admin -Recurse -Filter $name | Where-Object { $_.FullName -notlike "$root*" } | Select-Object -First 1
-  if ($null -ne $found) { Copy-Item -LiteralPath $found.FullName -Destination $target; Say "copied to program: $name (from $($found.FullName.Substring($admin.Length)))" }
-  else { Say "WARNING: no $name in the MSI" }
+# The Visual C++ runtime: the MSI leaves it to the system (an unpacked MSI has none), and a laptop without the
+# redistributable would not start LibreOffice. Next to the program, app-local, as Microsoft's redist.txt allows:
+# the newest Microsoft.VC14x.CRT of this machine's Visual Studio. Files LibreOffice ships itself stay.
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+$crt = Get-ChildItem -Path (Join-Path $vs 'VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT') -Directory | Sort-Object FullName | Select-Object -Last 1
+if ($null -eq $crt) { throw 'no Visual C++ runtime in Visual Studio' }
+Say "Visual C++ runtime from: $($crt.FullName)"
+foreach ($dll in Get-ChildItem -LiteralPath $crt.FullName -Filter '*.dll') {
+  $target = Join-Path $dest "program\$($dll.Name)"
+  if (Test-Path -LiteralPath $target) { Say "kept LibreOffice's own: $($dll.Name)"; continue }
+  Copy-Item -LiteralPath $dll.FullName -Destination $target
+  Say "copied to program: $($dll.Name)"
 }
 
 $zip = Join-Path $Out 'libreoffice-win-x64.zip'

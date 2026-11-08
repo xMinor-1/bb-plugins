@@ -16,7 +16,7 @@ PKG="$(mktemp -d)/libreoffice.dmg"
 curl -fsSL --retry 3 -o "$PKG" "$URL"
 [ "$(shasum -a 256 "$PKG" | cut -d' ' -f1)" = "$SHA" ]; result $? "the .dmg matches versions.json"
 
-APPS="$HOME/Library/Application Support/fleet-kit-ci/apps/libreoffice"
+APPS="$HOME/Library/Application Support/fleet-kit-ci/runtime/apps/libreoffice"
 node --no-warnings --experimental-transform-types "$HERE/try-install.mjs" "$FLEET" "$PKG" dmg "LibreOffice.app/Contents/MacOS/soffice" "$APPS" "$OUT/install.json"
 result $? "Fleet Kit installed LibreOffice"
 SOFFICE=$(node -p "JSON.parse(require('fs').readFileSync('$OUT/install.json','utf8')).path" 2>/dev/null)

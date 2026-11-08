@@ -17,7 +17,8 @@ try {
   $isAdmin = (New-Object Security.Principal.WindowsPrincipal $identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   Result (-not $isAdmin) "user $($identity.Name) has no administrator rights"
 
-  $apps = Join-Path $env:LOCALAPPDATA 'fleet-kit-ci\apps\libreoffice'
+  # As deep as a real build's folder: <build>\runtime\apps\<id>.
+  $apps = Join-Path $env:LOCALAPPDATA 'fleet-kit-ci\runtime\apps\libreoffice'
   $installJson = Join-Path $Out 'install.json'
   $installOut = & $Node --no-warnings --experimental-transform-types (Join-Path $Root 'try-install.mjs') (Join-Path $Root 'install-app.ts') (Join-Path $Root 'libreoffice-win-x64.zip') zip 'LibreOffice/program/soffice.exe' $apps $installJson 2>&1
   $code = $LASTEXITCODE

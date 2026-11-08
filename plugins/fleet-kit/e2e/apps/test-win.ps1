@@ -17,9 +17,12 @@ foreach ($item in @(
     @{ From = (Join-Path $Plugins 'doc-review\src\libreoffice.ts'); To = 'libreoffice.ts' },
     @{ From = (Join-Path $PSScriptRoot 'try-install.mjs'); To = 'try-install.mjs' },
     @{ From = (Join-Path $PSScriptRoot 'convert.mjs'); To = 'convert.mjs' },
+    @{ From = (Join-Path $PSScriptRoot 'versions.json'); To = 'versions.json' },
     @{ From = (Join-Path $PSScriptRoot 'test-win-user.ps1'); To = 'test-win-user.ps1' })) {
   Copy-Item -LiteralPath $item.From -Destination (Join-Path $Root $item.To) -Recurse -Force
 }
+# As on an ordinary laptop: GitHub's machines have long paths on, the 260-character limit is what people have.
+Set-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 0 -Type DWord
 $node = (Get-Command node.exe).Source
 [void](& icacls.exe $Root /grant '*S-1-5-32-545:(OI)(CI)M' /T /C /Q)
 [void](& icacls.exe $Out /grant '*S-1-5-32-545:(OI)(CI)M' /T /C /Q)
