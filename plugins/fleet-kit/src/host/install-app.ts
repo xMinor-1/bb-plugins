@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -90,10 +90,10 @@ async function exists(path: string): Promise<boolean> {
 }
 
 /** Runs a system tool directly, without a shell; rejects with its last output lines on failure. */
-export function runTool(command: string, args: string[], ms = UNPACK_MS): Promise<void> {
+export function runTool(command: string, args: string[], ms = UNPACK_MS, cwd?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     let output = "";
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false });
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false, ...(cwd ? { cwd } : {}) });
     const keep = (chunk: Buffer) => {
       output = (output + chunk.toString("utf8")).slice(-2000);
     };
@@ -117,8 +117,14 @@ export async function unpackWithSystemTools(format: AppFile["format"], archive: 
   await mkdir(target, { recursive: true });
   if (format === "zip") {
     if (platform === "win32") {
+      // tar.exe takes its arguments in the ANSI code page: a profile path with letters outside it (a Cyrillic user
+      // name on an English Windows) does not open. Run it from the app's folder with paths relative to it, which
+      // are ASCII here; the folder itself is reached through the working directory, which is Unicode.
       const tar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
-      return runTool(tar, ["-xf", archive, "-C", target]);
+      const base = dirname(target);
+      const from = relative(base, archive);
+      const local = !isAbsolute(from) && !from.startsWith("..");
+      return local ? runTool(tar, ["-xf", from, "-C", relative(base, target) || "."], UNPACK_MS, base) : runTool(tar, ["-xf", archive, "-C", target]);
     }
     if (platform === "darwin") return runTool("/usr/bin/ditto", ["-x", "-k", archive, target]);
     return runTool("unzip", ["-q", archive, "-d", target]);
