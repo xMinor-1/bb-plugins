@@ -110,6 +110,12 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
       default: "",
       experimental_schema: opencodeInstallDirSchema,
     },
+    appsInstallDir: {
+      type: "string",
+      label: "Folder for programs plugins need, such as an office suite (empty: next to the OpenCode folder)",
+      default: "",
+      experimental_schema: opencodeInstallDirSchema,
+    },
     secretStore: {
       type: "select",
       label: "Where secrets are stored",
@@ -150,6 +156,7 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
       syncIntervalMinutes: value.syncIntervalMinutes,
       opencodeConfigDir: value.opencodeConfigDir.trim(),
       opencodeInstallDir: value.opencodeInstallDir.trim(),
+      appsInstallDir: value.appsInstallDir.trim(),
       allowDevSources: value.allowDevSources,
       paused: value.paused,
       secretStore: value.secretStore as SecretStorePreference,

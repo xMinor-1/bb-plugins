@@ -218,3 +218,41 @@ describe("branches in the manifest", () => {
     expect(checkManifest(extra).manifest).toBeNull();
   });
 });
+
+describe("apps", () => {
+  const file = { format: "zip", parts: [{ url: "https://files.example.test/a.part-aa", sha256: "a".repeat(64) }], sha256: "b".repeat(64), program: "Office/program/soffice.exe" };
+  function withApp(app: Record<string, unknown> = {}, plugins: Array<Record<string, unknown>> = []) {
+    const manifest = sampleManifest() as any;
+    manifest.plugins.push({ id: "board", source: "git:https://git.example.test/plugins.git@semver:board/:^1.0.0", plugin: "board", status: "required" }, ...plugins);
+    manifest.apps = [{ id: "office", title: "Office", version: "26.8.2", plugin: "notes", setting: "officePath", before: "board", files: { "win32-x64": file }, ...app }];
+    return manifest;
+  }
+  const errors = (manifest: unknown) => checkManifest(manifest).errors;
+
+  it("accepts a program for a listed plugin, installed before a later plugin", () => {
+    expect(errors(withApp())).toEqual([]);
+    expect(errors(withApp({ before: undefined }))).toEqual([]);
+  });
+
+  it("refuses an unknown plugin, a before that comes first, and a setting the plugin's config also sets", () => {
+    expect(errors(withApp({ plugin: "nothing" })).join()).toMatch(/"nothing" is not in plugins/);
+    expect(errors(withApp({ plugin: "board", before: "notes" })).join()).toMatch(/would install before its plugin/);
+    expect(errors(withApp({ setting: "greeting" })).join()).toMatch(/config sets "greeting" too/);
+    expect(errors(withApp({ before: "nothing" })).join()).toMatch(/before: "nothing" is not in plugins/);
+  });
+
+  it("refuses a .dmg outside macOS, a path that leaves the package, a bad hash and an http address", () => {
+    expect(errors(withApp({ files: { "win32-x64": { ...file, format: "dmg" } } })).join()).toMatch(/only on macOS/);
+    for (const program of ["../soffice", "/Applications/x", "a\\b", "C:/x", "a//b"]) {
+      expect(errors(withApp({ files: { "win32-x64": { ...file, program } } })).join()).toMatch(/relative path/);
+    }
+    expect(errors(withApp({ files: { "win32-x64": { ...file, sha256: "B".repeat(64) } } })).join()).toMatch(/sha256/);
+    expect(errors(withApp({ files: { "win32-x64": { ...file, parts: [{ url: "http://files.example.test/a", sha256: "a".repeat(64) }] } } })).join()).toMatch(/https/);
+  });
+
+  it("refuses the same program twice", () => {
+    const manifest = withApp();
+    manifest.apps.push({ ...manifest.apps[0] });
+    expect(errors(manifest).join()).toMatch(/listed twice/);
+  });
+});
