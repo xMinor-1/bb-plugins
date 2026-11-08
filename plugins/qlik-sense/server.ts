@@ -13,7 +13,8 @@
 //      the whole history — Qlik answers included — would go to that model.
 //   4. The panel's RPC methods answer the panel, the bb CLI and agents (bb shows
 //      them all as `client`), never another plugin. Other plugins get only
-//      `setupStatus`, which holds no company data.
+//      `setupStatus`, which holds no company data, and the plugins listed in
+//      `accountPlugins` may hand over the sign-in through `accountSignIn`.
 import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { catalogSchema, checkLinkResultSchema, checkSignInResultSchema, connectionStatusSchema, hostContract, MAX_ROWS, qlikAppSummarySchema, qlikSheetSummarySchema, type ConnectionStatus, type ToolInput } from "./contract";
@@ -21,7 +22,7 @@ import { guideAnswer, MAX_GUIDE_CHARS } from "./src/shared/guide";
 import { normalizeBaseUrl } from "./src/shared/links";
 import { groupModels } from "./src/shared/models";
 import { createPolicy, formatRules, parseRules, PolicyError, type Policy } from "./src/shared/policy";
-import { setupFromStatus, setupStatusContract, setupStep } from "./src/shared/setup";
+import { accountSignInContract, hasDomain, parsePluginList, setupFromStatus, setupStatusContract, setupStep, type SetupLang } from "./src/shared/setup";
 
 const hostIdInput = z.object({ hostId: z.string().min(1).max(200) }).strict();
 const ruleSchema = z.object({ provider: z.string().min(1).max(200), model: z.string().min(1).max(300) }).strict();
@@ -116,6 +117,22 @@ export default async function plugin(bb: BbPluginApi) {
         }
       }, "Use the https:// address of Qlik Sense"),
     },
+    accountPlugins: {
+      type: "string",
+      label: "Plugins that may sign you in",
+      description:
+        "Plugin ids separated by commas, for example `fleet-kit`. They may pass your Qlik login and password to this plugin (accountSignIn), " +
+        "which saves them on the machine and checks the sign-in at the address above. They never read the password back. Empty: none.",
+      default: "",
+      experimental_schema: z.string().max(2000).refine((value) => {
+        try {
+          parsePluginList(value);
+          return true;
+        } catch {
+          return false;
+        }
+      }, "Plugin ids separated by commas: lowercase letters, digits and hyphens"),
+    },
     allowedModels: {
       type: "string",
       label: "Agents allowed to read Qlik data",
@@ -155,11 +172,22 @@ export default async function plugin(bb: BbPluginApi) {
       policyError = error instanceof PolicyError ? error.message : String(error);
     }
   };
+  let accountPlugins = new Set<string>();
+  const applyAccountPlugins = (text: string) => {
+    try {
+      accountPlugins = new Set(parsePluginList(text));
+    } catch {
+      // A broken list fails closed.
+      accountPlugins = new Set();
+    }
+  };
   const initialSettings = await settings.get();
   applyPolicy(initialSettings.allowedModels);
+  applyAccountPlugins(initialSettings.accountPlugins);
   let guide = initialSettings.guide;
   settings.onChange((next) => {
     applyPolicy(next.allowedModels);
+    applyAccountPlugins(next.accountPlugins);
     guide = next.guide;
   });
 
@@ -455,6 +483,69 @@ export default async function plugin(bb: BbPluginApi) {
       },
     },
     { experimental_discoverable: true, experimental_description: "Qlik Sense setup state for a bb build's onboarding page." },
+  );
+
+  // ---------- Sign-in from a trusted plugin ----------
+
+  /** The host's limits for a saved login and password (hostContract.saveConnection). */
+  const MAX_USER = 200;
+  const MAX_PASSWORD = 500;
+
+  async function accountSignIn(user: string, password: string, machine: string, lang: SetupLang) {
+    const known = (await bb.sdk.hosts.list()).find((candidate) => candidate.id === machine);
+    if (!known || known.lifecycle.phase === "destroyed" || known.status !== "connected") return setupStep("problem", "offline", lang);
+    const url = (await settings.get()).url.trim();
+    if (!url) return setupStep("problem", "noAddress", lang);
+    if (!hasDomain(user)) return setupStep("problem", "badLogin", lang);
+    if (user.trim().length > MAX_USER || password.length > MAX_PASSWORD) return setupStep("problem", "tooLong", lang);
+
+    let before: ConnectionStatus;
+    try {
+      before = await call("status", machine, {}, SETUP_TIMEOUT_MS);
+    } catch (error) {
+      bb.log.info(`accountSignIn: ${machine} could not read its state: ${error instanceof Error ? error.message : String(error)}`);
+      return setupStep("problem", "unreadable", lang);
+    }
+    // A working sign-in stays as it is; a refused one waits for a person on the Qlik page.
+    if (before.url && before.hasPassword && !before.blocked && before.lastCheck?.ok) return setupFromStatus(before, lang);
+    if (before.blocked) return setupFromStatus(before, lang);
+
+    try {
+      await changed(call("saveConnection", machine, { url, user, password }));
+    } catch (error) {
+      // The host's message may name the login: log only the kind of failure.
+      bb.log.info(`accountSignIn: ${machine} could not save the sign-in (${error instanceof Error ? error.name : "error"})`);
+      return setupStep("problem", "notSaved", lang);
+    }
+    try {
+      await changed(call("checkSignIn", machine, {}, 120_000));
+      const after = await call("status", machine, {}, SETUP_TIMEOUT_MS);
+      const step = setupFromStatus(after, lang);
+      // The host blocks further sign-ins only when Qlik refused the login or password.
+      return after.blocked ? { ...step, rejected: true } : step;
+    } catch (error) {
+      bb.log.info(`accountSignIn: ${machine} did not finish the check: ${error instanceof Error ? error.message : String(error)}`);
+      return setupStep("problem", "failed", lang);
+    }
+  }
+
+  bb.rpc.register(
+    accountSignInContract,
+    {
+      accountSignIn: async ({ user, password, lang = "en", hostId: requested }, context) => {
+        const caller = context.experimental_caller;
+        if (caller.kind !== "plugin" || !accountPlugins.has(caller.pluginId)) {
+          const who = caller.kind === "plugin" ? caller.pluginId : "this caller";
+          throw new experimental_PluginRpcRefusal({
+            code: "forbidden",
+            message: `Qlik Sense does not take a sign-in from ${who}: add the plugin id to accountPlugins in Qlik Sense's settings.`,
+          });
+        }
+        const machine = await setupMachine(requested);
+        return machine ? accountSignIn(user, password, machine, lang) : setupStep("problem", "noMachine", lang);
+      },
+    },
+    { experimental_discoverable: true, experimental_description: "Sign in to Qlik Sense with an account from a plugin listed in accountPlugins." },
   );
 }
 
