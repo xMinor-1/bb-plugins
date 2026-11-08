@@ -768,6 +768,13 @@ docker cp e2e/panel-smoke.mjs fleet-kit-e2e:/home/tester/pw/panel-smoke.mjs
 e2e/x.sh 'node ~/pw/panel-smoke.mjs'
 ```
 
+`apps` on real machines: the workflow `.github/workflows/fleet-kit-apps.yml` (on a
+push to its files or `src/host/install-app.ts`) unpacks the official LibreOffice MSI
+into a zip with `msiexec /a` and the Visual C++ runtime next to the program, installs
+it with `ensureApp` as a standard Windows user (non-ASCII name, long paths off), and
+installs the official `.dmg` on macOS; then doc-review's own code converts a `.docx`
+and a `.pptx`. The zip stays as the artifact `libreoffice-win-x64` for whoever mirrors it.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
