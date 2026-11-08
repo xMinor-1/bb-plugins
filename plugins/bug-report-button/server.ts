@@ -49,6 +49,8 @@ export const rpcContract = defineRpcContract({
       canAttach: z.boolean(),
       /** Several pictures become one before sending: the form takes one file. */
       combine: z.boolean(),
+      /** Pictures can be picked but do not go with the report: the page keeps them and points to the form. */
+      picturesStay: z.boolean(),
       problem: z.string().nullable(),
       /** "form": multipart to a form address; "rest": JSON to a tracker's API with the person's key. */
       mode: z.enum(["form", "rest"]),
@@ -155,8 +157,8 @@ export default function bugReportButton(bb: BbPluginApi) {
       type: "string",
       label: "Pictures (REST)",
       description:
-        '"form": the report and its pictures go in one multipart/form-data request to the submit path, pictures under Picture field (several are joined into one unless Several pictures is "separate"). "attach": the report goes as JSON, then each picture to Attachments path.',
-      experimental_schema: z.enum(["form", "attach"]),
+        '"form": the report and its pictures go in one multipart/form-data request to the submit path, pictures under Picture field (several are joined into one unless Several pictures is "separate"). "attach": the report goes as JSON, then each picture to Attachments path. "none": JSON only; the page keeps the pictures and asks the person to attach them in the form (Form address).',
+      experimental_schema: z.enum(["form", "attach", "none"]),
       default: "attach",
     },
     attachPath: {
@@ -238,8 +240,9 @@ export default function bugReportButton(bb: BbPluginApi) {
           label,
           formUrl: url,
           canSend,
-          canAttach: canSend && restTakesPictures(rest),
+          canAttach: canSend && (restTakesPictures(rest) || rest.files === "none"),
           combine: canSend && rest.files === "form" && rest.combine,
+          picturesStay: canSend && rest.files === "none",
           problem: "error" in rest && rest.error !== "not-configured" ? rest.error : null,
           mode: "rest" as const,
           key,
@@ -256,6 +259,7 @@ export default function bugReportButton(bb: BbPluginApi) {
         canSend,
         canAttach: canSend && send.fileField !== "",
         combine: canSend && send.fileMode === "combine",
+        picturesStay: false,
         problem,
         mode: "form" as const,
         key: null,

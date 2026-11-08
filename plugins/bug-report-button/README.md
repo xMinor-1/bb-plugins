@@ -28,17 +28,19 @@ person's own API key. Until sending is set up, the page links to the form in the
 ### REST mode
 
 With `sendMode` = `rest` the report goes to a tracker's API, signed with the person's own API key. Pictures go one of
-two ways (`restFiles`):
+three ways (`restFiles`):
 
 - `form`: the report and its pictures in one `multipart/form-data` request to `submitPath`: the filled `submitFields`
   as text parts, the pictures under `fileField` (joined into one unless `fileMode` is `separate`).
 - `attach` (default): the report as JSON to `submitPath`, then each picture to `attachPath` of the created record.
+- `none`: the report as JSON only, for a form that takes no files through the API. Pictures can still be added on the
+  page: it says beforehand that they stay, and after sending keeps them and links to `formUrl` to attach them there.
 
 | Setting | Meaning |
 | --- | --- |
 | `apiBaseUrl` | The API address, such as `https://tracker.example.com/api/v1`. The key goes only there |
 | `submitPath` | Path under it that takes the report, such as `/forms/<form id>/submit`. The body is `submitFields` filled in |
-| `restFiles` | `form` or `attach`, see above |
+| `restFiles` | `form`, `attach` or `none`, see above |
 | `attachPath` | Path that takes one picture of the created record, with `{key}`, such as `/issues/{key}/attachments`. Empty: no pictures |
 | `attachField` | Field name of the picture in that request (default `file`) |
 | `authHeader`, `authFormat` | How the key goes: header `X-API-Key` with `{key}` by default; `Authorization` with `Bearer {key}` also works |

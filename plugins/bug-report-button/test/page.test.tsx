@@ -7,13 +7,13 @@ import type { rpcContract } from "../server";
 
 type KeyStatus = { hasKey: boolean; source: "own" | "shared" | null; keyStore: "keychain" | "credential-manager" | "file" | null };
 type Config = {
-  label: string; formUrl: string; canSend: boolean; canAttach: boolean; combine: boolean; problem: string | null;
+  label: string; formUrl: string; canSend: boolean; canAttach: boolean; combine: boolean; picturesStay: boolean; problem: string | null;
   mode: "form" | "rest"; key: KeyStatus | null; keyHelp: string; keyProblem: string | null;
 };
 type SendInput = { subject: string; description: string; client: string; images: Array<{ name: string; type: string; base64: string }> };
 
 const FORM = "https://forms.example.test/bugs";
-const READY: Config = { label: "Bug report", formUrl: FORM, canSend: true, canAttach: true, combine: false, problem: null, mode: "form", key: null, keyHelp: "", keyProblem: null };
+const READY: Config = { label: "Bug report", formUrl: FORM, canSend: true, canAttach: true, combine: false, picturesStay: false, problem: null, mode: "form", key: null, keyHelp: "", keyProblem: null };
 const picture = (name: string, bytes = [1, 2, 3], type = "image/png") => new File([new Uint8Array(bytes)], name, { type });
 
 /** jsdom has no DataTransfer: the parts the page reads. */
@@ -192,6 +192,29 @@ describe("report page, REST mode", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     expect((await screen.findByText("BUGS-2")).tagName).toBe("STRONG");
     expect(screen.getByRole("alert").textContent).toBe("The report is sent, but the pictures are not attached.");
+  });
+
+  it("form without pictures: sends the text only, keeps the pictures and links to the form to attach them", async () => {
+    const { sent } = render({ ...REST, picturesStay: true, key: { hasKey: true, source: "own", keyStore: "keychain" } }, () => ({ ok: true, key: null, url: null, warning: null }));
+    await screen.findByText(/after sending you get a link to attach them in the tracker/);
+    fireEvent.change(subject(), { target: { value: "Bug" } });
+    fireEvent.drop(screen.getByTestId("brb-page"), { dataTransfer: transfer([picture("a.png"), picture("b.png", [4])]) });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const left = await screen.findByTestId("brb-pictures-left");
+    expect(left.textContent).toBe("The form did not take the 2 pictures: they are still here. Attach them in the tracker: open the form.");
+    expect((left.querySelector("a") as HTMLAnchorElement).href).toBe(FORM);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.images).toEqual([]);
+    expect(subject().value).toBe("");
+    expect(thumbs()).toEqual(["a.png", "b.png"]);
+  });
+
+  it("form without pictures: no note when there was nothing to attach", async () => {
+    render({ ...REST, picturesStay: true, key: { hasKey: true, source: "own", keyStore: "keychain" } }, () => ({ ok: true, key: null, url: null, warning: null }));
+    fireEvent.change(await screen.findByPlaceholderText("What went wrong, in a few words"), { target: { value: "Bug" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText(/Sent/);
+    expect(screen.queryByTestId("brb-pictures-left")).toBeNull();
   });
 
   it("shows why the key could not be checked", async () => {

@@ -21,8 +21,11 @@ export type RestConfig = {
   shareWith: string | null;
   recordUrl: string;
   keyHelp: string;
-  /** "form": the report and its pictures in one multipart request; "attach": JSON, then each picture on the record. */
-  files: "form" | "attach";
+  /**
+   * "form": the report and its pictures in one multipart request; "attach": JSON, then each picture on the record;
+   * "none": JSON only, and the page keeps the pictures and points to the form to attach them there.
+   */
+  files: "form" | "attach" | "none";
   /** "form": the form's file field. */
   fileField: string;
   /** "form": several pictures are joined into one, for a field that takes one file. */
@@ -52,7 +55,7 @@ export function readRestConfig(values: Record<string, unknown>): RestConfig | { 
   const share = typeof values.shareKeyWith === "string" ? values.shareKeyWith.trim() : "";
   const recordUrl = typeof values.recordUrl === "string" && values.recordUrl.includes("{key}") ? values.recordUrl.trim() : "";
   const keyHelp = typeof values.keyHelp === "string" ? values.keyHelp.trim().slice(0, 300) : "";
-  const files = values.restFiles === "form" ? "form" : "attach";
+  const files = values.restFiles === "form" || values.restFiles === "none" ? values.restFiles : "attach";
   const fileField = typeof values.fileField === "string" ? values.fileField.trim() : "file";
   if (fileField && !FIELD_KEY.test(fileField)) return { error: "The picture field name setting has characters a form field cannot have." };
   return {
@@ -73,6 +76,7 @@ export function readRestConfig(values: Record<string, unknown>): RestConfig | { 
 
 /** Pictures go with the report at all: the form has a file field, or the record takes attachments. */
 export function restTakesPictures(config: RestConfig): boolean {
+  if (config.files === "none") return false;
   return config.files === "form" ? config.fileField !== "" : config.attachPath !== "";
 }
 

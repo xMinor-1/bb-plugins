@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Answer } from "../contract";
 import { openFileSecretStore, openSecretStore, secretFileDirectory } from "../src/host/secret-store";
 import { multipartBody, ReportHost, requestUrl } from "../src/host/service";
-import { buildJson, failureText, readRestConfig, sendRest, type RestConfig } from "../src/rest";
+import { buildJson, failureText, readRestConfig, restTakesPictures, sendRest, type RestConfig } from "../src/rest";
 
 const BASE = "https://tracker.example.test/api/v1";
 const SETTINGS = {
@@ -38,6 +38,10 @@ describe("REST settings", () => {
     });
     expect(readRestConfig({ ...SETTINGS, restFiles: "form", fileField: "attachment", fileMode: "separate" })).toMatchObject({ files: "form", fileField: "attachment", combine: false });
     expect(readRestConfig({ ...SETTINGS, restFiles: "form", fileField: "a b" })).toHaveProperty("error");
+    const none = readRestConfig({ ...SETTINGS, restFiles: "none", attachPath: "", recordUrl: "" }) as RestConfig;
+    expect(none).toMatchObject({ files: "none" });
+    expect(restTakesPictures(none)).toBe(false);
+    expect(restTakesPictures(readRestConfig(SETTINGS) as RestConfig)).toBe(true);
   });
 
   it("is off until the address and the path are set, and refuses broken values", () => {
@@ -120,6 +124,13 @@ describe("REST sending", () => {
     ]);
     const refused = calls({ ok: false, code: "badRequest", status: 400, detail: "attachment: bad file" });
     expect(await sendRest(form, report, images, refused.calls)).toEqual({ ok: false, error: "The tracker refused the report (HTTP 400): attachment: bad file" });
+  });
+
+  it("form without pictures: JSON only, and an answer without a record is a plain success", async () => {
+    const none = readRestConfig({ ...SETTINGS, restFiles: "none", attachPath: "", recordUrl: "", submitFields: '{"title":"{subject}\\n\\n{description}"}' }) as RestConfig;
+    const { log, calls: c } = calls({ ok: true, status: 201, text: '{"id":"7f0c","status":"verified","files":null}' });
+    expect(await sendRest(none, report, [], c)).toEqual({ ok: true, key: null, url: null, warning: null });
+    expect(log).toEqual([["json", { baseUrl: BASE, shareWith: "tracker-board", auth: { header: "X-API-Key", format: "{key}" }, path: "/forms/abc/submit", body: '{"title":"Save fails\\n\\nSteps"}' }]]);
   });
 
   it("turns a refusal into words", async () => {

@@ -25,6 +25,7 @@ type PageConfig = {
   canSend: boolean;
   canAttach: boolean;
   combine: boolean;
+  picturesStay: boolean;
   problem: string | null;
   mode: "form" | "rest";
   key: KeyStatus | null;
@@ -32,7 +33,7 @@ type PageConfig = {
   keyProblem: string | null;
 };
 type Attached = { id: string; name: string; type: ImageType; size: number; blob: Blob; preview: string };
-type Sent = { key: string | null; url: string | null; warning: string | null };
+type Sent = { key: string | null; url: string | null; warning: string | null; picturesLeft: number };
 
 let nextId = 0;
 
@@ -268,17 +269,21 @@ export function ReportPage() {
         parts = [{ name: imageName(`screenshots.${type === "image/jpeg" ? "jpg" : "png"}`, type, []), type, blob }];
       }
       const payload = await Promise.all(parts.map(async (part) => ({ name: part.name, type: part.type, base64: await blobToBase64(part.blob) })));
-      const result = await rpc.call("send", { subject: subject.trim(), description, client: clientLine(), images: payload });
+      const result = await rpc.call("send", { subject: subject.trim(), description, client: clientLine(), images: config.picturesStay ? [] : payload });
       if (!result.ok) {
         setError(result.error);
         return;
       }
-      images.forEach((image) => URL.revokeObjectURL(image.preview));
-      setImages([]);
+      // Pictures the form does not take stay on the page, so the person can attach them in the form.
+      const kept = config.picturesStay ? images.length : 0;
+      if (!kept) {
+        images.forEach((image) => URL.revokeObjectURL(image.preview));
+        setImages([]);
+      }
       setSubject("");
       setDescription("");
       setNotices([]);
-      setSent({ key: result.key, url: result.url, warning: result.warning });
+      setSent({ key: result.key, url: result.url, warning: result.warning, picturesLeft: kept });
     } catch (reason) {
       setError(`The report was not sent: ${reason instanceof Error ? reason.message : String(reason)}. What you wrote is kept; send again.`);
     } finally {
@@ -374,6 +379,7 @@ export function ReportPage() {
               <span className="brb-muted">
                 PNG, JPEG, GIF or WebP; up to {MAX_IMAGES} pictures, {formatBytes(MAX_IMAGE_BYTES)} each and {formatBytes(MAX_TOTAL_BYTES)} together.
                 {config.combine ? " Several pictures are joined into one before sending." : ""}
+                {config.picturesStay ? " The form does not take pictures from here yet: after sending you get a link to attach them in the tracker." : ""}
               </span>
             </div>
             <input
@@ -407,6 +413,19 @@ export function ReportPage() {
           </div>
         ) : null}
         {sent?.warning ? <p className="brb-error" role="alert">{sent.warning}</p> : null}
+        {sent?.picturesLeft ? (
+          <p className="brb-error" role="alert" data-testid="brb-pictures-left">
+            The form did not take the {sent.picturesLeft === 1 ? "picture" : `${sent.picturesLeft} pictures`}: they are still here.{" "}
+            {config.formUrl ? (
+              <>
+                Attach {sent.picturesLeft === 1 ? "it" : "them"} in the tracker:{" "}
+                <a href={config.formUrl} target="_blank" rel="noopener noreferrer">open the form</a>.
+              </>
+            ) : (
+              <>Attach {sent.picturesLeft === 1 ? "it" : "them"} in the tracker.</>
+            )}
+          </p>
+        ) : null}
         {config.mode === "rest" ? (
           <ApiKey
             status={config.key}

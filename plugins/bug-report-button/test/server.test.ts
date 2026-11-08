@@ -279,7 +279,7 @@ describe("sending", () => {
     it("goes through the plugin's own send handler, with the app context in the template", async () => {
       const { url, seen } = await serve(() => ({ status: 200, text: '{"key":"BUGS-9"}' }));
       const { handlers } = loadServer({ submitUrl: url, submitFields: '{"t":"{subject}","d":"{description}\\n{context}"}', fileField: "f", fileMode: "combine" });
-      expect(await handlers.config!(null)).toEqual({ label: DEFAULT_LABEL, formUrl: "", canSend: true, canAttach: true, combine: true, problem: null, mode: "form", key: null, keyHelp: "", keyProblem: null });
+      expect(await handlers.config!(null)).toEqual({ label: DEFAULT_LABEL, formUrl: "", canSend: true, canAttach: true, combine: true, picturesStay: false, problem: null, mode: "form", key: null, keyHelp: "", keyProblem: null });
       const result = await handlers.send!({ subject: " Bug ", description: "Steps", client: "Chrome 140", images: [{ name: "a.png", type: "image/png", base64: "AQID" }] });
       expect(result).toEqual({ ok: true, key: "BUGS-9", url: null, warning: null });
       const parsed = await new Request(url, { method: "POST", headers: { "content-type": seen[0]!.type }, body: new Uint8Array(seen[0]!.body) }).formData();
@@ -291,7 +291,7 @@ describe("sending", () => {
 
   it("without a submit address the page links to the form instead", async () => {
     const { handlers } = loadServer({ formUrl: FORM });
-    expect(await handlers.config!(null)).toEqual({ label: DEFAULT_LABEL, formUrl: FORM, canSend: false, canAttach: false, combine: false, problem: null, mode: "form", key: null, keyHelp: "", keyProblem: null });
+    expect(await handlers.config!(null)).toEqual({ label: DEFAULT_LABEL, formUrl: FORM, canSend: false, canAttach: false, combine: false, picturesStay: false, problem: null, mode: "form", key: null, keyHelp: "", keyProblem: null });
     expect(await handlers.send!({ subject: "x", description: "", client: "", images: [] })).toEqual({ ok: false, error: "Sending is not set up: there is no submit address." });
   });
 });
@@ -316,7 +316,7 @@ describe("REST mode through the server", () => {
     hostAnswer = (method) => ({ hasKey: method !== "forget", source: method === "forget" ? null : "own", keyStore: method === "forget" ? null : "keychain" });
     const { handlers, hostCalls } = loadServer(REST);
     expect(await handlers.config!(null)).toEqual({
-      label: DEFAULT_LABEL, formUrl: "", canSend: true, canAttach: true, combine: false, problem: null, mode: "rest",
+      label: DEFAULT_LABEL, formUrl: "", canSend: true, canAttach: true, combine: false, picturesStay: false, problem: null, mode: "rest",
       key: { hasKey: true, source: "own", keyStore: "keychain" }, keyHelp: "Profile → API keys.", keyProblem: null,
     });
     await handlers.key_save!({ key: "xk_1" });
@@ -348,6 +348,15 @@ describe("REST mode through the server", () => {
     expect(result).toEqual({ ok: true, key: "BUGS-4", url: null, warning: null });
     expect(hostCalls.map((c) => c.method)).toEqual(["status", "postForm"]);
     expect(hostCalls[1]!.input).toMatchObject({ path: "/forms/abc/submit", fields: { title: "Bug" }, field: "attachment", files: [{ name: "screenshots.png" }] });
+  });
+
+  it("form without pictures: the page keeps them, and the machine gets only the JSON even if pictures come", async () => {
+    hostAnswer = (method) => (method === "status" ? { hasKey: true, source: "own", keyStore: "keychain" } : { ok: true, status: 201, text: '{"id":"7f0c","files":null}' });
+    const { handlers, hostCalls } = loadServer({ ...REST, restFiles: "none", attachPath: "", formUrl: FORM });
+    expect(await handlers.config!(null)).toMatchObject({ mode: "rest", canSend: true, canAttach: true, combine: false, picturesStay: true, formUrl: FORM });
+    const result = await handlers.send!({ subject: "Bug", description: "", client: "", images: [{ name: "a.png", type: "image/png", base64: "AQID" }] });
+    expect(result).toEqual({ ok: true, key: null, url: null, warning: null });
+    expect(hostCalls.map((c) => c.method)).toEqual(["status", "postJson"]);
   });
 
   it("sends JSON and then each picture through the machine", async () => {
