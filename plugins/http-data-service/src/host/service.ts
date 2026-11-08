@@ -5,6 +5,9 @@ import { ConfigError, methodUrl, normalizeBaseUrl } from "../shared/service-conf
 import { httpGet } from "./http.js";
 import { openSecretStore, type SecretStore } from "./secret-store.js";
 import { StateFile } from "./state.js";
+import { checkLogin } from "../shared/login.js";
+
+export { checkLogin };
 
 const SECRET = "password";
 
@@ -147,11 +150,4 @@ export class DataService {
 
 function originOf(baseUrl: string): string {
   return new URL(normalizeBaseUrl(baseUrl)).origin;
-}
-
-/** A login with a colon cannot be sent over HTTP Basic (RFC 7617). */
-export function checkLogin(user: string): string {
-  const trimmed = user.trim();
-  if (trimmed === "" || trimmed.includes(":") || /[\x00-\x1f\x7f]/.test(trimmed)) throw new Error("The login must not be empty or contain a colon");
-  return trimmed;
 }
