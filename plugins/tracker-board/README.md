@@ -21,6 +21,9 @@ The interface is in English and Russian.
   with the arrow keys on their handle. The search finds queues by name or key, epics and stories
   by words of their title, and opens a key or a link as is. The build's shared boards (setting
   `defaultBoards`) are there for everyone: they can be hidden, not removed.
+- **Sign in with the API key.** While this machine has no key, the page shows only the key field,
+  with the build's hint on where to get a key (`keyHelp` in the API profile, links open in the
+  person's own browser), whatever boards were picked before. The title bar keeps only settings.
 - **What are you interested in.** After the API key, a first-run step suggests the queues and open
   epics of the person's own tasks and fills My boards; it can be skipped.
 - **Board.** Columns by status, optionally rows by story or by person. Drag a card to change its

@@ -7,7 +7,8 @@ import { boardCards, type Issue, type Person } from "../shared/model";
 import type { Display, Source } from "../shared/prefs";
 import type { rpcContract } from "../server/rpc-contract";
 import { boardColumns, BoardView, ListView } from "./Board";
-import { HeaderStar, InterestStep, needsInterest, SourcePicker, type BoardItem } from "./Boards";
+import { HeaderStar, InterestStep, needsInterest, pageMode, SourcePicker, type BoardItem } from "./Boards";
+import { KeyStep } from "./KeyStep";
 import { BulkBar, BulkDialog, type BulkRequest } from "./Bulk";
 import { ChatColumn, ChatSplitter } from "./Chat";
 import { messages } from "./messages";
@@ -20,6 +21,7 @@ import {
   chatOpenStore,
   configStore,
   errorText,
+  hasKeyStore,
   failureText,
   flash,
   flashStore,
@@ -48,10 +50,12 @@ async function start(rpc: Rpc): Promise<void> {
   if (started) return;
   started = true;
   try {
-    const [config, prefs] = await Promise.all([rpc.call("config"), rpc.call("prefs")]);
+    // A key status that cannot be read (the machine is offline) does not hold the page: the board says why.
+    const [config, prefs, hasKey] = await Promise.all([rpc.call("config"), rpc.call("prefs"), rpc.call("keyStatus").then((status) => status.hasKey, () => null)]);
     configStore.set(config);
     prefsStore.set(prefs);
-    if (prefs.source && !config.problem) await loadBoard(rpc, prefs.source);
+    hasKeyStore.set(hasKey);
+    if (prefs.source && !config.problem && hasKey !== false) await loadBoard(rpc, prefs.source);
   } catch (error) {
     started = false;
     boardStore.set((current) => ({ ...current, error }));
@@ -71,11 +75,14 @@ export function PageHeader() {
   const { board, loading } = useStore(boardStore);
   const chatOpen = useStore(chatOpenStore);
   const settingsOpen = useStore(settingsOpenStore);
+  const hasKey = useStore(hasKeyStore);
   useEffect(() => void start(rpc), [rpc]);
   if (!config || !prefs) return null;
   const view = prefs.display.view;
   const setView = (next: Display["view"]) => void savePrefs(rpc, { display: { ...prefs.display, view: next } });
-  const firstRun = needsInterest(config, prefs);
+  // No key yet, or the first run: the title bar keeps only settings.
+  const mode = pageMode(config, prefs, hasKey, false);
+  const firstRun = mode === "key" || mode === "interest";
   const current: BoardItem | null = board ? { source: board.source, title: board.title, ...(board.root ? { kind: board.root.kind } : {}) } : null;
   return (
     <div className="tb-root tb-ph">
@@ -130,6 +137,7 @@ export function BoardPage() {
   const openKey = useStore(openKeyStore);
   const chatOpen = useStore(chatOpenStore);
   const settingsOpen = useStore(settingsOpenStore);
+  const hasKey = useStore(hasKeyStore);
   const templatesRequest = useStore(templatesRequestStore);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [bulk, setBulk] = useState<BulkRequest | null>(null);
@@ -260,11 +268,16 @@ export function BoardPage() {
     }
   }
 
-  const work = settingsOpen ? (
+  const mode = pageMode(config, prefs, hasKey, settingsOpen);
+  const work = mode === "settings" ? (
     <div className="tb-scroll">
       <SettingsView t={t} rpc={rpc} config={config} prefs={prefs} />
     </div>
-  ) : needsInterest(config, prefs) ? (
+  ) : mode === "key" ? (
+    <div className="tb-scroll">
+      <KeyStep t={t} rpc={rpc} config={config} steps={needsInterest(config, prefs)} onSaved={() => void reloadBoard(rpc)} />
+    </div>
+  ) : mode === "interest" ? (
     <div className="tb-scroll">
       <InterestStep t={t} rpc={rpc} config={config} prefs={prefs} />
     </div>

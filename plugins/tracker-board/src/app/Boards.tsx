@@ -8,7 +8,8 @@ import { sourceFromText, sourceId, type Prefs, type SavedBoard, type Source } fr
 import type { ConfigView, QueueView, Suggestions } from "../server/rpc-contract";
 import type { Messages } from "./messages";
 import { Avatar, Icons, TypeTile } from "./parts";
-import { boardStore, errorText, loadBoard, prefsStore, savePrefs, settingsOpenStore, type Rpc } from "./store";
+import { KeyStep, Steps } from "./KeyStep";
+import { boardStore, errorText, hasKeyStore, loadBoard, prefsStore, savePrefs, settingsOpenStore, useStore, type Rpc } from "./store";
 import { Popover, Spinner } from "./ui";
 
 /** A board as the lists show it. */
@@ -543,27 +544,20 @@ export function BoardsSection({ t, rpc, config, prefs }: { t: Messages; rpc: Rpc
 /** Whether the page shows "What are you interested in" instead of a board. */
 export const needsInterest = (config: ConfigView, prefs: Prefs): boolean => !config.problem && !prefs.boardsReady && prefs.boards.length === 0;
 
-function Steps({ t, keyDone }: { t: Messages; keyDone: boolean }) {
-  return (
-    <div className="tb-steps">
-      <span className={keyDone ? "tb-step-ok" : "tb-step-now"}>
-        <span className="tb-step-n">{keyDone ? <Icons.check /> : 1}</span>
-        {t.stepKey}
-      </span>
-      <span className={keyDone ? "tb-step-now" : ""}>
-        <span className="tb-step-n">2</span>
-        {t.stepInterest}
-      </span>
-      <span>
-        <span className="tb-step-n">3</span>
-        {t.stepBoard}
-      </span>
-    </div>
-  );
+/**
+ * What the page shows. Without a key on this machine the key screen comes before anything else,
+ * whatever boards the person picked on another visit; an unknown key state (null) does not hold the page.
+ */
+export function pageMode(config: ConfigView, prefs: Prefs, hasKey: boolean | null, settingsOpen: boolean): "settings" | "key" | "interest" | "board" {
+  if (settingsOpen) return "settings";
+  if (hasKey === false && !config.problem) return "key";
+  return needsInterest(config, prefs) ? "interest" : "board";
 }
 
 /** The first run after the key: mark the queues and epics that go to "My boards". */
 export function InterestStep({ t, rpc, config, prefs }: { t: Messages; rpc: Rpc; config: ConfigView; prefs: Prefs }) {
+  // A key saved on this page's key screen reloads the suggestions.
+  const keySaved = useStore(hasKeyStore);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [suggested, setSuggested] = useState<Suggestions | null>(null);
   const [suggestError, setSuggestError] = useState<string | null>(null);
@@ -592,7 +586,7 @@ export function InterestStep({ t, rpc, config, prefs }: { t: Messages; rpc: Rpc;
     return () => {
       live = false;
     };
-  }, [rpc]);
+  }, [rpc, keySaved]);
 
   const build = useMemo(() => myBoards(config.defaultBoards, []), [config.defaultBoards]);
   const buildIds = new Set(build.map((entry) => entry.id));
@@ -630,22 +624,8 @@ export function InterestStep({ t, rpc, config, prefs }: { t: Messages; rpc: Rpc;
     }
   };
 
-  if (hasKey === false) {
-    return (
-      <div className="tb-onb">
-        <div className="tb-onb-in tb-onb-one">
-          <Steps t={t} keyDone={false} />
-          <div>
-            <h1>{t.needKeyTitle}</h1>
-            <p className="tb-lead">{t.needKey}</p>
-            <button className="tb-btn tb-pri" type="button" onClick={() => settingsOpenStore.set(true)}>
-              {t.openSettings}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // The page asks for the key first; this is the case where its check could not tell.
+  if (hasKey === false) return <KeyStep t={t} rpc={rpc} config={config} steps onSaved={() => undefined} />;
 
   const mark = (item: BoardItem) => {
     const id = sourceId(item.source);

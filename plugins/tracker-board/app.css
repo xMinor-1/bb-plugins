@@ -2437,3 +2437,30 @@ button.tb-br-main {
     grid-row: auto;
   }
 }
+/* The key screen: the build's hint on where to get a key sits above the field. */
+.tb-key-help {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--tb-col);
+  border: 1px solid var(--tb-line);
+  max-width: 60ch;
+  overflow-wrap: anywhere;
+}
+.tb-key-help b {
+  font-size: 12px;
+  font-weight: 650;
+}
+.tb-key-help a,
+.tb-root .tb-hint a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.tb-keystep .tb-error {
+  margin: 10px 0 0;
+}

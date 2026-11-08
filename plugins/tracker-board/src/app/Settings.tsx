@@ -11,7 +11,8 @@ import { PeoplePicker } from "./Bulk";
 import type { Messages } from "./messages";
 import { Avatar, Icons } from "./parts";
 import { BoardsSection, needsInterest } from "./Boards";
-import { configStore, errorText, failureText, prefsStore, reloadBoard, savePrefs, settingsOpenStore, type Rpc } from "./store";
+import { HelpText } from "./KeyStep";
+import { configStore, errorText, failureText, hasKeyStore, prefsStore, reloadBoard, savePrefs, settingsOpenStore, type Rpc } from "./store";
 import { Popover, Spinner } from "./ui";
 
 function Connection({ t, rpc, config }: { t: Messages; rpc: Rpc; config: ConfigView }) {
@@ -26,6 +27,7 @@ function Connection({ t, rpc, config }: { t: Messages; rpc: Rpc; config: ConfigV
     rpc.call("keyStatus").then(
       (next) => {
         setStatus(next);
+        hasKeyStore.set(next.hasKey);
         setError(null);
       },
       (cause) => setError(errorText(t, cause)),
@@ -113,7 +115,7 @@ function Connection({ t, rpc, config }: { t: Messages; rpc: Rpc; config: ConfigV
       {config.keyHelp ? (
         <div className="tb-frow">
           <span />
-          <span className="tb-hint">{config.keyHelp}</span>
+          <HelpText className="tb-hint" text={config.keyHelp} />
         </div>
       ) : null}
       <div className="tb-frow">

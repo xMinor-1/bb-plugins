@@ -40,6 +40,8 @@ export function useStore<T>(store: Store<T>): T {
 
 export const configStore = createStore<ConfigView | null>(null);
 export const prefsStore = createStore<Prefs | null>(null);
+/** Whether this machine has a tracker key; null while unknown. Without a key the page asks for one first. */
+export const hasKeyStore = createStore<boolean | null>(null);
 export const boardStore = createStore<{ board: BoardView | null; loading: boolean; error: unknown }>({ board: null, loading: false, error: null });
 export const selectionStore = createStore<ReadonlySet<string>>(new Set());
 export const flashStore = createStore<ReadonlySet<string>>(new Set());

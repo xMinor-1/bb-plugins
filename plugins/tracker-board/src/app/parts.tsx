@@ -13,7 +13,8 @@ const svg = (size: number, children: ReactNode, strokeWidth = 1.8) => (
 export const Icons = {
   search: () => svg(14, <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>, 2),
   refresh: () => svg(15, <><path d="M21 12a9 9 0 1 1-3-6.7L21 8" /><path d="M21 3v5h-5" /></>),
-  gear: () => svg(15, <><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" /></>),
+  // lucide "settings" (ISC): the old rays-and-circle read as a sun.
+  gear: () => svg(15, <><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /><circle cx="12" cy="12" r="3" /></>),
   x: () => svg(14, <path d="M18 6 6 18M6 6l12 12" />, 2),
   expand: () => svg(14, <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />, 2),
   layBottom: () => svg(15, <><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M3.5 13h17" /></>),
