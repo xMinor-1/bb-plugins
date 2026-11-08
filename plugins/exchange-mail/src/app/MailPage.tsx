@@ -1,7 +1,10 @@
 // The Mail page: pick the machine, connect the mailbox, read and answer mail,
-// send the drafts agents prepared, choose which agents may read mail.
+// send the drafts agents prepared, choose which agents may read mail — and,
+// behind the Mail / Calendar switch at the top, the calendar. One sidebar item
+// holds both: `/plugins/exchange-mail/mail` opens the view used last,
+// `/plugins/exchange-mail/mail/calendar` opens the calendar.
 import { useCallback, useEffect, useState } from "react";
-import { useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
+import { useBbNavigate, useRealtime, useRpc, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
 import type { ConnectionStatus, Draft, Folder } from "../../contract";
 import type { rpcContract } from "../../server";
 import { Button } from "@/components/ui/button";
@@ -18,26 +21,66 @@ import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
 
 type Machine = { id: string; name: string; connected: boolean };
-type Tab = Folder | "waiting" | "calendar" | "settings";
+type Tab = Folder | "waiting" | "settings";
+export type View = "mail" | "calendar";
 
-const TABS: { id: Tab; label: "tabInbox" | "tabWaiting" | "tabSent" | "tabCalendar" | "tabSettings" }[] = [
+const TABS: { id: Tab; label: "tabInbox" | "tabWaiting" | "tabSent" | "tabSettings" }[] = [
   { id: "inbox", label: "tabInbox" },
   { id: "waiting", label: "tabWaiting" },
   { id: "sent", label: "tabSent" },
-  { id: "calendar", label: "tabCalendar" },
   { id: "settings", label: "tabSettings" },
 ];
+const VIEWS: { id: View; label: "viewMail" | "viewCalendar" }[] = [
+  { id: "mail", label: "viewMail" },
+  { id: "calendar", label: "viewCalendar" },
+];
 
-/** The Calendar page in the sidebar: the same page, opened on the calendar. */
-export function CalendarPage() {
-  return <MailScreen initialTab="calendar" />;
+/** The navPanel's `path`; the calendar is its subPath CALENDAR_SUBPATH. */
+export const MAIL_PATH = "mail";
+export const CALENDAR_SUBPATH = "calendar";
+export const VIEW_KEY = "exchange-mail:view";
+
+function storedView(): View {
+  try {
+    return globalThis.localStorage?.getItem(VIEW_KEY) === "calendar" ? "calendar" : "mail";
+  } catch {
+    return "mail";
+  }
 }
 
-export function MailPage() {
-  return <MailScreen initialTab="inbox" />;
+function storeView(view: View) {
+  try {
+    globalThis.localStorage?.setItem(VIEW_KEY, view);
+  } catch {
+    // Private mode or storage switched off: the root opens Mail.
+  }
 }
 
-function MailScreen({ initialTab }: { initialTab: Tab }) {
+/** The view a subPath names; the root names none, and opens the one used last. */
+export function viewOf(subPath: string): View | null {
+  const first = decodeURIComponent(subPath.split("/")[0] ?? "");
+  if (first === CALENDAR_SUBPATH) return "calendar";
+  return first ? "mail" : null;
+}
+
+export function MailPage({ subPath = "" }: Partial<PluginNavPanelProps>) {
+  const navigate = useBbNavigate();
+  const named = viewOf(subPath);
+  const [view, setView] = useState<View>(() => named ?? storedView());
+  useEffect(() => {
+    if (!named) return;
+    setView(named);
+    storeView(named);
+  }, [named]);
+  const choose = (next: View) => {
+    setView(next);
+    storeView(next);
+    navigate.toPluginPanel(MAIL_PATH, { subPath: next === "calendar" ? CALENDAR_SUBPATH : "" });
+  };
+  return <MailScreen view={view} onView={choose} />;
+}
+
+function MailScreen({ view, onView }: { view: View; onView: (view: View) => void }) {
   const rpc = useRpc<typeof rpcContract>();
   const t = useMessages(messages);
   const explain = useExplain();
@@ -46,7 +89,7 @@ function MailScreen({ initialTab }: { initialTab: Tab }) {
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [suggestedUrl, setSuggestedUrl] = useState("");
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const [tab, setTab] = useState<Tab>("inbox");
 
   useEffect(() => {
     rpc.call("machines").then(
@@ -72,20 +115,32 @@ function MailScreen({ initialTab }: { initialTab: Tab }) {
 
   const connected = (machines ?? []).filter((machine) => machine.connected);
   const ready = Boolean(status?.url && status.lastCheck?.ok);
-  const current: Tab = ready ? tab : "settings";
+  // Not connected yet: Settings, whichever view was asked for.
+  const current: Tab | "calendar" = !ready ? "settings" : view === "calendar" ? "calendar" : tab;
 
   return (
     <div className="h-full min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto box-border w-full max-w-6xl space-y-4 px-4 pb-6 pt-3 md:px-5 md:pt-4">
         <div className={cn("flex items-start justify-between gap-2", hostId && status && ready && "border-b border-border pb-2")}>
           {hostId && status && ready ? (
-            <nav className="flex min-w-0 flex-wrap gap-1" aria-label={t.navLabel}>
-              {TABS.map((item) => (
-                <Button key={item.id} variant="ghost" size="sm" aria-pressed={current === item.id} onClick={() => setTab(item.id)}>
-                  {t[item.label]}
-                </Button>
-              ))}
-            </nav>
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <nav className="flex gap-0.5 rounded-md border border-border p-0.5" aria-label={t.viewsLabel}>
+                {VIEWS.map((item) => (
+                  <Button key={item.id} variant={view === item.id ? "secondary" : "ghost"} size="sm" aria-pressed={view === item.id} onClick={() => onView(item.id)}>
+                    {t[item.label]}
+                  </Button>
+                ))}
+              </nav>
+              {view === "mail" ? (
+                <nav className="flex min-w-0 flex-wrap gap-1" aria-label={t.navLabel}>
+                  {TABS.map((item) => (
+                    <Button key={item.id} variant="ghost" size="sm" aria-pressed={current === item.id} onClick={() => setTab(item.id)}>
+                      {t[item.label]}
+                    </Button>
+                  ))}
+                </nav>
+              ) : null}
+            </div>
           ) : (
             <span />
           )}

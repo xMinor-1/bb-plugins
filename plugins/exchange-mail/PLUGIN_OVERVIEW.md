@@ -17,7 +17,7 @@ with agents that help answer mail but never send it on their own.
   department. When an agent finds several people with a similar name, a card
   in the thread shows them for you to choose; every recipient is shown again
   before you send.
-- **Calendar** in the sidebar: your week from Monday, every occurrence of a
+- **Calendar** behind the Mail / Calendar switch: your week from Monday, every occurrence of a
   recurring meeting on its day, moved and cancelled ones marked, your
   response on each. Agents answer "what do I have tomorrow" and "when am I
   free on Thursday". Read only: meetings are made in Outlook. Plugins you list

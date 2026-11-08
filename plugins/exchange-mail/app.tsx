@@ -1,10 +1,11 @@
-// bb-plugin-exchange-mail — frontend entry: the Mail and Calendar pages in the left sidebar,
+// bb-plugin-exchange-mail — frontend entry: one Mail item in the left sidebar
+// (mail and, behind a switch at the top, the calendar),
 // the draft card agents put into their replies, and the card where the person
 // chooses among people with similar names.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import { messagesNow } from "./lib/i18n";
 import { DraftDirective } from "./src/app/DraftDirective";
-import { CalendarPage, MailPage } from "./src/app/MailPage";
+import { MAIL_PATH, MailPage } from "./src/app/MailPage";
 import { PersonChoice } from "./src/app/PersonChoice";
 import { messages } from "./src/messages";
 
@@ -14,15 +15,9 @@ export default definePluginApp((app) => {
     // Registered once: a language switch shows here after the page reloads.
     title: messagesNow(messages).navTitle,
     icon: "Mail",
-    path: "mail",
+    // The calendar is the subPath "calendar" of this panel: /plugins/exchange-mail/mail/calendar.
+    path: MAIL_PATH,
     component: MailPage,
-  });
-  app.slots.navPanel({
-    id: "calendar",
-    title: messagesNow(messages).navCalendar,
-    icon: "Calendar",
-    path: "calendar",
-    component: CalendarPage,
   });
   app.slots.messageDirective({ id: "mail-draft", component: DraftDirective });
   // The id is PERSON_CHOICE in server.ts; the panel may not import values from there.

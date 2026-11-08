@@ -13,7 +13,8 @@ confirm in a system window on your computer.
 - The address book: names from the organization's directory are suggested in
   To and Cc as you type; when an agent finds several people with a similar
   name, a card in the thread shows them for you to choose.
-- **Calendar** page: your week from Monday, recurring meetings shown on every
+- **Calendar**, behind the Mail / Calendar switch at the top of the same page:
+  your week from Monday, recurring meetings shown on every
   day they happen, moved and cancelled ones marked. Agents can ask what is on
   a day and when you are free. Read only: meetings are made in Outlook.
 - Mail stays in Exchange. bb keeps no copy; drafts live in your Drafts folder,
@@ -126,7 +127,12 @@ the system window, and both list every recipient.
 
 ## Calendar
 
-- The **Calendar** page in the sidebar (also a tab of the Mail page) shows a
+- **Mail** and **Calendar** are one item in the sidebar, switched at the top
+  of the page; the root `/plugins/exchange-mail/mail` opens the view you used
+  last (kept in the browser), `/plugins/exchange-mail/mail/calendar` opens the
+  calendar. The navPanel id is `mail`; there is no separate calendar panel any
+  more, so the old `/plugins/exchange-mail/calendar` address is gone.
+- The calendar shows a
   week, Monday to Sunday, in your browser's time zone. Every occurrence of a
   recurring meeting is on its own day (EWS `CalendarView` expands the series),
   and each card says what you need to know: *recurring*, *recurring, moved*
@@ -180,7 +186,7 @@ const answer = await bb.sdk.plugins.callRpc({
   Keep even its time out of anything shared.
 - `start` and `end` are UTC. An all-day event runs from midnight to midnight of
   the mailbox's time zone; to place it in another zone, take the local midnight
-  nearest to `start`, as the Calendar page does.
+  nearest to `start`, as the calendar view does.
 - A plugin on the list takes on the rule the mail tools follow: the calendar
   goes to no model outside the allowed agents. List only plugins you trust
   with that.

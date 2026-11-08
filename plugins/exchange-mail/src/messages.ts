@@ -21,9 +21,10 @@ export const messages = defineMessages(
 
     // page
     navTitle: "Mail",
-    navCalendar: "Calendar",
-    tabCalendar: "Calendar",
-    navLabel: "Mail",
+    viewMail: "Mail",
+    viewCalendar: "Calendar",
+    viewsLabel: "Mail or calendar",
+    navLabel: "Mail folders",
     noMachine: "No machine is connected to bb right now.",
     machineLabel: "Machine that reaches your mailbox",
     tabInbox: "Inbox",
@@ -177,9 +178,10 @@ export const messages = defineMessages(
     subject: "Тема",
 
     navTitle: "Почта",
-    navCalendar: "Календарь",
-    tabCalendar: "Календарь",
-    navLabel: "Почта",
+    viewMail: "Почта",
+    viewCalendar: "Календарь",
+    viewsLabel: "Почта или календарь",
+    navLabel: "Папки почты",
     noMachine: "Сейчас к bb не подключена ни одна машина.",
     machineLabel: "Машина, с которой виден ваш ящик",
     tabInbox: "Входящие",
