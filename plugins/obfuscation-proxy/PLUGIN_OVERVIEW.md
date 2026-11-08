@@ -8,7 +8,8 @@ Masks what your agents send to external models, and shows it in every thread.
 - **A live feed.** Click the state to see each model request: time, model,
   masked or not, and what was masked by kind (secrets, keys in code, personal
   data, internal hosts, terms).
-- **Fail closed.** With masking on and the proxy down, nothing is sent.
+- **Fail closed.** With masking on and the proxy not running yet, messages wait
+  in the queue with the reason and go out once it runs; nothing leaves unmasked.
 - **No address to pick.** Requests go where Claude Code would send them anyway;
   the plugin only puts a local masking proxy in between.
 

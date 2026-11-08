@@ -22,6 +22,11 @@ Interface in English and Russian.
   (secrets, keys in code, personal data, internal hosts, terms…), status and
   duration. Token counting requests are tallied, not listed.
 - Threads on in-network models (see settings) show nothing.
+- While the proxy is downloading, starting, missing or did not download, the
+  segment says so, and a message to Claude Code waits in the thread's queue
+  with the reason instead of failing: "The masking proxy is still
+  downloading. The message goes out by itself once the proxy runs." It goes
+  out once the proxy runs, or at once if masking is turned off for the thread.
 
 ## How it works
 
@@ -32,7 +37,9 @@ Interface in English and Russian.
    thread, or straight to the original upstream when it is off. The original
    upstream is the bb server's own `ANTHROPIC_BASE_URL`, or
    `https://api.anthropic.com` when it has none: nobody picks an address.
-3. **Fail closed:** with masking on and the proxy not running, the request is
+3. **Fail closed:** with masking on and the proxy not running, new messages
+   wait in the queue (`message.dispatch` hook). A request that still reaches
+   the route waits up to 15 seconds for a proxy that is on its way, then is
    refused with a clear error and nothing is sent.
 4. The plugin starts the proxy on a free loopback port with a generated config
    (listen address, upstream, JSON logs, plus your extra YAML) and reads its
@@ -49,6 +56,10 @@ Interface in English and Russian.
 | Proxy download URL | Used when the path is empty. `{os}`, `{arch}`, `{ext}` are filled in; a `.sha256` file next to the binary is required and checked. The verified copy is reused offline. |
 | In-network models | Comma-separated model id prefixes that never leave your network. Every other model counts as external. |
 | Extra proxy configuration | YAML appended to the generated config (masking rules, egress proxy). `server`, `upstream` and `log` are set by the plugin. |
+
+The plugin answers Fleet Kit's setup check (`setupStatus` RPC): done while the
+proxy runs, to do while it downloads or starts, a problem when it is missing or
+did not download, with the reason in the person's language.
 
 The proxy must accept `serve --config <file>`, read `server.addr`,
 `upstream.routes.anthropic.base_url` and `log.format: json`, and print JSON log

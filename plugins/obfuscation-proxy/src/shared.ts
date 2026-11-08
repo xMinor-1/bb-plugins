@@ -13,12 +13,18 @@ export const ROUTED_PROVIDERS: readonly string[] = ["claude-code"];
 export const THREAD_HEADER = "x-masking-thread";
 export const KEY_HEADER = "x-masking-key";
 
-export type ProxyState = "starting" | "running" | "failed" | "not-configured" | "stopped";
+export type ProxyState = "installing" | "starting" | "running" | "failed" | "not-configured" | "stopped";
+
+export type Lang = "en" | "ru";
+
+/** What stands in the way, for texts in the person's language. */
+export type ProxyProblem = "no-source" | "no-file" | "download" | "start";
 
 export interface ProxyStatus {
   state: ProxyState;
-  /** English detail for failures; the app shows it as is. */
+  /** English technical detail for failures (an HTTP code, a path, the proxy's last error). */
   message: string | null;
+  problem: ProxyProblem | null;
   since: number;
 }
 

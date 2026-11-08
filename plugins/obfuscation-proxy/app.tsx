@@ -68,15 +68,17 @@ function useThreadQuery<T>(threadId: string, load: () => Promise<T>, enabled = t
 
 function useThreadStatus(threadId: string) {
   const rpc = useRpc<RpcContract>();
-  const load = useCallback(() => rpc.call("thread_status", { threadId }), [rpc, threadId]);
+  const lang = useLang();
+  const load = useCallback(() => rpc.call("thread_status", { threadId, lang }), [rpc, threadId, lang]);
   return useThreadQuery<ThreadStatus>(threadId, load);
 }
 
 function useFeed(threadId: string, enabled: boolean) {
   const rpc = useRpc<RpcContract>();
+  const lang = useLang();
   const load = useCallback(
-    () => rpc.call("thread_feed", { threadId, limit: 50 }).then((result) => result.entries),
-    [rpc, threadId],
+    () => rpc.call("thread_feed", { threadId, limit: 50, lang }).then((result) => result.entries),
+    [rpc, threadId, lang],
   );
   return useThreadQuery<FeedEntry[]>(threadId, load, enabled);
 }
@@ -109,8 +111,11 @@ function describe(status: ThreadStatus | null, routed: boolean, t: (typeof messa
   if (status === null) return { tone: "muted" as Tone, label: t.title, detail: null };
   if (!status.masking) return { tone: "danger" as Tone, label: t.off, detail: null };
   const { proxy, totals } = status;
+  if (proxy.state === "installing") return { tone: "warn" as Tone, label: t.on, detail: t.installing };
   if (proxy.state === "starting") return { tone: "warn" as Tone, label: t.on, detail: t.starting };
   if (proxy.state === "not-configured") return { tone: "danger" as Tone, label: t.on, detail: t.notConfigured };
+  if (proxy.state === "failed" && proxy.problem === "download")
+    return { tone: "danger" as Tone, label: t.on, detail: t.downloadFailed };
   if (proxy.state !== "running") return { tone: "danger" as Tone, label: t.on, detail: t.down };
   const detail = totals.requests === 0 ? t.noRequests : t.counts(totals.requests, totals.masked);
   return { tone: "ok" as Tone, label: t.on, detail };
@@ -141,6 +146,7 @@ function Summary({ threadId, isExpanded, onToggle }: ExperimentalThreadContextSe
 function Action({ threadId }: ExperimentalThreadContextSegmentProps) {
   const t = useMessages(messages);
   const rpc = useRpc<RpcContract>();
+  const lang = useLang();
   const routed = useRouted(threadId);
   const { data: status, refetch } = useThreadStatus(threadId);
   const [busy, setBusy] = useState(false);
@@ -149,7 +155,7 @@ function Action({ threadId }: ExperimentalThreadContextSegmentProps) {
   const toggle = () => {
     setBusy(true);
     rpc
-      .call("thread_set_masking", { threadId, masking: !on })
+      .call("thread_set_masking", { threadId, masking: !on, lang })
       .then(refetch, refetch)
       .finally(() => setBusy(false));
   };
@@ -226,10 +232,12 @@ function FeedRow({ entry }: { entry: FeedEntry }) {
 
 function proxyLine(status: ThreadStatus, t: (typeof messages)["en"]): string {
   if (!status.masking) return t.offHint;
-  const { state, message } = status.proxy;
+  const { state, message, problem } = status.proxy;
   if (state === "running") return t.proxyRunning;
+  if (state === "installing") return t.proxyInstalling;
   if (state === "starting") return t.proxyStarting;
-  if (state === "not-configured") return t.proxyNotConfigured(message ?? "");
+  if (state === "not-configured") return problem === "no-file" ? t.proxyNoFile(message ?? "") : t.proxyNoSource;
+  if (problem === "download") return t.proxyDownloadFailed(message ?? state);
   return t.proxyDown(message ?? state);
 }
 

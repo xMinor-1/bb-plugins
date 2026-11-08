@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { ensureBinary, expandDownloadUrl, NotConfiguredError, parseSha256File } from "../src/binary";
+import { DownloadError, ensureBinary, expandDownloadUrl, NotConfiguredError, parseSha256File } from "../src/binary";
 import { ProxySupervisor } from "../src/supervisor";
 import type { ProxyStatus } from "../src/shared";
 
@@ -58,12 +58,28 @@ describe("ensureBinary", () => {
   afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
   it("needs a path or a URL", async () => {
+    await expect(ensureBinary({ source: { binaryPath: "", downloadUrl: "" }, dir })).rejects.toMatchObject({
+      problem: "no-source",
+    });
+    await expect(
+      ensureBinary({ source: { binaryPath: join(dir, "missing"), downloadUrl: "" }, dir }),
+    ).rejects.toMatchObject({ problem: "no-file", message: join(dir, "missing") });
     await expect(ensureBinary({ source: { binaryPath: "", downloadUrl: "" }, dir })).rejects.toBeInstanceOf(
       NotConfiguredError,
     );
+  });
+
+  it("calls a host that refuses or cannot be reached a download failure", async () => {
+    up = false;
+    const source = { binaryPath: "", downloadUrl: `${base}/refused-{os}-{arch}` };
     await expect(
-      ensureBinary({ source: { binaryPath: join(dir, "missing"), downloadUrl: "" }, dir }),
-    ).rejects.toBeInstanceOf(NotConfiguredError);
+      ensureBinary({ source, dir: join(dir, "bin3"), platform: { platform: "linux", arch: "x64" } }),
+    ).rejects.toThrow(DownloadError);
+    up = true;
+    const unreachable = { binaryPath: "", downloadUrl: "http://127.0.0.1:1/proxy-{os}-{arch}" };
+    await expect(
+      ensureBinary({ source: unreachable, dir: join(dir, "bin4"), platform: { platform: "linux", arch: "x64" } }),
+    ).rejects.toThrow(DownloadError);
   });
 
   it("downloads, verifies and reuses the verified copy when the host is down", async () => {
@@ -82,7 +98,7 @@ describe("ensureBinary", () => {
     const source = { binaryPath: "", downloadUrl: `${base}/other-{os}-{arch}` };
     await expect(
       ensureBinary({ source, dir: join(dir, "bin2"), platform: { platform: "linux", arch: "arm64" } }),
-    ).rejects.toThrow(/Checksum mismatch/u);
+    ).rejects.toSatisfy((error) => error instanceof DownloadError && error.message.startsWith("Checksum mismatch"));
     payload = Buffer.from("#!/bin/sh\necho proxy\n");
     digest = createHash("sha256").update(payload).digest("hex");
   });
@@ -132,14 +148,14 @@ describe("ProxySupervisor", () => {
     await run;
     expect(supervisor.status.state).toBe("stopped");
     expect(supervisor.url).toBeNull();
-    expect(statuses.map((status) => status.state)).toEqual(["starting", "running", "stopped"]);
+    expect(statuses.map((status) => status.state)).toEqual(["installing", "starting", "running", "stopped"]);
   });
 
   it("fails with the proxy's last error when it exits", async () => {
     const binary = await fakeProxy("crashes.sh", 'echo "Error: read config: bad key" >&2\nexit 1');
     const { supervisor, run } = supervise(binary, []);
     await expect(run).rejects.toThrow("Error: read config: bad key");
-    expect(supervisor.status).toMatchObject({ state: "failed", message: "Error: read config: bad key" });
+    expect(supervisor.status).toMatchObject({ state: "failed", message: "Error: read config: bad key", problem: "start" });
   });
 
   it("waits without crashing while nothing is configured", async () => {
@@ -151,7 +167,7 @@ describe("ProxySupervisor", () => {
       upstream: "https://api.example",
       extraConfig: "",
       resolveBinary: async () => {
-        throw new NotConfiguredError("Set the proxy binary path or download URL in the plugin settings.");
+        throw new NotConfiguredError("Set the proxy binary path or download URL in the plugin settings.", "no-source");
       },
       onEvent: () => {},
       onStatus: (status) => statuses.push(status),

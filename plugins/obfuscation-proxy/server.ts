@@ -16,9 +16,12 @@ import { rpcContract } from "./src/contract";
 import { MaskMatcher, ThreadFeeds } from "./src/feed";
 import { forwardRequest, type ProxyTarget } from "./src/forward";
 import { validateUpstream } from "./src/proxy-config";
+import { refusedMessage, setupAnswer, waitReason } from "./src/server-texts";
 import {
   KEY_HEADER,
+  type Lang,
   PROXY_CHANGED,
+  ROUTED_PROVIDERS,
   THREAD_CHANGED,
   THREAD_HEADER,
   type ProxyStatus,
@@ -30,6 +33,10 @@ export type { RpcContract } from "./src/contract";
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
 const ROUTES = ["/v1/messages", "/v1/messages/count_tokens"];
+/** A request waits this long for a proxy that is installing or starting. */
+const PROXY_WAIT_MS = 15_000;
+/** Core's per-thread pause between re-attempts is 1 s; the second recheck comes after it. */
+const RECHECK_AGAIN_MS = 1_500;
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
@@ -89,6 +96,37 @@ export default async function plugin(bb: BbPluginApi) {
 
   const changed = (threadId: string) => bb.realtime.publish(THREAD_CHANGED, { threadId });
 
+  // The language people last used in bb, for the texts the server writes.
+  let lang: Lang = (await kv.get<Lang>("ui-lang")) === "ru" ? "ru" : "en";
+  function rememberLang(next: Lang | undefined): void {
+    if (next === undefined || next === lang) return;
+    lang = next;
+    void kv.set("ui-lang", next).catch(() => {});
+  }
+
+  /**
+   * Messages queued behind the proxy are asked about again: core re-runs the
+   * dispatch hook. Core skips a re-attempt that comes within a second of the
+   * previous one on the same thread (bb 0.49: a settings change re-asks while
+   * the proxy is starting, "running" follows 0.6 s later), so ask once more
+   * after that pause.
+   */
+  let recheckAgain: ReturnType<typeof setTimeout> | null = null;
+  function releaseWaiting(): void {
+    const recheck = () =>
+      void bb.experimental_hooks.recheck("message.dispatch").then(
+        () => bb.log.debug("asked bb to re-attempt queued messages"),
+        (error: unknown) => bb.log.warn(`re-attempt of queued messages failed: ${String(error)}`),
+      );
+    recheck();
+    if (recheckAgain !== null) clearTimeout(recheckAgain);
+    recheckAgain = setTimeout(() => {
+      recheckAgain = null;
+      recheck();
+    }, RECHECK_AGAIN_MS);
+    recheckAgain.unref?.();
+  }
+
   // ---------- Masking state per thread ----------
 
   async function maskingOf(threadId: string): Promise<{ masking: boolean; explicit: boolean }> {
@@ -100,8 +138,9 @@ export default async function plugin(bb: BbPluginApi) {
   // ---------- The proxy process ----------
 
   let supervisor: ProxySupervisor | null = null;
-  let proxyStatus: ProxyStatus = { state: "stopped", message: null, since: Date.now() };
+  let proxyStatus: ProxyStatus = { state: "stopped", message: null, problem: null, since: Date.now() };
   let restartRun: AbortController | null = null;
+  const readyWaiters: (() => void)[] = [];
 
   function newSupervisor(): ProxySupervisor {
     const source = { binaryPath: values.binaryPath, downloadUrl: values.downloadUrl };
@@ -118,6 +157,8 @@ export default async function plugin(bb: BbPluginApi) {
         proxyStatus = status;
         bb.log.info(`proxy ${status.state}${status.message ? `: ${status.message}` : ""}`);
         bb.realtime.publish(PROXY_CHANGED, { state: status.state });
+        for (const resolve of readyWaiters.splice(0)) resolve();
+        if (status.state === "running") releaseWaiting();
       },
     });
   }
@@ -143,14 +184,49 @@ export default async function plugin(bb: BbPluginApi) {
     values = next;
     // A new run picks up the binary, the extra config and the default.
     restartRun?.abort();
+    releaseWaiting();
   });
 
-  function proxyTarget(): ProxyTarget {
+  function proxyNow(): ProxyTarget | null {
     const url = supervisor?.url ?? null;
     if (url !== null) return { url };
-    if (proxyStatus.state === "starting") return { error: "it is still starting" };
+    if (proxyStatus.state === "installing" || proxyStatus.state === "starting") return null;
     return { error: proxyStatus.message ?? `it is ${proxyStatus.state}` };
   }
+
+  /** The running proxy; a request in flight waits a little for one that is installing or starting. */
+  async function proxyTarget(): Promise<ProxyTarget> {
+    const deadline = Date.now() + PROXY_WAIT_MS;
+    for (;;) {
+      const now = proxyNow();
+      if (now !== null) return now;
+      const left = deadline - Date.now();
+      if (left <= 0) return { error: proxyStatus.state === "installing" ? "it is still downloading" : "it is still starting" };
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, left);
+        readyWaiters.push(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+  }
+
+  // ---------- Messages to an external agent wait for the proxy ----------
+
+  // With masking on and no proxy yet, a new message is queued with a reason
+  // card instead of failing in the agent; it goes out once the proxy runs or
+  // masking is turned off (both call recheck). "Send now" bypasses the hook,
+  // and the route then refuses with the same explanation.
+  //
+  // No `sendAt` on the wait: bb 0.49 stored it but did not re-attempt the row
+  // when it came due, and a timed row shows as scheduled rather than waiting.
+  bb.experimental_hooks.on("message.dispatch", async (ctx) => {
+    if (!ROUTED_PROVIDERS.includes(ctx.requestedExecution.providerId)) return { action: "proceed" };
+    if (!(await maskingOf(ctx.thread.id)).masking) return { action: "proceed" };
+    if (supervisor?.url) return { action: "proceed" };
+    return { action: "wait", reason: waitReason(proxyStatus, lang) };
+  });
 
   // ---------- Route Claude Code through this plugin ----------
 
@@ -196,6 +272,7 @@ export default async function plugin(bb: BbPluginApi) {
           upstream,
           isMasking: async (threadId) => (await maskingOf(threadId)).masking,
           proxy: proxyTarget,
+          refusedMessage: () => refusedMessage(proxyStatus, lang),
           feeds,
           masks,
           changed,
@@ -213,12 +290,25 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   bb.rpc.register(rpcContract, {
-    thread_status: ({ threadId }) => status(threadId),
-    thread_feed: async ({ threadId, limit }) => ({ entries: await feeds.entries(threadId, limit) }),
-    thread_set_masking: async ({ threadId, masking }) => {
+    thread_status: ({ threadId, lang: next }) => {
+      rememberLang(next);
+      return status(threadId);
+    },
+    thread_feed: async ({ threadId, limit, lang: next }) => {
+      rememberLang(next);
+      return { entries: await feeds.entries(threadId, limit) };
+    },
+    thread_set_masking: async ({ threadId, masking, lang: next }) => {
+      rememberLang(next);
       await kv.set(`mask:${threadId}`, masking);
       changed(threadId);
+      // A message queued behind the proxy goes out once masking is off.
+      if (!masking) releaseWaiting();
       return status(threadId);
+    },
+    setupStatus: (input) => {
+      rememberLang(input?.lang);
+      return setupAnswer(proxyStatus, input?.lang ?? lang);
     },
   });
 }

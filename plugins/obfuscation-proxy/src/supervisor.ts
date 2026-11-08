@@ -7,10 +7,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { NotConfiguredError } from "./binary";
+import { DownloadError, NotConfiguredError } from "./binary";
 import { parseProxyLogLine, type ProxyLogEvent } from "./log-parser";
 import { renderProxyConfig } from "./proxy-config";
-import type { ProxyState, ProxyStatus } from "./shared";
+import type { ProxyProblem, ProxyState, ProxyStatus } from "./shared";
 
 export interface SupervisorOptions {
   /** Plugin-owned working directory for the config file. */
@@ -43,7 +43,7 @@ export class ProxySupervisor {
   private address: string | null = null;
 
   constructor(private readonly options: SupervisorOptions) {
-    this.current = { state: "stopped", message: null, since: this.now() };
+    this.current = { state: "stopped", message: null, problem: null, since: this.now() };
   }
 
   private now(): number {
@@ -59,31 +59,35 @@ export class ProxySupervisor {
     return this.current.state === "running" ? this.address : null;
   }
 
-  private set(state: ProxyState, message: string | null = null): void {
+  private set(state: ProxyState, message: string | null = null, problem: ProxyProblem | null = null): void {
     if (this.current.state === state && this.current.message === message) return;
-    this.current = { state, message, since: this.now() };
+    this.current = { state, message, problem, since: this.now() };
     this.options.onStatus(this.current);
   }
 
   /** Starts the proxy and resolves when `signal` aborts; rejects if it dies. */
   async run(signal: AbortSignal): Promise<void> {
     if (signal.aborted) return;
-    this.set("starting");
+    // A first run may download the binary: people see "installing" until it is here.
+    this.set("installing");
     let binary: string;
     try {
       binary = await this.options.resolveBinary(signal);
     } catch (cause) {
       if (cause instanceof NotConfiguredError) {
         // Waiting is not a crash: nothing to retry until the settings change.
-        this.set("not-configured", cause.message);
+        this.set("not-configured", cause.message, cause.problem);
         await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
         this.set("stopped");
         return;
       }
-      this.set("failed", cause instanceof Error ? cause.message : String(cause));
+      if (signal.aborted) return;
+      const problem = cause instanceof DownloadError ? "download" : "start";
+      this.set("failed", cause instanceof Error ? cause.message : String(cause), problem);
       throw cause;
     }
     if (signal.aborted) return;
+    this.set("starting");
 
     const port = await freePort();
     await mkdir(this.options.dir, { recursive: true });
@@ -95,7 +99,7 @@ export class ProxySupervisor {
         { mode: 0o600 },
       );
     } catch (cause) {
-      this.set("failed", cause instanceof Error ? cause.message : String(cause));
+      this.set("failed", cause instanceof Error ? cause.message : String(cause), "start");
       throw cause;
     }
 
@@ -148,7 +152,7 @@ export class ProxySupervisor {
           return;
         }
         const message = lastError ?? `The proxy exited with code ${code ?? "unknown"}.`;
-        this.set("failed", message);
+        this.set("failed", message, "start");
         reject(new Error(message));
       };
       child.once("close", onClose);

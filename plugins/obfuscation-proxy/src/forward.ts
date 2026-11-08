@@ -14,7 +14,10 @@ export interface ForwardDeps {
   /** Where the agent's requests go without masking. */
   upstream: string;
   isMasking(threadId: string): Promise<boolean>;
-  proxy(): ProxyTarget;
+  /** The running proxy; may wait a little for one that is starting. */
+  proxy(): ProxyTarget | Promise<ProxyTarget>;
+  /** What the agent shows when masking is on and the proxy is not there. */
+  refusedMessage?(error: string): string;
   feeds: ThreadFeeds;
   masks: MaskMatcher;
   changed(threadId: string): void;
@@ -101,7 +104,7 @@ export async function forwardRequest(request: Request, path: string, deps: Forwa
 
   let target: string;
   if (masking) {
-    const proxy = deps.proxy();
+    const proxy = await deps.proxy();
     if ("error" in proxy) {
       entry.via = "blocked";
       entry.status = 503;
@@ -112,8 +115,9 @@ export async function forwardRequest(request: Request, path: string, deps: Forwa
       deps.changed(threadId);
       return apiError(
         503,
-        `Masking is on for this thread, but the masking proxy is not running (${proxy.error}). ` +
-          "Nothing was sent. Turn masking off above the message box to send without it.",
+        deps.refusedMessage?.(proxy.error) ??
+          `Masking is on for this thread, but the masking proxy is not running (${proxy.error}). ` +
+            "Nothing was sent. Turn masking off above the message box to send without it.",
       );
     }
     target = joinUrl(proxy.url, path, search);

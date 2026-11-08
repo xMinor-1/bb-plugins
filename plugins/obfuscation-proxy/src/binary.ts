@@ -5,7 +5,18 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-export class NotConfiguredError extends Error {}
+/** Nothing to run until the settings change. */
+export class NotConfiguredError extends Error {
+  constructor(
+    message: string,
+    readonly problem: "no-source" | "no-file",
+  ) {
+    super(message);
+  }
+}
+
+/** The release host did not give a binary that matches its checksum. */
+export class DownloadError extends Error {}
 
 export interface BinarySource {
   binaryPath: string;
@@ -51,8 +62,15 @@ async function exists(path: string): Promise<boolean> {
 
 async function fetchBytes(doFetch: typeof fetch, url: string, signal?: AbortSignal): Promise<Uint8Array> {
   const response = await doFetch(url, { redirect: "follow", signal });
-  if (!response.ok) throw new Error(`Download of ${url} failed: HTTP ${response.status}.`);
+  if (!response.ok) throw new DownloadError(`HTTP ${response.status} for ${url}`);
   return new Uint8Array(await response.arrayBuffer());
+}
+
+/** A network failure is a download failure; an abort stays an abort. */
+function asDownloadError(cause: unknown, signal?: AbortSignal): unknown {
+  if (cause instanceof DownloadError || signal?.aborted) return cause;
+  const detail = cause instanceof Error ? (cause.cause instanceof Error ? cause.cause.message : cause.message) : String(cause);
+  return new DownloadError(detail);
 }
 
 export interface EnsureBinaryOptions {
@@ -67,11 +85,11 @@ export interface EnsureBinaryOptions {
 export async function ensureBinary(options: EnsureBinaryOptions): Promise<string> {
   const binaryPath = options.source.binaryPath.trim();
   if (binaryPath !== "") {
-    if (!(await exists(binaryPath))) throw new NotConfiguredError(`Proxy binary not found at ${binaryPath}.`);
+    if (!(await exists(binaryPath))) throw new NotConfiguredError(binaryPath, "no-file");
     return binaryPath;
   }
   const template = options.source.downloadUrl.trim();
-  if (template === "") throw new NotConfiguredError("Set the proxy binary path or download URL in the plugin settings.");
+  if (template === "") throw new NotConfiguredError("Set the proxy binary path or download URL in the plugin settings.", "no-source");
   const platform = options.platform ?? { platform: process.platform, arch: process.arch };
   const url = expandDownloadUrl(template, platform);
   const doFetch = options.fetch ?? fetch;
@@ -93,13 +111,15 @@ export async function ensureBinary(options: EnsureBinaryOptions): Promise<string
   } catch (cause) {
     // Offline or the release host is down: keep using the verified copy.
     if ((await local()) !== null) return target;
-    throw cause;
+    throw asDownloadError(cause, options.signal);
   }
-  if (expected === null) throw new Error(`${url}.sha256 has no SHA-256 digest.`);
+  if (expected === null) throw new DownloadError(`${url}.sha256 has no SHA-256 digest`);
   if ((await local()) === expected) return target;
-  const data = await fetchBytes(doFetch, url, options.signal);
+  const data = await fetchBytes(doFetch, url, options.signal).catch((cause: unknown) => {
+    throw asDownloadError(cause, options.signal);
+  });
   const actual = sha256(data);
-  if (actual !== expected) throw new Error(`Checksum mismatch for ${url}: expected ${expected}, got ${actual}.`);
+  if (actual !== expected) throw new DownloadError(`Checksum mismatch for ${url}: expected ${expected}, got ${actual}`);
   await mkdir(options.dir, { recursive: true });
   const partial = `${target}.partial`;
   await writeFile(partial, data, { mode: 0o755 });
