@@ -7,29 +7,28 @@ import { useCallback, useEffect, useState } from "react";
 import { useBbNavigate, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { ExperimentalBadge } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../../server";
-import type { BranchSetup, Setup, SetupMark, SetupStep } from "../../contract";
+import type { BranchSetup, InstallProgress, Setup, SetupMark, SetupStep } from "../../contract";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { render } from "../shared/texts.js";
 import { defineMessages, LanguageSwitch, pluralRu, useLang, useMessages } from "@/lib/i18n";
+import { AccountBody } from "./account-step";
 import { errorText, Frame, SecretInput, STATUS_CHANNEL, useSavedIn } from "./parts";
 
-/** The panel path of this page: the installer opens bb on /plugins/fleet-kit/setup. */
-export const SETUP_PANEL = "setup";
+/** First run is the Fleet Kit panel's `setup` view: /plugins/fleet-kit/status/setup. */
+export const SETUP_SUBPATH = "setup";
 
 /**
- * Whether the build has setup steps, as this browser last saw it. bb draws a
- * sidebar entry for every registered panel, so the First run entry is
- * registered only while the build has steps; a change shows from the next page
- * load, like the language of the entry's title. Unknown (a fresh bb, which the
- * installer opens on this page) counts as having steps.
+ * Whether this browser last saw setup steps left. The panel's root opens First
+ * run while it did; unknown (a fresh bb, before the build is read) counts as
+ * steps left, so a new person lands on First run.
  */
-const SETUP_SEEN_KEY = "fleet-kit.setup-steps";
+const SETUP_SEEN_KEY = "fleet-kit.setup-left";
 
-export function setupEntryWanted(): boolean {
+export function startsOnSetup(): boolean {
   try {
-    return window.localStorage.getItem(SETUP_SEEN_KEY) !== "none";
+    return window.localStorage.getItem(SETUP_SEEN_KEY) !== "done";
   } catch {
     return true;
   }
@@ -37,20 +36,15 @@ export function setupEntryWanted(): boolean {
 
 function rememberSteps(setup: Setup): void {
   // Read but not synced yet: keep what was seen before.
-  const has = setup.configured ? setup.steps.length > 0 || (setup.branches ?? null) !== null : setup.manifestSet ? null : false;
-  if (has === null) return;
+  if (!setup.configured && setup.manifestSet) return;
+  const left = setup.configured && !setup.complete;
   try {
-    window.localStorage.setItem(SETUP_SEEN_KEY, has ? "steps" : "none");
+    window.localStorage.setItem(SETUP_SEEN_KEY, left ? "left" : "done");
   } catch {
-    // Private mode: the entry follows the default.
+    // Private mode: the panel opens First run.
   }
 }
 
-/** Set by the app when it registers the First run entry this page load. */
-let entryRegistered = false;
-export function markSetupEntryRegistered(): void {
-  entryRegistered = true;
-}
 const PAGE_POLL_MS = 15_000;
 const BADGE_POLL_MS = 60_000;
 
@@ -70,11 +64,12 @@ const messages = defineMessages(
     start: "Start working",
     optional: "optional",
     state: (state: SetupStep["state"] | "skipped") =>
-      ({ done: "Done", todo: "To do", problem: "Didn't work", installing: "Installing the plugin", later: "Coming later", checking: "Checking…", skipped: "Skipped" })[state],
+      ({ done: "Done", todo: "To do", problem: "Didn't work", installing: "Installing now", queued: "In the queue", later: "Coming later", checking: "Checking…", skipped: "Skipped" })[state],
     manual: "This plugin cannot report its state: mark the step yourself once it is done.",
     noAnswer: "The plugin did not answer. Open its page or check again.",
     installFailed: "The plugin did not install. Details are on the Fleet Kit page.",
     installing: "Fleet Kit is installing the plugin; the step appears here when it is ready.",
+    queued: "Fleet Kit installs plugins one at a time; this one waits for its turn.",
     later: "The plugin is not in the build yet.",
     checking: "The plugin is answering slowly; its state appears here as soon as it answers.",
     open: "Open",
@@ -103,6 +98,23 @@ const messages = defineMessages(
     notRecommended: "not in this branch by default",
     yours: "your choice",
     plannedPlugin: "coming later",
+    plannedLine: (names: string) => `Coming in a later version: ${names}.`,
+    install: "Install",
+    installSwitch: "Switch and install",
+    installBusy: "Saving…",
+    installStarted: "Done: Fleet Kit is installing the plugins. Progress is shown above; you can carry on with the steps below meanwhile.",
+    switchSaved: "Saved. Fleet Kit is applying the change.",
+    branchPickFirst: "Pick a branch above, check the plugins, then press Install.",
+    installsTitle: "Installing plugins",
+    installsDone: "Plugins installed",
+    installsCount: (done: number, total: number) => `${done} of ${total}`,
+    installsNow: "Installing now",
+    installsNext: "Next",
+    installsReady: "Installed",
+    installsFailed: "Did not install; details are on the Fleet Kit page",
+    installsLeft: (n: number, minutes: number | null) =>
+      `${n} ${n === 1 ? "plugin" : "plugins"} left${minutes === null ? "" : `, about ${minutes} min`}`,
+    installsOneByOne: "One at a time, about a minute each. bb can be used meanwhile.",
     offNote: "A plugin you turn off is not installed, or is turned off if it already is. Its settings, data and keys stay; turn it on to get it back.",
   },
   {
@@ -118,11 +130,12 @@ const messages = defineMessages(
     start: "Начать работу",
     optional: "необязательно",
     state: (state) =>
-      ({ done: "Готово", todo: "Нужно сделать", problem: "Не получилось", installing: "Плагин ещё ставится", later: "Появится позже", checking: "Проверяю…", skipped: "Пропущено" })[state],
+      ({ done: "Готово", todo: "Нужно сделать", problem: "Не получилось", installing: "Ставится сейчас", queued: "В очереди", later: "Появится позже", checking: "Проверяю…", skipped: "Пропущено" })[state],
     manual: "Этот плагин не сообщает о готовности: когда сделаете шаг, отметьте его сами.",
     noAnswer: "Плагин не ответил. Откройте его страницу или проверьте снова.",
     installFailed: "Плагин не установился. Подробности на странице пульта.",
     installing: "Пульт ставит плагин, шаг станет доступен, когда он будет готов.",
+    queued: "Пульт ставит плагины по одному, этот ждёт своей очереди.",
     later: "Плагина ещё нет в сборке.",
     checking: "Плагин отвечает медленно, его состояние появится здесь, как только он ответит.",
     open: "Открыть",
@@ -151,6 +164,22 @@ const messages = defineMessages(
     notRecommended: "в этой ветке по умолчанию выключен",
     yours: "ваш выбор",
     plannedPlugin: "появится позже",
+    plannedLine: (names) => `Появится в следующей версии: ${names}.`,
+    install: "Установить",
+    installSwitch: "Сменить и установить",
+    installBusy: "Сохраняю…",
+    installStarted: "Готово, пульт ставит плагины. Ход установки — выше; пока он идёт, можно делать шаги ниже.",
+    switchSaved: "Сохранено, пульт применяет изменение.",
+    branchPickFirst: "Выберите ветку выше, проверьте плагины и нажмите «Установить».",
+    installsTitle: "Установка плагинов",
+    installsDone: "Плагины установлены",
+    installsCount: (done, total) => `${done} из ${total}`,
+    installsNow: "Ставится сейчас",
+    installsNext: "Дальше",
+    installsReady: "Готово",
+    installsFailed: "Не установился, подробности на странице пульта",
+    installsLeft: (n, minutes) => `Осталось ${n} ${pluralRu(n, ["плагин", "плагина", "плагинов"])}${minutes === null ? "" : `, около ${minutes} мин`}`,
+    installsOneByOne: "По одному, примерно минута на плагин. Пользоваться bb можно уже сейчас.",
     offNote: "Выключенный плагин не ставится, а уже поставленный выключается. Его настройки, данные и ключи остаются: включите его снова, и он вернётся как был.",
   },
 );
@@ -222,14 +251,16 @@ const STATE_ICON: Record<SetupStep["state"] | "skipped", { name: string; classNa
   problem: { name: "AlertTriangle", className: "text-amber-600 dark:text-amber-400" },
   installing: { name: "Loading", className: "animate-spin text-muted-foreground" },
   checking: { name: "Loading", className: "animate-spin text-muted-foreground" },
+  queued: { name: "Clock", className: "text-muted-foreground" },
   later: { name: "Clock", className: "text-muted-foreground" },
   skipped: { name: "Minus", className: "text-muted-foreground" },
 };
 
 function explanation(t: Texts, step: SetupStep): string | null {
-  if (shownState(step) === "skipped") return null;
-  if (step.summary !== null && step.state !== "installing" && step.state !== "later") return step.summary;
+  if (shownState(step) === "skipped" || step.kind === "account") return null;
+  if (step.summary !== null && step.state !== "installing" && step.state !== "queued" && step.state !== "later") return step.summary;
   if (step.state === "installing") return t.installing;
+  if (step.state === "queued") return t.queued;
   if (step.state === "later") return t.later;
   if (step.state === "checking") return t.checking;
   if (step.reason === "install-failed") return t.installFailed;
@@ -238,11 +269,13 @@ function explanation(t: Texts, step: SetupStep): string | null {
   return null;
 }
 
-function StepCard({ step, secretStore, onMark, onSecret }: {
+function StepCard({ step, secretStore, onMark, onSecret, onAccount, onForget }: {
   step: SetupStep;
   secretStore: string;
   onMark: (mark: SetupMark | null) => void;
   onSecret: (value: string) => Promise<void>;
+  onAccount: (login: string, password: string) => Promise<void>;
+  onForget: () => void;
 }) {
   const t = useMessages(messages);
   const savedIn = useSavedIn();
@@ -250,7 +283,7 @@ function StepCard({ step, secretStore, onMark, onSecret }: {
   const state = shownState(step);
   const icon = STATE_ICON[state];
   const why = explanation(t, step);
-  const actionable = state !== "later" && state !== "installing" && state !== "checking";
+  const actionable = state !== "later" && state !== "installing" && state !== "queued" && state !== "checking";
   const openable = step.kind === "plugin" && step.path !== null && actionable && state !== "skipped";
   const primary = state === "todo" || state === "problem";
   useEffect(() => setReplacing(false), [step.state]);
@@ -278,6 +311,10 @@ function StepCard({ step, secretStore, onMark, onSecret }: {
         ) : (
           <SecretInput className="mt-2 pl-6" label={step.title} onSave={onSecret} onCancel={step.state === "done" ? () => setReplacing(false) : undefined} />
         )
+      ) : null}
+
+      {step.kind === "account" && step.account ? (
+        <AccountBody account={step.account} title={step.title} secretStore={secretStore} onSave={onAccount} onForget={onForget} onOpen={openBbPage} />
       ) : null}
 
       {step.kind === "plugin" && actionable ? (
@@ -309,21 +346,133 @@ function StepCard({ step, secretStore, onMark, onSecret }: {
   );
 }
 
-/** The branch and the optional plugins: picked here first, changed here later. */
+/** Minutes left: the average install so far, or a minute each before the first one ends. */
+function minutesLeft(progress: InstallProgress): number | null {
+  const left = progress.queue.length + (progress.current ? 1 : 0);
+  if (left === 0) return null;
+  const each = progress.averageSeconds ?? 60;
+  return Math.max(1, Math.round((left * each) / 60));
+}
+
+/** The plugins a sync installs, one at a time: which one now, which next, which are done. */
+export function InstallCard({ progress }: { progress: InstallProgress }) {
+  const t = useMessages(messages);
+  const total = progress.done.length + progress.queue.length + (progress.current ? 1 : 0);
+  const finished = progress.finishedAt !== null;
+  const left = progress.queue.length + (progress.current ? 1 : 0);
+  const percent = total === 0 ? 100 : Math.round((progress.done.length / total) * 100);
+  return (
+    <section role="status" aria-live="polite" className="mt-4 rounded-lg border border-border bg-card px-4 py-3 text-sm" data-installs={finished ? "finished" : "running"}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <Icon
+          name={finished ? "CircleCheck" : "Loading"}
+          className={cn("size-4 shrink-0", finished ? "text-emerald-600 dark:text-emerald-400" : "animate-spin text-muted-foreground")}
+        />
+        <h2 className="min-w-0 flex-1 font-medium">{finished ? t.installsDone : t.installsTitle}</h2>
+        <span className="text-xs text-muted-foreground">{t.installsCount(progress.done.length, total)}</span>
+      </div>
+      <div
+        className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-label={t.installsTitle}
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-valuenow={progress.done.length}
+      >
+        <div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${percent}%` }} />
+      </div>
+      {!finished ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          {t.installsLeft(left, minutesLeft(progress))}. {t.installsOneByOne}
+        </p>
+      ) : null}
+      <ul className="mt-2 flex flex-col gap-1">
+        {progress.done.map((item) => (
+          <li key={item.id} data-install={item.id} data-install-state={item.ok ? "done" : "failed"} className="flex items-start gap-2">
+            <Icon
+              name={item.ok ? "Check" : "AlertTriangle"}
+              className={cn("mt-0.5 size-4 shrink-0", item.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400")}
+            />
+            <span className="min-w-0 flex-1">{item.title}</span>
+            <span className={cn("text-xs", item.ok ? "text-muted-foreground" : "text-amber-700 dark:text-amber-300")}>{item.ok ? t.installsReady : t.installsFailed}</span>
+          </li>
+        ))}
+        {progress.current ? (
+          <li data-install={progress.current.id} data-install-state="installing" className="flex items-start gap-2 font-medium">
+            <Icon name="Loading" className="mt-0.5 size-4 shrink-0 animate-spin text-primary" />
+            <span className="min-w-0 flex-1">
+              {progress.current.title}
+              {progress.current.note ? <span className="block text-xs font-normal text-muted-foreground">{progress.current.note}</span> : null}
+            </span>
+            <span className="text-xs font-normal text-muted-foreground">{t.installsNow}</span>
+          </li>
+        ) : null}
+        {progress.queue.map((item, index) => (
+          <li key={item.id} data-install={item.id} data-install-state="queued" className="flex items-start gap-2 text-muted-foreground">
+            <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center text-xs tabular-nums">{index + 1}</span>
+            <span className="min-w-0 flex-1">
+              {item.title}
+              {item.note ? <span className="block text-xs">{item.note}</span> : null}
+            </span>
+            {index === 0 ? <span className="text-xs">{t.installsNext}</span> : null}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * The branch and the optional plugins. Picking a branch only previews it: the
+ * switches show what it turns on, the person may change them, and nothing
+ * installs until Install. Once a branch is installed, a switch applies at once.
+ */
 function BranchCard({ branches, onChoose, onToggle }: {
   branches: BranchSetup;
   /** Resolves to the plugins the choice would turn off when it needs a confirmation, else to an empty list. */
-  onChoose: (branch: string, confirmed: boolean) => Promise<string[]>;
+  onChoose: (branch: string, confirmed: boolean, plugins: Record<string, boolean>) => Promise<string[]>;
   onToggle: (id: string, on: boolean) => void;
 }) {
   const t = useMessages(messages);
-  const [confirm, setConfirm] = useState<{ branch: string; title: string; off: string[] } | null>(null);
+  const [selected, setSelected] = useState<string | null>(branches.chosen);
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  const [confirm, setConfirm] = useState<{ title: string; off: string[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<"started" | "switched" | null>(null);
   const picked = branches.chosen !== null;
-  const choose = (branch: string, title: string) =>
-    void onChoose(branch, false).then((off) => setConfirm(off.length > 0 ? { branch, title, off } : null), () => undefined);
-  const status = picked ? null : branches.dropped ? t.branchDropped : branches.waiting ? t.branchWaiting : t.branchNotPicked;
+  // Another tab or the CLI picked a branch: follow it.
+  useEffect(() => {
+    setSelected(branches.chosen);
+    setOverrides({});
+  }, [branches.chosen]);
+  const previewing = selected !== null && selected !== branches.chosen;
+  const preview = previewing ? branches.list.find((branch) => branch.id === selected) ?? null : null;
+  const select = (id: string) => {
+    setSelected(id);
+    setOverrides({});
+    setConfirm(null);
+    setSaved(null);
+  };
+  const install = (confirmed: boolean) => {
+    if (selected === null) return;
+    const first = !picked;
+    setBusy(true);
+    void onChoose(selected, confirmed, overrides)
+      .then(
+        (off) => {
+          const title = branches.list.find((branch) => branch.id === selected)?.title ?? selected;
+          setConfirm(off.length > 0 ? { title, off } : null);
+          if (off.length === 0) setSaved(first ? "started" : "switched");
+        },
+        () => undefined,
+      )
+      .finally(() => setBusy(false));
+  };
+  const shown = branches.plugins.filter((plugin) => !plugin.planned);
+  const planned = branches.plugins.filter((plugin) => plugin.planned);
+  const status = picked || previewing ? null : branches.dropped ? t.branchDropped : branches.waiting ? t.branchWaiting : t.branchNotPicked;
   return (
-    <section className="mt-4 rounded-lg border border-border bg-card px-4 py-3 text-sm" data-branches={branches.chosen ?? ""}>
+    <section className="mt-4 rounded-lg border border-border bg-card px-4 py-3 text-sm" data-branches={branches.chosen ?? ""} data-selected={selected ?? ""}>
       <div className="flex items-start gap-2">
         <Icon name={picked ? "CircleCheck" : "Circle"} className={cn("mt-0.5 size-4 shrink-0", picked ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")} />
         <div className="min-w-0 flex-1">
@@ -334,7 +483,7 @@ function BranchCard({ branches, onChoose, onToggle }: {
       </div>
       <div role="radiogroup" aria-label={t.branchTitle} className="mt-3 grid gap-2 pl-6 sm:grid-cols-2">
         {branches.list.map((branch) => {
-          const active = branch.id === branches.chosen;
+          const active = branch.id === selected;
           return (
             <button
               key={branch.id}
@@ -342,7 +491,7 @@ function BranchCard({ branches, onChoose, onToggle }: {
               role="radio"
               aria-checked={active}
               data-branch={branch.id}
-              onClick={() => (active ? undefined : choose(branch.id, branch.title))}
+              onClick={() => (active ? undefined : select(branch.id))}
               className={cn(
                 "rounded-md border px-3 py-2 text-left transition-colors",
                 active ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50",
@@ -357,15 +506,52 @@ function BranchCard({ branches, onChoose, onToggle }: {
           );
         })}
       </div>
+      {picked && !previewing ? <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.branchChange}</p> : null}
+      <h3 className="mt-3 pl-6 text-xs font-medium text-muted-foreground">{t.included}</h3>
+      <ul className="mt-1 flex flex-col gap-1 pl-6">
+        {shown.map((plugin) => {
+          const recommended = preview ? (preview.defaults?.[plugin.id] ?? true) : plugin.recommended;
+          const on = preview ? (overrides[plugin.id] ?? recommended) : plugin.on;
+          const own = preview ? overrides[plugin.id] !== undefined : plugin.own;
+          const note = own ? t.yours : !preview && plugin.waiting ? t.waitsForBranch : !preview && !picked ? "" : recommended ? t.recommended : t.notRecommended;
+          return (
+            <li key={plugin.id} data-plugin={plugin.id} data-on={on} className="flex items-start gap-2 py-1">
+              <input
+                id={`fleet-kit-plugin-${plugin.id}`}
+                type="checkbox"
+                className="mt-0.5 size-4 shrink-0 accent-primary"
+                checked={on}
+                disabled={busy}
+                onChange={(event) => {
+                  const value = event.target.checked;
+                  if (preview) setOverrides((current) => ({ ...current, [plugin.id]: value }));
+                  else onToggle(plugin.id, value);
+                }}
+              />
+              <label htmlFor={`fleet-kit-plugin-${plugin.id}`} className="min-w-0 flex-1">
+                <span>{plugin.title}</span>
+                <span className="ml-2 text-xs text-muted-foreground">{note}</span>
+                {plugin.hint ? <span className="block text-xs text-muted-foreground">{plugin.hint}</span> : null}
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      {planned.length > 0 ? (
+        <p className="mt-1 pl-6 text-xs text-muted-foreground" data-planned={planned.map((plugin) => plugin.id).join(" ")}>
+          {t.plannedLine(planned.map((plugin) => plugin.title).join(", "))}
+        </p>
+      ) : null}
+      <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.offNote}</p>
       {confirm ? (
-        <div role="alertdialog" aria-label={t.confirmTitle(confirm.title)} data-confirm={confirm.branch} className="mt-3 ml-6 rounded-md border border-amber-500/50 px-3 py-2 text-xs">
+        <div role="alertdialog" aria-label={t.confirmTitle(confirm.title)} data-confirm={selected ?? ""} className="mt-3 ml-6 rounded-md border border-amber-500/50 px-3 py-2 text-xs">
           <p className="font-medium">{t.confirmTitle(confirm.title)}</p>
           <p className="mt-1">
             {t.confirmText} {confirm.off.join(", ")}
           </p>
           <p className="mt-1 text-muted-foreground">{t.confirmKeep}</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            <Button size="sm" onClick={() => void onChoose(confirm.branch, true).then(() => setConfirm(null), () => undefined)}>
+            <Button size="sm" disabled={busy} onClick={() => install(true)}>
               {t.confirmYes}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setConfirm(null)}>
@@ -373,43 +559,31 @@ function BranchCard({ branches, onChoose, onToggle }: {
             </Button>
           </div>
         </div>
+      ) : previewing ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 pl-6">
+          <Button size="sm" disabled={busy} onClick={() => install(false)} data-install-branch={selected ?? ""}>
+            <Icon name={busy ? "Loading" : "PackageReceive"} className={cn("size-4", busy && "animate-spin")} />
+            {busy ? t.installBusy : picked ? t.installSwitch : t.install}
+          </Button>
+        </div>
+      ) : !picked ? (
+        <p className="mt-3 pl-6 text-xs text-muted-foreground">{t.branchPickFirst}</p>
       ) : null}
-      {picked ? <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.branchChange}</p> : null}
-      <h3 className="mt-3 pl-6 text-xs font-medium text-muted-foreground">{t.included}</h3>
-      <ul className="mt-1 flex flex-col gap-1 pl-6">
-        {branches.plugins.map((plugin) => (
-          <li key={plugin.id} data-plugin={plugin.id} data-on={plugin.on} className="flex items-start gap-2 py-1">
-            <input
-              id={`fleet-kit-plugin-${plugin.id}`}
-              type="checkbox"
-              className="mt-0.5 size-4 shrink-0 accent-primary"
-              checked={plugin.on}
-              disabled={plugin.planned}
-              onChange={(event) => onToggle(plugin.id, event.target.checked)}
-            />
-            <label htmlFor={`fleet-kit-plugin-${plugin.id}`} className="min-w-0 flex-1">
-              <span>{plugin.title}</span>
-              <span className="ml-2 text-xs text-muted-foreground">
-                {plugin.planned
-                  ? t.plannedPlugin
-                  : plugin.own
-                    ? t.yours
-                    : plugin.waiting
-                      ? t.waitsForBranch
-                      : !picked
-                        ? ""
-                        : plugin.recommended
-                          ? t.recommended
-                          : t.notRecommended}
-              </span>
-              {plugin.hint ? <span className="block text-xs text-muted-foreground">{plugin.hint}</span> : null}
-            </label>
-          </li>
-        ))}
-      </ul>
-      <p className="mt-2 pl-6 text-xs text-muted-foreground">{t.offNote}</p>
+      {saved ? (
+        <p role="status" className="mt-3 ml-6 rounded-md border border-emerald-500/40 px-3 py-2 text-xs" data-branch-saved={saved}>
+          {saved === "started" ? t.installStarted : t.switchSaved}
+        </p>
+      ) : null}
     </section>
   );
+}
+
+/** A finished install stays on the page for a while, or until the person has seen what failed. */
+const INSTALLS_SHOWN_MS = 10 * 60_000;
+function showInstalls(progress: InstallProgress): boolean {
+  if (progress.finishedAt === null) return true;
+  if (progress.done.some((item) => !item.ok)) return true;
+  return Date.now() - Date.parse(progress.finishedAt) < INSTALLS_SHOWN_MS;
 }
 
 export function SetupPage() {
@@ -463,11 +637,12 @@ export function SetupPage() {
               </Button>
             </div>
           ) : null}
+          {setup.installs && showInstalls(setup.installs) ? <InstallCard progress={setup.installs} /> : null}
           {setup.branches ? (
             <BranchCard
               branches={setup.branches}
-              onChoose={(branch, confirmed) =>
-                rpc.call("branch_choose", { branch, confirmed }).then(
+              onChoose={(branch, confirmed, plugins) =>
+                rpc.call("branch_choose", { branch, confirmed, plugins }).then(
                   (answer) => {
                     refetch();
                     return answer.chosen === null ? answer.turnsOff : [];
@@ -488,6 +663,16 @@ export function SetupPage() {
                 step={step}
                 secretStore={setup.secretStore}
                 onMark={(mark) => void rpc.call("setup_mark", { id: step.id, mark }).then(() => refetch(), fail)}
+                onAccount={(login, password) =>
+                  rpc.call("account_set", { id: step.id, login, password, lang: pageLang }).then(
+                    () => refetch(),
+                    (cause) => {
+                      fail(cause);
+                      throw cause;
+                    },
+                  )
+                }
+                onForget={() => void rpc.call("account_clear", { id: step.id }).then(() => refetch(), fail)}
                 onSecret={(value) =>
                   rpc.call("secret_set", { name: step.target, value }).then(
                     () => refetch(),
@@ -519,10 +704,7 @@ export function SetupBanner() {
       <span className="min-w-0 flex-1">{t.left(setup.remaining)}</span>
       <Button
         size="sm"
-        onClick={() =>
-          // Without the entry this page load (the build had no steps before), only a reload brings the page.
-          entryRegistered ? navigate.toPluginPanel(SETUP_PANEL) : window.location.assign(`/plugins/fleet-kit/${SETUP_PANEL}`)
-        }
+        onClick={() => navigate.toPluginPanel("status", { subPath: SETUP_SUBPATH })}
       >
         {t.continue}
       </Button>

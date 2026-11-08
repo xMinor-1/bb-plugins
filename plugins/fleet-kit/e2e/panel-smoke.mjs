@@ -36,11 +36,14 @@ async function panelText(page, groupName) {
 // Buttons whose text overflows them, or that stick out past the panel or the window.
 async function overflowing(page) {
   return page.evaluate(() => {
-    const panel = document.querySelector("div.max-w-3xl");
-    const edge = Math.min(window.innerWidth, panel ? panel.getBoundingClientRect().right : window.innerWidth);
+    // The tabs and the page are each a div.max-w-3xl: a button is measured against its own.
     return [...document.querySelectorAll("div.max-w-3xl button")]
-      .filter((button) => button.scrollWidth > button.clientWidth + 1 || button.scrollHeight > button.clientHeight + 1
-        || button.getBoundingClientRect().right > edge + 1)
+      .filter((button) => {
+        const panel = button.closest("div.max-w-3xl");
+        const edge = Math.min(window.innerWidth, panel.getBoundingClientRect().right);
+        return button.scrollWidth > button.clientWidth + 1 || button.scrollHeight > button.clientHeight + 1
+          || button.getBoundingClientRect().right > edge + 1;
+      })
       .map((button) => button.innerText.trim());
   });
 }
@@ -54,17 +57,20 @@ try {
     if (message.type() === "error") errors.push(message.text());
   });
 
-  await page.goto(`${base}/plugins/fleet-kit/status`, { waitUntil: "networkidle" });
+  // The panel's root opens First run while setup steps are left; the build's status is its "sync" view.
+  await page.goto(`${base}/plugins/fleet-kit/status/sync`, { waitUntil: "networkidle" });
   // A fresh bb opens its first-run setup instead of the requested page; it
   // can render after the network is idle, so wait for either screen.
   const skip = page.getByText("Skip setup");
   await page.getByRole("button", { name: "Sync now" }).or(skip).first().waitFor({ timeout: 60_000 });
   if (await skip.isVisible()) {
     await skip.click();
-    await page.goto(`${base}/plugins/fleet-kit/status`, { waitUntil: "networkidle" });
+    // The panel's root opens First run while setup steps are left; the build's status is its "sync" view.
+  await page.goto(`${base}/plugins/fleet-kit/status/sync`, { waitUntil: "networkidle" });
   }
   await page.getByRole("button", { name: "Sync now" }).waitFor({ timeout: 60_000 });
   check("panel renders", true);
+  check("Build status tab selected", (await page.locator('[data-tab="status"]').getAttribute("aria-selected")) === "true");
   check("build shown", await visible(page.getByText("E2E build")));
   check("OpenCode version shown", await visible(page.getByText("2.2.5")));
   check("models line", await visible(page.getByText(/Models: only corp/)));

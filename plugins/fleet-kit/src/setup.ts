@@ -11,7 +11,8 @@
 // through Fleet Kit: the person types them in the plugin's own form.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import type { BranchSetup, Setup, SetupMark, SetupStep, SyncReport } from "../contract.js";
+import type { AccountStep, BranchSetup, InstallProgress, Setup, SetupMark, SetupStep, SyncReport } from "../contract.js";
+import { accountVersion, type AccountResults, type AccountValue } from "./account.js";
 import type { OnboardingStep } from "./manifest.js";
 import { branchDefault, chosenBranch, noBranchState, picked, pluginWanted, type Branches, type BranchState } from "./branches.js";
 
@@ -24,6 +25,8 @@ export interface StoredOnboarding {
   planned: string[];
   /** The build's branches; absent when it has none (or was saved by an older Fleet Kit). */
   branches?: Branches | null;
+  /** The name of each plugin the page shows; absent when saved by an older Fleet Kit. */
+  titles?: Record<string, string>;
 }
 
 export const SETUP_METHOD = "setupStatus";
@@ -162,6 +165,12 @@ export interface SetupDeps {
   lang: "en" | "ru";
   /** The person's choice and what the sync applied; known from the start of the first sync. */
   branchState?: BranchState;
+  /** What the running sync installs: a plugin waiting its turn reads as queued, not as installing. */
+  installs?: InstallProgress | null;
+  /** An account step's saved login and password (null: none) and what each plugin made of them. */
+  account?: (stepId: string) => Promise<{ value: AccountValue | null; results: AccountResults }>;
+  /** bb's primary host: where a plugin's sign-in window opens. */
+  hostId?: string | null;
 }
 
 /** The branch part of the page: what the build offers and what this machine gets. */
@@ -172,7 +181,12 @@ export function branchSetup(onboarding: StoredOnboarding, state: BranchState): B
   const planned = new Set(onboarding.planned);
   const wanted = (id: string) => pluginWanted(branches, state, id);
   return {
-    list: branches.list.map((entry) => ({ id: entry.id, title: entry.title, hint: entry.hint ?? null })),
+    list: branches.list.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      hint: entry.hint ?? null,
+      defaults: Object.fromEntries(branches.optional.filter((plugin) => !planned.has(plugin.id)).map((plugin) => [plugin.id, branchDefault(entry, plugin.id)])),
+    })),
     chosen: branch?.id ?? null,
     dropped: picked(state.choice) && branch === null,
     waiting: branches.optional.some((entry) => wanted(entry.id) === "wait"),
@@ -212,10 +226,12 @@ export async function collectSetup(deps: SetupDeps): Promise<Setup> {
   const state = deps.branchState ?? noBranchState();
   const branches = branchSetup(deps.onboarding, state);
   // A plugin left out of this machine's set has no step: it is not installed, or turned off, or waits for a branch.
+  // Nor has a plugin the build has not shipped yet: the branch card names it as coming in a later version.
   const shown = deps.onboarding.steps.filter(
-    (step) => step.plugin === undefined || pluginWanted(deps.onboarding!.branches ?? undefined, state, step.plugin) === "on",
+    (step) => step.plugin === undefined || (!planned.has(step.plugin) && pluginWanted(deps.onboarding!.branches ?? undefined, state, step.plugin) === "on"),
   );
-  const asksPlugins = shown.some((step) => step.plugin !== undefined && !planned.has(step.plugin));
+  const wantedHere = (plugin: string) => !planned.has(plugin) && pluginWanted(deps.onboarding!.branches ?? undefined, state, plugin) === "on";
+  const asksPlugins = shown.some((step) => (step.plugin !== undefined && !planned.has(step.plugin)) || step.account !== undefined);
   let installed: Map<string, { enabled: boolean }> | null = null;
   if (asksPlugins) {
     try {
@@ -229,6 +245,10 @@ export async function collectSetup(deps: SetupDeps): Promise<Setup> {
   const one = async (step: OnboardingStep): Promise<SetupStep> => {
     const mark = deps.marks[step.id] ?? null;
     const base = { id: step.id, title: step.title, hint: step.hint ?? null, optional: step.optional === true, mark, summary: null, reason: null, manual: false };
+    if (step.account !== undefined) {
+      const account = await accountStep(step, deps, installed, wantedHere);
+      return { ...base, kind: "account", target: step.id, state: accountState(account), path: null, account };
+    }
     if (step.secret !== undefined) {
       const set = await deps.secretSet(step.secret).catch(() => false);
       const hint = step.hint ?? deps.secrets.find((secret) => secret.name === step.secret)?.hint ?? null;
@@ -241,7 +261,9 @@ export async function collectSetup(deps: SetupDeps): Promise<Setup> {
     if (installed !== null && (entry === undefined || !entry.enabled)) {
       // The sync installs and enables required plugins; until then there is nothing to ask.
       const failed = deps.lastSync?.steps.some((s) => s.area === "plugin" && s.item === plugin && s.outcome === "error") === true;
-      return failed ? { ...own, state: "problem", reason: "install-failed" } : { ...own, state: "installing" };
+      if (failed) return { ...own, state: "problem", reason: "install-failed" };
+      const queued = deps.installs?.finishedAt === null && deps.installs.queue.some((item) => item.id === plugin);
+      return { ...own, state: queued ? "queued" : "installing" };
     }
     const answer = await deps.ask(plugin, deps.lang);
     if (answer === null) return { ...own, state: "checking" };
@@ -256,11 +278,72 @@ export async function collectSetup(deps: SetupDeps): Promise<Setup> {
   return { configured: true, manifestSet, steps, remaining, complete: remaining === 0, secretStore, branches };
 }
 
+const titleOf = (onboarding: StoredOnboarding, plugin: string) =>
+  onboarding.titles?.[plugin] ?? onboarding.branches?.optional.find((entry) => entry.id === plugin)?.title ?? plugin;
+
+async function accountStep(
+  step: OnboardingStep,
+  deps: SetupDeps,
+  installed: Map<string, { enabled: boolean }> | null,
+  wanted: (plugin: string) => boolean,
+): Promise<AccountStep> {
+  const block = step.account!;
+  const saved = (await deps.account?.(step.id).catch(() => null)) ?? { value: null, results: {} };
+  const version = saved.value === null ? null : accountVersion(saved.value);
+  const here = (plugin: string) => installed === null || installed.get(plugin)?.enabled === true;
+  const plugins = await Promise.all(
+    block.plugins
+      .filter((entry) => entry.enabled !== false && wanted(entry.plugin))
+      .map(async (entry): Promise<AccountStep["plugins"][number]> => {
+        const line = { id: entry.plugin, title: titleOf(deps.onboarding!, entry.plugin), summary: null, reason: null, path: null };
+        if (!here(entry.plugin)) return { ...line, state: "waiting" };
+        const answer = await deps.ask(entry.plugin, deps.lang);
+        const path = answer?.kind === "answer" ? answer.path : null;
+        // Signed in already, by this step or by the computer's own sign-in.
+        if (answer?.kind === "answer" && answer.state === "done") return { ...line, state: "done", summary: answer.summary, path };
+        const result = saved.results[entry.plugin];
+        if (version === null || result === undefined || result.version !== version) return { ...line, state: "todo", path };
+        if (result.rejected) return { ...line, state: "problem", summary: result.summary, reason: "rejected", path };
+        return { ...line, state: result.state, summary: result.summary, reason: result.reason ?? null, path };
+      }),
+  );
+  const windows = await Promise.all(
+    block.windows
+      .filter((entry) => wanted(entry.plugin))
+      .map(async (entry): Promise<AccountStep["windows"][number]> => {
+        const line = { id: entry.plugin, title: titleOf(deps.onboarding!, entry.plugin), hint: entry.hint ?? null, method: entry.method, summary: null, path: null };
+        if (!here(entry.plugin)) return { ...line, state: "waiting" };
+        const answer = await deps.ask(entry.plugin, deps.lang);
+        if (answer === null) return { ...line, state: "checking" };
+        if (answer.kind !== "answer") return { ...line, state: "todo" };
+        return { ...line, state: answer.state, summary: answer.summary, path: answer.path };
+      }),
+  );
+  return { saved: saved.value !== null, loginHint: block.loginHint ?? null, passwordHint: block.passwordHint ?? null, plugins, windows, hostId: deps.hostId ?? null };
+}
+
+/**
+ * The step is done once every plugin took the sign-in (a plugin with more to
+ * do, such as picking reports, says so on its own step) and every window
+ * sign-in is done. A plugin not installed yet keeps it open.
+ */
+export function accountState(account: AccountStep): SetupStep["state"] {
+  const lines = [...account.plugins, ...account.windows];
+  if (lines.some((line) => line.state === "problem")) return "problem";
+  const passwordLeft = account.plugins.some((line) => line.state === "todo" && line.summary === null);
+  if (!account.saved && passwordLeft) return "todo";
+  if (lines.some((line) => line.state === "waiting")) return "installing";
+  if (account.windows.some((line) => line.state === "todo" || line.state === "checking")) return "todo";
+  if (passwordLeft) return "checking";
+  return "done";
+}
+
 /** Why a mark is refused, or null. `answer`: what the step's plugin said last (null: not asked yet). */
 export function markProblem(step: OnboardingStep | undefined, mark: SetupMark | null, answer: PluginAnswer | null = null): string | null {
   if (step === undefined) return "The build has no such setup step.";
   if (mark === "skipped" && step.optional !== true) return "Only an optional step can be skipped.";
   if (mark === "done" && step.secret !== undefined) return "A secret step is done once the secret is saved.";
+  if (mark === "done" && step.account !== undefined) return "An account step is done once its plugins are signed in.";
   if (mark === "done" && answer?.kind !== "manual") {
     return answer?.kind === "answer"
       ? "This step's plugin reports its state itself."

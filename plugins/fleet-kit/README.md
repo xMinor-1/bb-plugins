@@ -29,12 +29,21 @@ brings bb to that description and keeps it there.
   the last sync changed, any errors, whether OpenCode is limited to the build's
   models, and a **Sync now** button. The panel is in English and Russian, with
   a switch in its header.
-- **First run**: a **First run** page lists the build's setup steps (the gateway
-  key, mail, reports and so on), each done or still to do, with a button to the
-  plugin's own page or the key's field right on the page. Until every step is
-  done or skipped, the sidebar entry shows how many are left and the Fleet Kit
-  page shows a reminder. A build without steps has no First run entry in the
-  sidebar. An installer can open bb on `/plugins/fleet-kit/setup`.
+- **First run**: the Fleet Kit entry has two views, **First run** and **Build
+  status**; until every step is done it opens on First run, and bb opens it by
+  itself once per launch from the new-thread screen. First run lists the
+  build's setup steps (the gateway key, a shared sign-in, reports and so on),
+  each done or still to do, with a button to the plugin's own page or the field
+  right on the page, and shows the plugins being installed: which one now,
+  which next, which are done and how long is left. Until every step is done or
+  skipped, the sidebar entry shows how many are left. Addresses:
+  `/plugins/fleet-kit/status/setup` and `/plugins/fleet-kit/status/sync`.
+- **Shared sign-in** (optional): one login and password for several plugins,
+  typed once, kept in the credential store and handed to each plugin in the
+  login form it wants. See [Shared sign-in](#shared-sign-in).
+- **Sidebar** (optional): the build can say which sidebar entries show and
+  which footer actions move into More on a new machine; a person's later change
+  stays.
 - **Branches** (optional): a build can offer sets of plugins — say, one for
   sales and one for engineering. The person picks a branch on the First run
   page, gets the plugins it recommends, can switch any optional plugin on or
@@ -213,8 +222,9 @@ a newer Fleet Kit can still deliver it.
   ignore the field with a warning.
 - `mcp`, `skills` — validated; this version does not apply them yet.
 - `onboarding` — the First run steps, in order: `id`, `title`, `hint`,
-  `optional`, and exactly one of `secret` (a name from `secrets`) or `plugin`
-  (an id from `plugins`). `path` (`/plugins/<id>/<panel>`) is where a plugin
+  `optional`, and exactly one of `secret` (a name from `secrets`), `plugin`
+  (an id from `plugins`) or `account` (a shared sign-in, see
+  [Shared sign-in](#shared-sign-in)). `path` (`/plugins/<id>/<panel>`) is where a plugin
   step's button leads when the plugin cannot report its state. A step that
   names an unknown secret or plugin, or repeats an id, is left out with a
   warning; the rest of the build still applies. Fleet Kit 0.2.x ignores the
@@ -229,6 +239,20 @@ a newer Fleet Kit can still deliver it.
   Fleet Kit itself is never optional. A name that is not in `plugins`, not in
   `optional` or not in `mcp` is left out with a warning. Fleet Kit 0.5.x and
   earlier ignore the block with a warning and install every plugin.
+
+- `plugins[].title`, `plugins[].installNote` — the name First run shows while
+  the plugin installs (else its branch or step title, else the id) and a line
+  next to it, such as the size of a large download. New plugins install one at
+  a time in the order of `plugins`: put a large one last.
+- `bb.ui` — the sidebar on a new machine: `visiblePluginPanels` (the entries
+  that show, `<pluginId>/<panel id>`, bb's own as `__bb__/new-thread`,
+  `__bb__/search-threads`, `__bb__/extensions`, `__bb__/skills`,
+  `__bb__/automations`), `pluginPanelOrder` (their order; bb shows any entry
+  missing from it as new whatever the visible list says, so list the hidden
+  ones too) and `hiddenFooterItems` (footer actions moved into More:
+  `builtin:report-bug`, `builtin:mobile`, `plugin:<pluginId>/<id>`). Fleet Kit
+  sets a value while bb still has its default or what Fleet Kit set last; a
+  value the person changed stays, and the sync says so.
 
 A manifest whose remote MCP server has no URL yet, or that names a pre-release
 bb, gets a warning.
@@ -661,12 +685,64 @@ not a manual step. One that is not installed or enabled yet shows as
 installing; one the manifest lists as `planned` shows as coming later and does
 not count. An optional step can be skipped.
 
-bb draws a sidebar entry for every registered page, so the First run entry is
-registered only when the build had steps the last time this browser looked;
-a build that gains or loses its steps changes the entry from the next page
-load, and until then the Fleet Kit entry shows the count. Passwords and
-tokens of plugins never pass through Fleet Kit: the person types them in the
-plugin's own form. **Start working** on the finished page opens a new thread.
+A plugin the manifest lists as `planned` has no step: the branch card names it
+in one line as coming in a later version.
+
+While a sync installs plugins, the page shows them: the one installing now,
+the queue, the ones done or failed, and minutes left from the average install
+so far. A plugin step waiting in the queue reads **In the queue**; only the one
+being installed spins.
+
+Picking a branch previews it: the switches show what it turns on and can be
+changed, and nothing installs until **Install**; the page then says that the
+install has started.
+
+Passwords and tokens of plugins pass through Fleet Kit only for a shared
+sign-in step; every other plugin takes them in its own form. **Start working**
+on the finished page opens a new thread.
+
+On launch, an app overlay opens First run once per browser session, only from
+the new-thread screen and only while steps are left; a person who has gone to a
+thread is left there.
+
+### Shared sign-in
+
+An `account` step asks for one login and password and signs several plugins in
+with them:
+
+```json
+{ "id": "account", "title": "Work account", "account": {
+  "loginHint": "Your work login",
+  "plugins": [
+    { "plugin": "mail", "login": "CORP\\{login}" },
+    { "plugin": "reports", "login": "{login}@corp.example" },
+    { "plugin": "crm", "login": "{login}", "enabled": false }
+  ],
+  "windows": [{ "plugin": "chat", "method": "signIn" }]
+} }
+```
+
+- `{login}` is what the person typed without a domain: `CORP\jdoe`,
+  `jdoe@corp.example` and `jdoe` all give `jdoe`.
+- The pair goes to the credential store (`account-<step id>`), then to each
+  plugin that is installed and not signed in already (its `setupStatus` is not
+  `done`): RPC `accountSignIn`, input `{ user, password, lang }`, output
+  `{ state, summary, path?, rejected? }`. The plugin lets Fleet Kit call it once
+  its `accountPlugins` setting names `fleet-kit` (set it in the plugin's
+  `config`). A plugin installed later gets the pair after the sync that
+  installs it.
+- `rejected: true` (the service refused the login or password): Fleet Kit does
+  not send the same pair to that plugin again until the person types a new one,
+  so a wrong password does not lock the account. A plugin that did not answer
+  is tried again on the next syncs, three times in all.
+- `enabled: false` lists a plugin without handing it the pair: it keeps its own
+  step and form.
+- `windows`: plugins that sign in in their own window. The step has a **Sign
+  in** button that calls the plugin's `method` with `{ hostId }` (bb's primary
+  machine) from the page.
+- The step is done when every plugin took the sign-in (one with more to do,
+  such as picking reports, says so on its own step) and every window sign-in is
+  done.
 
 ## Known limits
 
@@ -766,6 +842,25 @@ docker exec -u root fleet-kit-e2e bash -c 'apt-get update -qq && apt-get install
 e2e/x.sh 'mkdir -p ~/pw && cd ~/pw && npm init -y >/dev/null && npm install playwright-core@1'
 docker cp e2e/panel-smoke.mjs fleet-kit-e2e:/home/tester/pw/panel-smoke.mjs
 e2e/x.sh 'node ~/pw/panel-smoke.mjs'
+```
+
+`e2e/first-run.mjs` checks the First run page on a bb that has had no build
+yet, so start a new container for it, not the one `scenario.sh` ran in. It
+installs Fleet Kit itself and points it at `~/build/first-run.json`, a build
+with a shared sign-in step, two branches, two optional plugins whose download
+is slow (about 20 seconds each, `FK_E2E_SLOW_MS`), a planned plugin and the
+build's sidebar (`bb.ui`). It checks the single sidebar entry, First run
+opening once per launch from the new-thread screen, the branch preview and
+Install, the install queue, the login handed to a fixture plugin in its
+format, the sidebar set once and kept after a change by hand, buttons at 400,
+900 and 1280 px, and console errors.
+
+```sh
+e2e/run.sh
+docker exec -u root fleet-kit-e2e bash -c 'apt-get update -qq && apt-get install -y -qq chromium'
+e2e/x.sh 'mkdir -p ~/pw && cd ~/pw && npm init -y >/dev/null && npm install playwright-core@1'
+docker cp e2e/first-run.mjs fleet-kit-e2e:/home/tester/pw/first-run.mjs
+e2e/x.sh 'node ~/pw/first-run.mjs'
 ```
 
 `apps` on real machines: the workflow `.github/workflows/fleet-kit-apps.yml` (on a

@@ -12,7 +12,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
-import type { Notice, OpenCodeStatus, Step, SyncReport } from "../contract.js";
+import type { InstallProgress, Notice, OpenCodeStatus, Step, SyncReport } from "../contract.js";
+import { InstallTracker } from "./install-progress.js";
 import { say, type Said } from "./shared/texts.js";
 import {
   AI_TASKS,
@@ -125,6 +126,8 @@ export interface ManagedState {
   appFailures?: Record<string, { version: string; count: number; at: number }>;
   /** The branding an earlier sync saved: a plugin it replaces is removed only once the page has had it. */
   branding?: string | null;
+  /** Each sidebar preference as Fleet Kit last set it: a value the person changed since is theirs. */
+  ui?: Record<string, string>;
 }
 
 /** After this many failures in a row: only the odd scheduled try, or a sync the person asks for. */
@@ -173,6 +176,8 @@ export interface SyncDeps {
    * meanwhile, and the First run page already knows whether this machine waits for a branch.
    */
   onManifest?: ((manifest: Manifest, branches: BranchState) => Promise<void>) | undefined;
+  /** Called as each plugin of a first install starts and ends: the First run page shows which one is installing. */
+  onInstalls?: ((progress: InstallProgress) => void) | undefined;
   /** The person's branch and plugin switches; null before a choice. */
   choice?: BranchChoice | null;
   /** The person's "Own agents" switch; null or off keeps only the build's agents. */
@@ -268,6 +273,7 @@ function loadManaged(saved: ManagedState): ManagedState {
     branchStart: copy.branchStart ?? null,
     branchApplied: copy.branchApplied ?? {},
     branding: copy.branding ?? null,
+    ui: copy.ui ?? {},
     appFailures: copy.appFailures ?? {},
   };
 }
@@ -378,6 +384,7 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
 
   // --------------------------------------------------------- bb settings
   await applyBbSettings(deps, manifest, steps);
+  await applyUi(deps, manifest, managed, steps);
 
   // ---------------------------------------------- first, what limits agents
   // Before anything takes minutes: no cloud AI service, no other agent and no outside model while the plugins install.
@@ -535,6 +542,59 @@ async function applyBbSettings(deps: SyncDeps, manifest: Manifest, steps: Steps)
   }
 }
 
+// The order first: bb counts an entry missing from it as new, and shows it whatever the visible list says.
+const UI_KEYS = {
+  pluginPanelOrder: "sidebar.pluginPanelOrder",
+  visiblePluginPanels: "sidebar.visiblePluginPanels",
+  hiddenFooterItems: "sidebar.hiddenFooterItems",
+} as const;
+
+/**
+ * The build's sidebar. Set when bb still has what Fleet Kit set last (or bb's
+ * default, before the first time); a value the person changed since stays,
+ * like their branch switches.
+ */
+async function applyUi(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps) {
+  const wanted = manifest.bb.ui ?? {};
+  const keys = (Object.keys(UI_KEYS) as Array<keyof typeof UI_KEYS>).filter((key) => wanted[key] !== undefined);
+  if (keys.length === 0) return;
+  const area = (deps.sdk.system as { uiPreferences?: Sdk["system"]["uiPreferences"] }).uiPreferences;
+  if (area === undefined) {
+    steps.add("bb", "sidebar", "warning", say("uiUnsupported"));
+    return;
+  }
+  managed.ui ??= {};
+  try {
+    const current = (await within(area.list(), CALL_MS, "Reading bb's sidebar")) as unknown as { preferences: Record<string, { revision: number; value: unknown }> };
+    for (const key of keys) {
+      const prefKey = UI_KEYS[key];
+      const entry = current.preferences?.[prefKey];
+      const value = JSON.stringify(wanted[key]);
+      const now = JSON.stringify(entry?.value ?? null);
+      const last = managed.ui[prefKey];
+      if (now === value) {
+        managed.ui[prefKey] = value;
+        continue;
+      }
+      // Changed by the person after Fleet Kit set it: theirs. Before the first time, only bb's untouched default counts as free.
+      const untouched = last !== undefined ? now === last : (entry?.revision ?? 0) === 0;
+      if (!untouched) {
+        steps.add("bb", prefKey, "skipped", say("uiKept"));
+        continue;
+      }
+      await within(
+        area.set({ key: prefKey, value: wanted[key], expectedRevision: entry?.revision ?? 0 } as Parameters<typeof area.set>[0]),
+        CALL_MS,
+        "Saving bb's sidebar",
+      );
+      managed.ui[prefKey] = value;
+      steps.add("bb", prefKey, "changed", say("uiSet"));
+    }
+  } catch (error) {
+    steps.add("bb", "sidebar", "error", errorText(error));
+  }
+}
+
 async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, notices: Notice[], trigger: SyncReport["trigger"]): Promise<void> {
   const { sdk } = deps;
   const byId = new Map<string, Installed>((await within(sdk.plugins.list(), CALL_MS, "Listing plugins")).plugins.map((plugin) => [plugin.id, plugin]));
@@ -550,32 +610,49 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
     }
   };
 
-  for (const entry of manifest.plugins) {
-    deps.signal.throwIfAborted();
-    await appsBefore(entry.id);
-    if (entry.id === SELF_ID) continue; // handled first, from the raw manifest
-    if (entry.status === "planned") {
-      steps.add("plugin", entry.id, "skipped", say("pluginPlanned"));
-      continue;
-    }
-    const wanted = wantedHere(deps, manifest, managed, entry.id);
-    if (wanted === "off") {
-      try {
-        await turnOff(deps, entry.id, byId, steps);
-      } catch (error) {
-        steps.add("plugin", entry.id, "error", say("pluginTurnOffFailed", { error: errorText(error) }));
+  // Plugins this bb does not have yet install one at a time, in the manifest's order; the page shows the queue.
+  const toInstall = manifest.plugins
+    .filter((entry) => entry.id !== SELF_ID && entry.status !== "planned" && !byId.has(entry.id) && wantedHere(deps, manifest, managed, entry.id) === "on")
+    .map((entry) => entry.id);
+  const tracker = toInstall.length > 0 && deps.onInstalls !== undefined ? new InstallTracker(manifest, toInstall, deps.onInstalls, deps.now) : null;
+
+  try {
+    for (const entry of manifest.plugins) {
+      deps.signal.throwIfAborted();
+      await appsBefore(entry.id);
+      if (entry.id === SELF_ID) continue; // handled first, from the raw manifest
+      if (entry.status === "planned") {
+        steps.add("plugin", entry.id, "skipped", say("pluginPlanned"));
+        continue;
       }
-      continue;
+      const wanted = wantedHere(deps, manifest, managed, entry.id);
+      if (wanted === "off") {
+        try {
+          await turnOff(deps, entry.id, byId, steps);
+        } catch (error) {
+          steps.add("plugin", entry.id, "error", say("pluginTurnOffFailed", { error: errorText(error) }));
+        }
+        continue;
+      }
+      if (wanted === "wait" && !byId.has(entry.id)) {
+        steps.add("plugin", entry.id, "skipped", say("pluginAwaitsChoice"));
+        continue;
+      }
+      const tracked = tracker?.has(entry.id) === true;
+      if (tracked) tracker!.start(entry.id);
+      const before = steps.list.length;
+      try {
+        await syncOnePlugin(deps, manifest, managed, entry, byId, steps, notices);
+      } catch (error) {
+        steps.add("plugin", entry.id, "error", errorText(error));
+      }
+      if (tracked) {
+        const own = steps.list.slice(before).filter((step) => step.area === "plugin" && step.item === entry.id);
+        tracker!.finish(entry.id, own.some((step) => step.code === "installed") && !own.some((step) => step.outcome === "error"));
+      }
     }
-    if (wanted === "wait" && !byId.has(entry.id)) {
-      steps.add("plugin", entry.id, "skipped", say("pluginAwaitsChoice"));
-      continue;
-    }
-    try {
-      await syncOnePlugin(deps, manifest, managed, entry, byId, steps, notices);
-    } catch (error) {
-      steps.add("plugin", entry.id, "error", errorText(error));
-    }
+  } finally {
+    tracker?.close();
   }
   await appsBefore(null);
 

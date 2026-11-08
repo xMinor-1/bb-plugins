@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InstallOutcome } from "../src/host/install-opencode.js";
+import type { InstallProgress } from "../contract.js";
 import { emptyManaged, runSync, type ManagedState, type SyncDeps } from "../src/sync.js";
 import { consentKey } from "../src/own-agents.js";
 import { openFileSecretStore } from "../src/secret-store.js";
@@ -57,8 +58,22 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
   const view = (plugin: FakePlugin) => ({ id: plugin.id, source: plugin.source, version: plugin.version, enabled: plugin.enabled, provenance: plugin.provenance ?? "direct" });
   const schemaFor = (id: string): FakePlugin["schema"] =>
     id === "notes" ? { greeting: { type: "string" }, token: { type: "string", secret: true }, allowedProviders: { type: "string" }, officePath: { type: "string" } } : {};
+  const ui: Record<string, { revision: number; value: unknown }> = {
+    "sidebar.visiblePluginPanels": { revision: 0, value: null },
+    "sidebar.hiddenFooterItems": { revision: 0, value: [] },
+    "sidebar.pluginPanelOrder": { revision: 0, value: [] },
+  };
   const sdk = {
     system: {
+      uiPreferences: {
+        list: async () => clone({ preferences: ui }),
+        set: async ({ key, value, expectedRevision }: { key: string; value: unknown; expectedRevision: number }) => {
+          if (ui[key]!.revision !== expectedRevision) throw new Error("revision conflict");
+          calls.push(`ui ${key}`);
+          ui[key] = { revision: expectedRevision + 1, value };
+          return clone({ key, ...ui[key]! });
+        },
+      },
       version: async () => ({ currentVersion: "0.48.1" }),
       aiServices: async () => clone({ selections: ai.selections, services: ai.services }),
       setAiServiceSelection: async ({ task, selection }: { task: string; selection: Selection }) => {
@@ -166,7 +181,7 @@ function fakeSdk(initial: FakePlugin[], general: Record<string, unknown> = { tel
       },
     },
   };
-  return { sdk, plugins, calls, general, installs, slow, updateJobs, jobs, ai, agents };
+  return { sdk, plugins, calls, general, installs, slow, updateJobs, jobs, ai, agents, ui };
 }
 
 const dirs: string[] = [];
@@ -223,6 +238,69 @@ describe("sync", () => {
     expect(kinds).toContain("opencode:OpenCode:warning");
     expect(outcome.report.build).toEqual({ name: "Example build", version: "1.2.0" });
     expect(outcome.selfUpdate).toBe(false);
+  });
+
+  it("installs new plugins one at a time in the manifest's order and tells the page which one is installing", async () => {
+    const manifest = sampleManifest() as { plugins: Array<Record<string, unknown>> };
+    manifest.plugins.push(
+      { id: "broken", source: "git:https://git.example.test/plugins.git@semver:broken/:^1.0.0", plugin: "broken", status: "required" },
+      { id: "reports", source: "git:https://git.example.test/plugins.git@semver:reports/:^1.0.0", plugin: "reports", status: "required", title: "Reports", installNote: "About 550 MB" },
+    );
+    const { deps } = await setup(manifest, [self()]);
+    const seen: InstallProgress[] = [];
+    deps.onInstalls = (progress) => seen.push(progress);
+    await runSync(deps, "start");
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toMatchObject({ current: null, done: [], finishedAt: null });
+    expect(seen[0]!.queue.map((item) => item.id)).toEqual(["notes", "broken", "reports"]);
+    const installing = seen.filter((progress) => progress.current !== null).map((progress) => progress.current!.id);
+    expect(installing).toEqual(["notes", "broken", "reports"]);
+    expect(seen.find((progress) => progress.current?.id === "reports")!.current).toMatchObject({ title: "Reports", note: "About 550 MB" });
+    const last = seen.at(-1)!;
+    expect(last.finishedAt).not.toBeNull();
+    expect(last.done.map((item) => [item.id, item.ok])).toEqual([["notes", true], ["broken", false], ["reports", true]]);
+    expect(last.averageSeconds).not.toBeNull();
+  });
+
+  it("reports no install progress when every plugin is already there", async () => {
+    const { deps } = await setup(sampleManifest(), [self(), notes()]);
+    const seen: InstallProgress[] = [];
+    deps.onInstalls = (progress) => seen.push(progress);
+    await runSync(deps, "start");
+    expect(seen).toEqual([]);
+  });
+
+  it("sets the build's sidebar once and keeps a change the person made after it", async () => {
+    const manifest = sampleManifest() as { bb: Record<string, unknown> };
+    manifest.bb.ui = {
+      visiblePluginPanels: ["fleet-kit/fleet-kit", "__bb__/new-thread"],
+      pluginPanelOrder: ["__bb__/new-thread", "fleet-kit/fleet-kit", "__bb__/extensions"],
+      hiddenFooterItems: ["builtin:report-bug"],
+    };
+    const { deps, calls, ui } = await setup(manifest, [self()]);
+    const first = await runSync(deps, "start");
+    expect(callsOf(calls, "ui ")).toEqual(["ui sidebar.pluginPanelOrder", "ui sidebar.visiblePluginPanels", "ui sidebar.hiddenFooterItems"]);
+    expect(ui["sidebar.visiblePluginPanels"]!.value).toEqual(["fleet-kit/fleet-kit", "__bb__/new-thread"]);
+    // The person shows bb's Plugins entry again.
+    ui["sidebar.visiblePluginPanels"] = { revision: 2, value: ["fleet-kit/fleet-kit", "__bb__/new-thread", "__bb__/extensions"] };
+    calls.length = 0;
+    const second = await runSync({ ...deps, managed: first.managed }, "schedule");
+    expect(callsOf(calls, "ui ")).toEqual([]);
+    expect(second.report.steps.some((step) => step.item === "sidebar.visiblePluginPanels" && step.outcome === "skipped")).toBe(true);
+    // A new build list reaches the key the person left alone.
+    (manifest.bb.ui as Record<string, unknown>).hiddenFooterItems = ["builtin:report-bug", "builtin:mobile"];
+    await writeFile(deps.settings.manifestUrl, JSON.stringify(manifest));
+    await runSync({ ...deps, managed: second.managed }, "schedule");
+    expect(callsOf(calls, "ui ")).toEqual(["ui sidebar.hiddenFooterItems"]);
+  });
+
+  it("leaves a sidebar the person had set before Fleet Kit came", async () => {
+    const manifest = sampleManifest() as { bb: Record<string, unknown> };
+    manifest.bb.ui = { hiddenFooterItems: ["builtin:report-bug"] };
+    const { deps, calls, ui } = await setup(manifest, [self()]);
+    ui["sidebar.hiddenFooterItems"] = { revision: 3, value: ["builtin:mobile"] };
+    await runSync(deps, "start");
+    expect(callsOf(calls, "ui ")).toEqual([]);
   });
 
   it("is quiet on a second pass and applies an update the source offers", async () => {

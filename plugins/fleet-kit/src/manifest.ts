@@ -35,6 +35,10 @@ const pluginShape = {
   config: z.record(z.string().regex(/^[A-Za-z][A-Za-z0-9]*$/), scalar).optional(),
   status: z.enum(["required", "planned"]),
   note: z.string().optional(),
+  /** The name the First run page shows while the plugin installs; else its branch or step title, else the id. */
+  title: z.string().min(1).max(80).optional(),
+  /** Shown next to the plugin while it waits and installs, such as how large its download is. */
+  installNote: z.string().min(1).max(200).optional(),
 };
 
 const pluginEntry = z
@@ -65,6 +69,46 @@ const mcpEntry = z
   .strict();
 
 /**
+ * One sign-in for several plugins: the page asks for the login and password
+ * once, keeps them in the credential store and hands each plugin its own
+ * form of the login (`{login}` is what the person typed, without a domain
+ * before a backslash or after an @). A `windows` plugin signs in in its own
+ * window: the step has a button that opens it.
+ */
+const accountBlock = z
+  .object({
+    loginHint: z.string().min(1).max(300).optional(),
+    passwordHint: z.string().min(1).max(300).optional(),
+    plugins: z
+      .array(
+        z
+          .object({
+            plugin: id,
+            /** The login as this plugin wants it, such as "{login}", "DOMAIN\\{login}" or "{login}@example.com". */
+            login: z.string().regex(/\{login\}/, "use {login} where the person's login goes").max(200),
+            /** False: listed, but the shared sign-in is not handed to it (its own form stays). */
+            enabled: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .default([]),
+    windows: z
+      .array(
+        z
+          .object({
+            plugin: id,
+            /** The plugin's RPC that opens its sign-in window; it takes `{ hostId }`. */
+            method: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/).default("signIn"),
+            hint: z.string().min(1).max(300).optional(),
+          })
+          .strict(),
+      )
+      .default([]),
+  })
+  .strict();
+export type AccountBlock = z.infer<typeof accountBlock>;
+
+/**
  * A step of the "First run" page: a build secret the page asks for itself, or
  * a plugin the page asks for its state (RPC `setupStatus`). `path` is where the
  * step's button leads when the plugin cannot say.
@@ -77,6 +121,7 @@ const onboardingStep = z
     optional: z.boolean().optional(),
     secret: id.optional(),
     plugin: id.optional(),
+    account: accountBlock.optional(),
     path: z
       .string()
       .regex(/^\/plugins\/[a-z0-9][a-z0-9-]*(\/[A-Za-z0-9._~-]+)*$/, "use a bb page such as /plugins/<id>/<panel>")
@@ -84,8 +129,11 @@ const onboardingStep = z
   })
   .strict()
   .superRefine((step, ctx) => {
-    if ((step.secret === undefined) === (step.plugin === undefined)) {
-      ctx.addIssue({ code: "custom", message: "name exactly one of secret and plugin" });
+    if ([step.secret, step.plugin, step.account].filter((value) => value !== undefined).length !== 1) {
+      ctx.addIssue({ code: "custom", message: "name exactly one of secret, plugin and account" });
+    }
+    if (step.account !== undefined && step.path !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["path"], message: "an account step is done on the First run page itself" });
     }
     if (step.secret !== undefined && step.path !== undefined) {
       ctx.addIssue({ code: "custom", path: ["path"], message: "a secret step is done on the First run page itself" });
@@ -268,6 +316,20 @@ const rootShape = {
     .object({
       minVersion: exactVersion,
       settings: z.record(z.string().regex(/^[a-z][A-Za-z0-9]*$/), scalar).optional(),
+      /**
+       * bb's sidebar as the build wants it on a new machine: which entries
+       * show (`<pluginId>/<panel id>`, bb's own as `__bb__/<id>`) and which
+       * footer actions move into More. Set once; a person's later change stays.
+       */
+      ui: z
+        .object({
+          visiblePluginPanels: z.array(z.string().regex(/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/, "use <pluginId>/<panel id>")).optional(),
+          /** bb shows every entry missing from this order, whatever visiblePluginPanels says: list the hidden ones here too. */
+          pluginPanelOrder: z.array(z.string().regex(/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/, "use <pluginId>/<panel id>")).optional(),
+          hiddenFooterItems: z.array(z.string().regex(/^(builtin:[a-z0-9-]+|plugin:[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+)$/, "use builtin:<id> or plugin:<pluginId>/<id>")).optional(),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
   marketplaces: z
@@ -656,6 +718,13 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
           : step.plugin !== undefined && !ids.has(step.plugin)
             ? `refers to the plugin "${step.plugin}", which is not in plugins`
             : null;
+      if (problem === null && step.account !== undefined) {
+        // A plugin the build does not list is dropped from the step, not the step itself.
+        const unknown = [...step.account.plugins, ...step.account.windows].map((entry) => entry.plugin).filter((plugin) => !ids.has(plugin));
+        for (const plugin of unknown) warnings.push(`onboarding.${step.id}: refers to the plugin "${plugin}", which is not in plugins; it is left out`);
+        step.account.plugins = step.account.plugins.filter((entry) => ids.has(entry.plugin));
+        step.account.windows = step.account.windows.filter((entry) => ids.has(entry.plugin));
+      }
       seen.add(step.id);
       if (problem !== null) warnings.push(`onboarding.${step.id}: ${problem}; the step is not shown`);
       return problem === null;
