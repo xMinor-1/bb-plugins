@@ -10,7 +10,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, normalize } from "node:path";
+import { dirname, join, normalize } from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { InstallProgress, Notice, OpenCodeStatus, Step, SyncReport } from "../contract.js";
 import { InstallTracker } from "./install-progress.js";
@@ -26,6 +26,7 @@ import {
   type AiChoice,
   type AiTask,
   type Manifest,
+  type ManifestApp,
   type ManifestPlugin,
 } from "./manifest.js";
 import { keptAgents, type OwnAgentsChoice } from "./own-agents.js";
@@ -41,6 +42,7 @@ import { readSystemPolicy } from "./host/system-policy.js";
 import { lockState } from "./host/lock-state.js";
 import { findOpenCode } from "./host/find-opencode.js";
 import { ensureOpenCode, openCodeProgram, setProgramMessage, unblockProgram, type InstallOutcome, type OpenCodeFile } from "./host/install-opencode.js";
+import { ensureApp, type AppInstallDeps, type AppOutcome } from "./host/install-app.js";
 import { ACP_PROVIDER_PLUGIN, agentEntry, agentRuntime, backupAgents, mergeAgents, writeShim, type AgentRuntime } from "./host/acp-agent.js";
 
 export { SELF_ID };
@@ -54,6 +56,8 @@ export interface FleetKitSettings {
   opencodeConfigDir: string;
   /** Fleet Kit installs OpenCode here and registers it as bb's agent. Empty: it only looks for an OpenCode on PATH. */
   opencodeInstallDir?: string | undefined;
+  /** Programs plugins need go here, one folder each. Empty: next to the OpenCode folder, or nowhere without one. */
+  appsInstallDir?: string | undefined;
   /** Set by hand on a test machine: path:, npm: and local git sources, loopback gateways. */
   allowDevSources: boolean;
   paused: boolean;
@@ -118,6 +122,8 @@ export interface ManagedState {
   branchStart?: BranchStart | null;
   /** The optional plugins as the last sync under an existing branch left them: a dropped branch keeps them so. */
   branchApplied?: Record<string, boolean>;
+  /** Failed downloads of a program (`apps`) in a row, by app id: a broken link is not fetched on every sync. */
+  appFailures?: Record<string, { version: string; count: number; at: number }>;
   /** The branding an earlier sync saved: a plugin it replaces is removed only once the page has had it. */
   branding?: string | null;
   /** Each sidebar preference as Fleet Kit last set it: a value the person changed since is theirs. */
@@ -184,6 +190,10 @@ export interface SyncDeps {
   agentRuntime?: AgentRuntime;
   /** For tests: how long to wait for one install. */
   installMs?: number;
+  /** For tests. */
+  ensureApp?: (deps: AppInstallDeps) => Promise<AppOutcome>;
+  /** For tests: the machine's <platform>-<arch>. */
+  machine?: string;
 }
 
 export interface SyncOutcome {
@@ -264,6 +274,7 @@ function loadManaged(saved: ManagedState): ManagedState {
     branchApplied: copy.branchApplied ?? {},
     branding: copy.branding ?? null,
     ui: copy.ui ?? {},
+    appFailures: copy.appFailures ?? {},
   };
 }
 
@@ -400,7 +411,7 @@ export async function runSync(deps: SyncDeps, trigger: SyncReport["trigger"]): P
 
   // ------------------------------------------------------------- plugins
   try {
-    await syncPlugins(deps, manifest, managed, steps, notices);
+    await syncPlugins(deps, manifest, managed, steps, notices, trigger);
   } catch (error) {
     steps.add("plugin", "plugins", "error", errorText(error));
   }
@@ -584,9 +595,20 @@ async function applyUi(deps: SyncDeps, manifest: Manifest, managed: ManagedState
   }
 }
 
-async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, notices: Notice[]): Promise<void> {
+async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedState, steps: Steps, notices: Notice[], trigger: SyncReport["trigger"]): Promise<void> {
   const { sdk } = deps;
   const byId = new Map<string, Installed>((await within(sdk.plugins.list(), CALL_MS, "Listing plugins")).plugins.map((plugin) => [plugin.id, plugin]));
+  const apps = [...(manifest.apps ?? [])];
+  const appsBefore = async (id: string | null) => {
+    for (const app of apps.filter((one) => id === null || one.before === id)) {
+      apps.splice(apps.indexOf(app), 1);
+      try {
+        await syncApp(deps, manifest, managed, app, steps, trigger);
+      } catch (error) {
+        steps.add("app", app.title, "error", say("appFailed", { detail: errorText(error) }));
+      }
+    }
+  };
 
   // Plugins this bb does not have yet install one at a time, in the manifest's order; the page shows the queue.
   const toInstall = manifest.plugins
@@ -597,6 +619,7 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
   try {
     for (const entry of manifest.plugins) {
       deps.signal.throwIfAborted();
+      await appsBefore(entry.id);
       if (entry.id === SELF_ID) continue; // handled first, from the raw manifest
       if (entry.status === "planned") {
         steps.add("plugin", entry.id, "skipped", say("pluginPlanned"));
@@ -631,6 +654,7 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
   } finally {
     tracker?.close();
   }
+  await appsBefore(null);
 
   // Removal is explicit only: a plugin missing from the manifest stays, so a
   // short or broken manifest cannot strip every machine of its plugins.
@@ -685,6 +709,72 @@ async function syncPlugins(deps: SyncDeps, manifest: Manifest, managed: ManagedS
       steps.add("plugin", id, "error", say("pluginRemoveFailed", { error: errorText(error) }));
     }
   }
+}
+
+/** Where programs go: the setting, else a folder next to the OpenCode Fleet Kit installs. */
+export function appsRoot(settings: FleetKitSettings): string {
+  const own = settings.appsInstallDir ?? "";
+  if (own !== "") return own;
+  const opencode = settings.opencodeInstallDir ?? "";
+  return opencode === "" ? "" : join(dirname(opencode), "apps");
+}
+
+/**
+ * A program a plugin needs: installed while the plugin is on here, then its path goes to the plugin's setting. A
+ * program the plugin no longer gets stays on disk, as a turned-off plugin keeps its data.
+ */
+async function syncApp(deps: SyncDeps, manifest: Manifest, managed: ManagedState, app: ManifestApp, steps: Steps, trigger: SyncReport["trigger"]) {
+  if (wantedHere(deps, manifest, managed, app.plugin) !== "on") {
+    steps.add("app", app.title, "skipped", say("appPluginOff", { plugin: app.plugin }));
+    return;
+  }
+  const installed = await listedNow(deps, app.plugin);
+  if (installed === undefined || installed === null || !installed.enabled) {
+    steps.add("app", app.title, "skipped", say("appPluginMissing", { plugin: app.plugin }));
+    return;
+  }
+  const machine = deps.machine ?? `${process.platform}-${process.arch}`;
+  const file = app.files[machine];
+  if (file === undefined) {
+    steps.add("app", app.title, "skipped", say("appNotForMachine", { machine }));
+    return;
+  }
+  const root = appsRoot(deps.settings);
+  if (root === "") {
+    steps.add("app", app.title, "warning", say("appNoFolder"));
+    return;
+  }
+  const failures = (managed.appFailures ??= {});
+  const now = (deps.now ?? Date.now)();
+  const before = failures[app.id]?.version === app.version ? failures[app.id]! : null;
+  const mayDownload = trigger === "manual" || before === null || before.count < OPENCODE_MAX_FAILURES || now - before.at >= OPENCODE_PAUSE_MS;
+  const install = deps.ensureApp ?? ensureApp;
+  const outcome = await install({ directory: join(root, app.id), version: app.version, file: file as AppInstallDeps["file"], signal: deps.signal, mayDownload });
+  if (outcome.state === "failed") {
+    if (outcome.reason !== "paused") failures[app.id] = nextFailures(before, app.version, trigger, now);
+    const said =
+      outcome.reason === "paused"
+        ? say("appPaused")
+        : outcome.reason === "integrity"
+          ? say("appIntegrity")
+          : say("appFailed", { detail: outcome.detail });
+    steps.add("app", app.title, "error", said);
+    return;
+  }
+  delete failures[app.id];
+  const settings = await within(deps.sdk.plugins.getSettings({ pluginId: app.plugin, signal: deps.signal }), CALL_MS, "Reading its settings");
+  const schema = (settings.schema ?? {}) as Record<string, { secret?: boolean }>;
+  if (schema[app.setting] === undefined || schema[app.setting]!.secret) {
+    steps.add("app", app.title, "warning", say("noSuchSetting", { key: app.setting }));
+    return;
+  }
+  const settingChanged = settings.values?.[app.setting] !== outcome.path;
+  if (settingChanged) {
+    await within(deps.sdk.plugins.updateSettings({ pluginId: app.plugin, values: { [app.setting]: outcome.path } }), CALL_MS, "Saving its settings");
+  }
+  if (outcome.state === "installed") steps.add("app", app.title, "changed", say("appInstalled", { version: app.version }));
+  else if (settingChanged) steps.add("app", app.title, "changed", say("appPathSet", { plugin: app.plugin }));
+  else steps.add("app", app.title, "ok", say("upToDate", { version: app.version }));
 }
 
 export function branchState(deps: Pick<SyncDeps, "choice">, managed: Pick<ManagedState, "branchStart" | "branchApplied">): BranchState {

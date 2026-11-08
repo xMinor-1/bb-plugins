@@ -76,6 +76,7 @@ does nothing.
 | `manifestToken` | Secret. Sent as `Authorization: Bearer` when fetching an `https://` manifest. |
 | `syncIntervalMinutes` | 5 to 1440, default 30. |
 | `opencodeInstallDir` | Where Fleet Kit installs OpenCode. Empty: it installs nothing and uses the OpenCode found on PATH. See [Installing OpenCode](#installing-opencode). |
+| `appsInstallDir` | Where Fleet Kit puts programs plugins need (`apps` in the manifest). Empty: an `apps` folder next to `opencodeInstallDir`; with that empty too, no program is installed. See [Programs plugins need](#programs-plugins-need). |
 | `opencodeConfigDir` | Keep this bb's OpenCode configuration in its own directory (see [A separate OpenCode directory](#a-separate-opencode-directory)). Empty: OpenCode's default, or `OPENCODE_CONFIG_DIR` if bb runs with it. |
 | `secretStore` | `auto` (the OS credential store) or `file` (a 0600 file). |
 | `paused` | Stop syncing. |
@@ -191,6 +192,8 @@ a newer Fleet Kit can still deliver it.
   settings are left to the person. `planned` entries are shown and skipped.
   Fleet Kit itself must be listed as `required`, and updates itself only from a
   source pinned with `@semver:` or `@ref:`.
+- `apps` — programs plugins need on the machine, such as an office suite a
+  document viewer converts files with. See [Programs plugins need](#programs-plugins-need).
 - `removePlugins` — the only way to remove a plugin. A plugin dropped from
   `plugins` stays installed; Fleet Kit never removes plugins bundled with bb.
 - `secrets` — every `{secret:name}` the manifest uses must be declared here.
@@ -542,6 +545,52 @@ system refuses to run the program (a policy, an antivirus, access rights), the s
 reports an error with the program's path and a text for an IT request, and tries
 no other way of starting it.
 
+### Programs plugins need
+
+Some plugins call a program on the machine. `apps` lets the build deliver it
+without the person's administrator rights or an installer:
+
+```json
+"apps": [
+  {
+    "id": "office",
+    "title": "Office suite",
+    "version": "26.8.2",
+    "plugin": "doc-viewer",
+    "setting": "officePath",
+    "before": "voice",
+    "files": {
+      "darwin-arm64": { "format": "dmg", "parts": [{ "url": "https://files.example.com/office.dmg.part-aa", "sha256": "…" }], "sha256": "…", "program": "Office.app/Contents/MacOS/office" },
+      "win32-x64": { "format": "zip", "parts": [{ "url": "https://files.example.com/office.zip.part-aa", "sha256": "…" }], "sha256": "…", "program": "Office/program/office.exe" }
+    }
+  }
+]
+```
+
+- Installed only while `plugin` is on here: a branch that leaves the plugin out
+  leaves the program out too. A program already on disk stays when the plugin is
+  turned off, as the plugin keeps its data.
+- Order: just before the plugin named in `before`, after every plugin listed
+  ahead of it; without `before`, after all plugins. A large program can so wait
+  for the quick plugins and still not hold up a larger download.
+- Files by `<platform>-<arch>` as Node names them. A machine the build has no
+  package for goes without, as a skipped step.
+- `parts` are downloaded in order, each checked against its `sha256` (three tries),
+  joined, and the whole file checked against `sha256`. Parts let a file server
+  with an upload limit serve a large package.
+- `zip` is unpacked whole with the system's own tool: `tar.exe` on Windows 10 and
+  later, `ditto` on macOS. `dmg` (macOS only) is attached read-only and the top
+  folder of `program`, for example `Office.app`, is copied out with `ditto`. Nothing
+  from the package runs during the install, and nothing is registered with the
+  system.
+- Each version goes to a fresh folder under `<appsInstallDir>/<id>/`, with
+  `installed.json` recording it. A version in place is not downloaded again;
+  older folders are removed, unless a running program holds them.
+- After the install, the program's full path goes to the plugin's `setting`. The
+  manifest must not set that key in the plugin's `config` too.
+- Failures are counted as for OpenCode: after three in a row the package is
+  fetched once in six hours, or by a sync the person starts.
+
 ### Secrets
 
 | System | Store |
@@ -813,6 +862,13 @@ e2e/x.sh 'mkdir -p ~/pw && cd ~/pw && npm init -y >/dev/null && npm install play
 docker cp e2e/first-run.mjs fleet-kit-e2e:/home/tester/pw/first-run.mjs
 e2e/x.sh 'node ~/pw/first-run.mjs'
 ```
+
+`apps` on real machines: the workflow `.github/workflows/fleet-kit-apps.yml` (on a
+push to its files or `src/host/install-app.ts`) unpacks the official LibreOffice MSI
+into a zip with `msiexec /a` and the Visual C++ runtime next to the program, installs
+it with `ensureApp` as a standard Windows user (non-ASCII name, long paths off), and
+installs the official `.dmg` on macOS, Apple silicon and Intel; then doc-review's own code converts a `.docx`
+and a `.pptx`. The zip stays as the artifact `libreoffice-win-x64` for whoever mirrors it.
 
 ## License
 

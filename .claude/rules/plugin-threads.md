@@ -29,3 +29,11 @@ paths:
   До ревью PR #63 (02.11.2026) всё это было одной фразой в промпте.
 - `accept-edits` и отказ на `interaction.pending` не ограничивают провайдера, который
   не спрашивает. OpenCode 2.2.5 не спрашивает: см. `opencode-plugins.md`.
+
+## `experimental_NewThreadComposer` и `useComposers`
+
+- Не держать `useComposers()` в той же компоненте, что рисует `NewThreadComposer`: каждое
+  обновление composer перерисовывает её, новый `onSubmit` заставляет composer опубликоваться
+  снова — React #185 (бесконечный цикл), падает вся страница плагина (tracker-board, 07.11.2026).
+  Подписку — в отдельную компоненту-соседа, composer — в `memo` со стабильным `onSubmit`
+  (`useCallback` + `useRef` на свежие значения).
