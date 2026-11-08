@@ -13,7 +13,8 @@ confirm in a system window on your computer.
 - The address book: names from the organization's directory are suggested in
   To and Cc as you type; when an agent finds several people with a similar
   name, a card in the thread shows them for you to choose.
-- **Calendar** page: your week from Monday, recurring meetings shown on every
+- **Calendar**, behind the Mail / Calendar switch at the top of the same page:
+  your week from Monday, recurring meetings shown on every
   day they happen, moved and cancelled ones marked. Agents can ask what is on
   a day and when you are free. Read only: meetings are made in Outlook.
 - Mail stays in Exchange. bb keeps no copy; drafts live in your Drafts folder,
@@ -48,6 +49,34 @@ Open **Mail** in the sidebar → **Settings**.
    may read mail and which agents on this machine they cover. The list comes
    from the plugin's `allowedModels` setting, set by whoever configures bb for
    the company; the panel does not change it. Empty means no agent gets mail.
+
+### Sign-in from another plugin
+
+A build's setup page (such as Fleet Kit's) can ask for the work login and
+password once and hand them to every plugin that needs them, so you do not
+type them again on the Mail page. It calls `accountSignIn`:
+
+- input `{ user: string (1–256), password: string (1–1024), lang?: "en" | "ru", hostId?: string }`,
+  strict; the login goes on as it came (`DOMAIN\name` or `name@company.com`);
+- output, the same as `setupStatus` after the check:
+  `{ state: "done" | "todo" | "problem", summary, path?, rejected? }`.
+
+What it does:
+
+- Only plugins listed in the `accountPlugins` setting may call it; everyone
+  else, the Mail page and the bb CLI included, is refused (`forbidden`) with
+  the name of the setting to add them to.
+- Without `ewsUrl` in the settings it answers `problem` and makes no call.
+- A connection that already works — automatic sign-in without a password
+  included — is left as it is, and the answer is `done`.
+- While sign-in for that login is paused after a refusal (see *The password*),
+  it answers `problem` and sends nothing to Exchange.
+- Otherwise it saves a password sign-in to `ewsUrl` (the password goes to the
+  system credential store, as from the Mail page) and checks it with one
+  request. `rejected: true` only when Exchange refused this login and
+  password: the caller must not send the same ones again, or the domain may
+  lock the account.
+- Neither the login nor the password comes back or reaches the log.
 
 ## Reading
 
@@ -98,7 +127,12 @@ the system window, and both list every recipient.
 
 ## Calendar
 
-- The **Calendar** page in the sidebar (also a tab of the Mail page) shows a
+- **Mail** and **Calendar** are one item in the sidebar, switched at the top
+  of the page; the root `/plugins/exchange-mail/mail` opens the view you used
+  last (kept in the browser), `/plugins/exchange-mail/mail/calendar` opens the
+  calendar. The navPanel id is `mail`; there is no separate calendar panel any
+  more, so the old `/plugins/exchange-mail/calendar` address is gone.
+- The calendar shows a
   week, Monday to Sunday, in your browser's time zone. Every occurrence of a
   recurring meeting is on its own day (EWS `CalendarView` expands the series),
   and each card says what you need to know: *recurring*, *recurring, moved*
@@ -152,7 +186,7 @@ const answer = await bb.sdk.plugins.callRpc({
   Keep even its time out of anything shared.
 - `start` and `end` are UTC. An all-day event runs from midnight to midnight of
   the mailbox's time zone; to place it in another zone, take the local midnight
-  nearest to `start`, as the Calendar page does.
+  nearest to `start`, as the calendar view does.
 - A plugin on the list takes on the rule the mail tools follow: the calendar
   goes to no model outside the allowed agents. List only plugins you trust
   with that.
@@ -270,11 +304,13 @@ All can be set ahead of time by whoever prepares bb for a team:
 | `ewsUrl` | Exchange Web Services address suggested on the Connect screen |
 | `allowedModels` | the allow-list above |
 | `calendarPlugins` | plugin ids that may read the calendar (see above); empty: none |
+| `accountPlugins` | plugin ids, comma-separated, that may pass on the login and password you typed in them (see *Sign-in from another plugin*); empty: none |
 
 ```sh
 bb plugin config exchange-mail set ewsUrl "https://mail.example.com/EWS/Exchange.asmx"
 bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
 bb plugin config exchange-mail set calendarPlugins "sticker-note"
+bb plugin config exchange-mail set accountPlugins "fleet-kit"
 ```
 
 ## How it works
@@ -299,8 +335,9 @@ bb plugin config exchange-mail set calendarPlugins "sticker-note"
   forward), `SendItem` with the change key,
   `DeleteItem` (to Deleted Items), `UpdateItem` (marks a message read when you
   open it in the panel; agents' reads do not).
-- **Setup status for other plugins.** `setupStatus` is the one RPC method other
-  plugins may call (a build's onboarding page, such as Fleet Kit's, asks it).
+- **Setup status for other plugins.** `setupStatus` is open to every plugin
+  (a build's onboarding page, such as Fleet Kit's, asks it); `calendarEvents`
+  and `accountSignIn` only to the plugins their settings list.
   Input `{ lang?: "en" | "ru", hostId?: string }`; without `hostId` it asks the
   machine the Mail page used last, else bb's own machine. Output
   `{ state: "done" | "todo" | "problem", summary, path }`: `done` once the saved
