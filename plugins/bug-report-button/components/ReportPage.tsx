@@ -18,9 +18,22 @@ import {
   type ImageType,
 } from "../src/report";
 
-type PageConfig = { label: string; formUrl: string; canSend: boolean; canAttach: boolean; combine: boolean; problem: string | null };
+type KeyStatus = { hasKey: boolean; source: "own" | "shared" | null; keyStore: "keychain" | "credential-manager" | "file" | null };
+type PageConfig = {
+  label: string;
+  formUrl: string;
+  canSend: boolean;
+  canAttach: boolean;
+  combine: boolean;
+  picturesStay: boolean;
+  problem: string | null;
+  mode: "form" | "rest";
+  key: KeyStatus | null;
+  keyHelp: string;
+  keyProblem: string | null;
+};
 type Attached = { id: string; name: string; type: ImageType; size: number; blob: Blob; preview: string };
-type Sent = { key: string | null; url: string | null };
+type Sent = { key: string | null; url: string | null; warning: string | null; picturesLeft: number };
 
 let nextId = 0;
 
@@ -55,6 +68,80 @@ function hasFiles(event: DragEvent) {
 
 function clientLine() {
   return `${navigator.userAgent}; window ${window.innerWidth}x${window.innerHeight}`;
+}
+
+const STORE_NAMES = { keychain: "Keychain", "credential-manager": "Credential Manager", file: "a file only you can read" } as const;
+
+/** The person's own API key for the REST mode: it is saved in this computer's key store and sent only to the tracker. */
+function ApiKey({ status, help, problem, disabled, onChange }: { status: KeyStatus | null; help: string; problem: string | null; disabled: boolean; onChange: (status: KeyStatus) => void }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const run = async (action: () => Promise<KeyStatus>) => {
+    setBusy(true);
+    setFailure(null);
+    try {
+      onChange(await action());
+      setValue("");
+      setEditing(false);
+    } catch (reason) {
+      setFailure(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (problem) return <p className="brb-error" role="alert">{problem}</p>;
+  if (!status) return null;
+  const where = status.keyStore ? STORE_NAMES[status.keyStore] : "";
+  if (status.hasKey && !editing) {
+    return (
+      <div className="brb-key" data-testid="brb-key">
+        <span className="brb-muted">
+          {status.source === "shared" ? `Sending with the API key you saved for the tracker board (${where}).` : `Sending with your API key, saved in ${where} on this computer.`}
+        </span>
+        <button type="button" className="brb-link" onClick={() => setEditing(true)} disabled={disabled || busy}>Change key</button>
+        {status.source === "own" ? (
+          <button type="button" className="brb-link" onClick={() => void run(() => rpc.call("key_forget", null))} disabled={disabled || busy}>Forget key</button>
+        ) : null}
+        {failure ? <p className="brb-error" role="alert">{failure}</p> : null}
+      </div>
+    );
+  }
+  return (
+    <div className="brb-field" data-testid="brb-key">
+      <span>Your API key</span>
+      <div className="brb-key">
+        <input
+          type="password"
+          name="api-key"
+          autoComplete="off"
+          value={value}
+          placeholder="Paste the key"
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter saves the key, not the report around it.
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            if (value.trim()) void run(() => rpc.call("key_save", { key: value.trim() }));
+          }}
+          disabled={disabled || busy}
+        />
+        <button
+          type="button"
+          className="brb-button"
+          onClick={() => void run(() => rpc.call("key_save", { key: value.trim() }))}
+          disabled={disabled || busy || !value.trim()}
+        >
+          {busy ? "Saving…" : "Save key"}
+        </button>
+        {status.hasKey ? <button type="button" className="brb-link" onClick={() => setEditing(false)}>Cancel</button> : null}
+      </div>
+      <span className="brb-muted">{help ? `${help} ` : ""}The key stays in this computer's key store and goes only to the tracker.</span>
+      {failure ? <p className="brb-error" role="alert">{failure}</p> : null}
+    </div>
+  );
 }
 
 /** The host draws the panel title; a caption of the build's own is the page heading. */
@@ -163,6 +250,10 @@ export function ReportPage() {
 
   const send = async () => {
     if (!config?.canSend || sending) return;
+    if (config.mode === "rest" && !config.key?.hasKey) {
+      setError("Save your API key first.");
+      return;
+    }
     if (!subject.trim()) {
       setError("Write a subject: a few words about what went wrong.");
       return;
@@ -178,17 +269,21 @@ export function ReportPage() {
         parts = [{ name: imageName(`screenshots.${type === "image/jpeg" ? "jpg" : "png"}`, type, []), type, blob }];
       }
       const payload = await Promise.all(parts.map(async (part) => ({ name: part.name, type: part.type, base64: await blobToBase64(part.blob) })));
-      const result = await rpc.call("send", { subject: subject.trim(), description, client: clientLine(), images: payload });
+      const result = await rpc.call("send", { subject: subject.trim(), description, client: clientLine(), images: config.picturesStay ? [] : payload });
       if (!result.ok) {
         setError(result.error);
         return;
       }
-      images.forEach((image) => URL.revokeObjectURL(image.preview));
-      setImages([]);
+      // Pictures the form does not take stay on the page, so the person can attach them in the form.
+      const kept = config.picturesStay ? images.length : 0;
+      if (!kept) {
+        images.forEach((image) => URL.revokeObjectURL(image.preview));
+        setImages([]);
+      }
       setSubject("");
       setDescription("");
       setNotices([]);
-      setSent({ key: result.key, url: result.url });
+      setSent({ key: result.key, url: result.url, warning: result.warning, picturesLeft: kept });
     } catch (reason) {
       setError(`The report was not sent: ${reason instanceof Error ? reason.message : String(reason)}. What you wrote is kept; send again.`);
     } finally {
@@ -284,6 +379,7 @@ export function ReportPage() {
               <span className="brb-muted">
                 PNG, JPEG, GIF or WebP; up to {MAX_IMAGES} pictures, {formatBytes(MAX_IMAGE_BYTES)} each and {formatBytes(MAX_TOTAL_BYTES)} together.
                 {config.combine ? " Several pictures are joined into one before sending." : ""}
+                {config.picturesStay ? " The form does not take pictures from here yet: after sending you get a link to attach them in the tracker." : ""}
               </span>
             </div>
             <input
@@ -315,6 +411,29 @@ export function ReportPage() {
             ) : null}
             {images.length ? <span className="brb-muted">{images.length} of {MAX_IMAGES}, {formatBytes(total)}</span> : null}
           </div>
+        ) : null}
+        {sent?.warning ? <p className="brb-error" role="alert">{sent.warning}</p> : null}
+        {sent?.picturesLeft ? (
+          <p className="brb-error" role="alert" data-testid="brb-pictures-left">
+            The form did not take the {sent.picturesLeft === 1 ? "picture" : `${sent.picturesLeft} pictures`}: they are still here.{" "}
+            {config.formUrl ? (
+              <>
+                Attach {sent.picturesLeft === 1 ? "it" : "them"} in the tracker:{" "}
+                <a href={config.formUrl} target="_blank" rel="noopener noreferrer">open the form</a>.
+              </>
+            ) : (
+              <>Attach {sent.picturesLeft === 1 ? "it" : "them"} in the tracker.</>
+            )}
+          </p>
+        ) : null}
+        {config.mode === "rest" ? (
+          <ApiKey
+            status={config.key}
+            help={config.keyHelp}
+            problem={config.keyProblem}
+            disabled={sending}
+            onChange={(key) => setConfig({ ...config, key })}
+          />
         ) : null}
         {error ? <p className="brb-error" role="alert">{error}</p> : null}
         <div className="brb-actions">
