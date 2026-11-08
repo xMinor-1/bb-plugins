@@ -13,18 +13,43 @@ import { langSchema, type ConnectionStatus, type Lang } from "../../contract";
 export const setupStateSchema = z.enum(["done", "todo", "problem"]);
 export type SetupState = z.infer<typeof setupStateSchema>;
 
+const setupStepSchema = z
+  .object({
+    state: setupStateSchema,
+    summary: z.string().max(200),
+    path: z.string().regex(/^\/plugins\//).optional(),
+  })
+  .strict();
+
 export const setupStatusContract = defineRpcContract({
   setupStatus: {
     experimental_description:
       "Whether Exchange Mail is set up on a machine: done, todo or problem, with one line for a person. Reads the saved connection only.",
     input: z.object({ lang: langSchema.optional(), hostId: z.string().min(1).max(200).optional() }).strict(),
-    output: z
+    output: setupStepSchema,
+  },
+});
+
+/**
+ * Sign-in handed over by a trusted plugin (a build's setup page asks the
+ * person once and passes the login and password on). Same answer as
+ * setupStatus after the check; `rejected` is true only when Exchange refused
+ * this login and password, so the caller does not send them again and lock
+ * the account. Neither the login nor the password comes back.
+ */
+export const accountSignInContract = defineRpcContract({
+  accountSignIn: {
+    experimental_description:
+      "Connect Exchange Mail with a login and password the person typed in another plugin, then check the sign-in. For plugins listed in the accountPlugins setting.",
+    input: z
       .object({
-        state: setupStateSchema,
-        summary: z.string().max(200),
-        path: z.string().regex(/^\/plugins\//).optional(),
+        user: z.string().min(1).max(256),
+        password: z.string().min(1).max(1024),
+        lang: langSchema.optional(),
+        hostId: z.string().min(1).max(200).optional(),
       })
       .strict(),
+    output: setupStepSchema.extend({ rejected: z.boolean().optional() }).strict(),
   },
 });
 
@@ -43,6 +68,8 @@ const TEXT = {
     offline: "The machine with mail is not reachable",
     unreadable: "The plugin could not read its state on that machine",
     noMachine: "No machine is connected to bb",
+    noAddress: "The Exchange address is not set in Exchange Mail's settings",
+    notSaved: "The sign-in could not be saved, see the Mail page",
   },
   ru: {
     done: "Почта подключена",
@@ -55,6 +82,8 @@ const TEXT = {
     offline: "Машина с почтой не на связи",
     unreadable: "Плагин не смог прочитать своё состояние на этой машине",
     noMachine: "К bb не подключена ни одна машина",
+    noAddress: "В настройках Exchange Mail не задан адрес Exchange",
+    notSaved: "Не удалось сохранить вход, подробности на странице почты",
   },
 } satisfies Record<Lang, Record<string, string>>;
 

@@ -49,6 +49,34 @@ Open **Mail** in the sidebar → **Settings**.
    from the plugin's `allowedModels` setting, set by whoever configures bb for
    the company; the panel does not change it. Empty means no agent gets mail.
 
+### Sign-in from another plugin
+
+A build's setup page (such as Fleet Kit's) can ask for the work login and
+password once and hand them to every plugin that needs them, so you do not
+type them again on the Mail page. It calls `accountSignIn`:
+
+- input `{ user: string (1–256), password: string (1–1024), lang?: "en" | "ru", hostId?: string }`,
+  strict; the login goes on as it came (`DOMAIN\name` or `name@company.com`);
+- output, the same as `setupStatus` after the check:
+  `{ state: "done" | "todo" | "problem", summary, path?, rejected? }`.
+
+What it does:
+
+- Only plugins listed in the `accountPlugins` setting may call it; everyone
+  else, the Mail page and the bb CLI included, is refused (`forbidden`) with
+  the name of the setting to add them to.
+- Without `ewsUrl` in the settings it answers `problem` and makes no call.
+- A connection that already works — automatic sign-in without a password
+  included — is left as it is, and the answer is `done`.
+- While sign-in for that login is paused after a refusal (see *The password*),
+  it answers `problem` and sends nothing to Exchange.
+- Otherwise it saves a password sign-in to `ewsUrl` (the password goes to the
+  system credential store, as from the Mail page) and checks it with one
+  request. `rejected: true` only when Exchange refused this login and
+  password: the caller must not send the same ones again, or the domain may
+  lock the account.
+- Neither the login nor the password comes back or reaches the log.
+
 ## Reading
 
 - People are shown by name; a long copy list folds to the first three and
@@ -270,11 +298,13 @@ All can be set ahead of time by whoever prepares bb for a team:
 | `ewsUrl` | Exchange Web Services address suggested on the Connect screen |
 | `allowedModels` | the allow-list above |
 | `calendarPlugins` | plugin ids that may read the calendar (see above); empty: none |
+| `accountPlugins` | plugin ids, comma-separated, that may pass on the login and password you typed in them (see *Sign-in from another plugin*); empty: none |
 
 ```sh
 bb plugin config exchange-mail set ewsUrl "https://mail.example.com/EWS/Exchange.asmx"
 bb plugin config exchange-mail set allowedModels "acp-opencode corp/*"
 bb plugin config exchange-mail set calendarPlugins "sticker-note"
+bb plugin config exchange-mail set accountPlugins "fleet-kit"
 ```
 
 ## How it works
@@ -299,8 +329,9 @@ bb plugin config exchange-mail set calendarPlugins "sticker-note"
   forward), `SendItem` with the change key,
   `DeleteItem` (to Deleted Items), `UpdateItem` (marks a message read when you
   open it in the panel; agents' reads do not).
-- **Setup status for other plugins.** `setupStatus` is the one RPC method other
-  plugins may call (a build's onboarding page, such as Fleet Kit's, asks it).
+- **Setup status for other plugins.** `setupStatus` is open to every plugin
+  (a build's onboarding page, such as Fleet Kit's, asks it); `calendarEvents`
+  and `accountSignIn` only to the plugins their settings list.
   Input `{ lang?: "en" | "ru", hostId?: string }`; without `hostId` it asks the
   machine the Mail page used last, else bb's own machine. Output
   `{ state: "done" | "todo" | "problem", summary, path }`: `done` once the saved

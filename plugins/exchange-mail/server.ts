@@ -31,7 +31,8 @@ import { calendarRpcContract, entryOf, parsePluginList } from "./src/shared/cale
 import { groupModels } from "./src/shared/models";
 import { formatPerson } from "./src/shared/people";
 import { createPolicy, parseRules, PolicyError, type Policy } from "./src/shared/policy";
-import { setupFromStatus, setupStatusContract, setupStep } from "./src/shared/setup";
+import { accountSignInContract, setupFromStatus, setupStatusContract, setupStep } from "./src/shared/setup";
+import { accountName } from "./src/host/signin";
 
 const hostId = z.string().min(1).max(200);
 /** The panel names a machine; a draft card in a thread names the thread, whose machine is looked up. */
@@ -138,6 +139,22 @@ export default async function plugin(bb: BbPluginApi) {
         }
       }, "Plugin ids: lowercase letters, digits and hyphens"),
     },
+    accountPlugins: {
+      type: "string",
+      label: "Plugins that may sign you in",
+      description:
+        "Plugin ids separated by commas, for example `fleet-kit`. They may pass on the login and password you typed in them, so that you do not type them again here: " +
+        "Exchange Mail saves them as a password sign-in to the address above and checks it. List only plugins you trust with your password. Empty: none.",
+      default: "",
+      experimental_schema: z.string().max(2000).refine((value) => {
+        try {
+          parsePluginList(value);
+          return true;
+        } catch {
+          return false;
+        }
+      }, "Plugin ids: lowercase letters, digits and hyphens"),
+    },
     allowedModels: {
       type: "string",
       label: "Agents allowed to read mail",
@@ -177,12 +194,23 @@ export default async function plugin(bb: BbPluginApi) {
       calendarPlugins = new Set();
     }
   };
+  let accountPlugins = new Set<string>();
+  const applyAccountPlugins = (text: string) => {
+    try {
+      accountPlugins = new Set(parsePluginList(text));
+    } catch {
+      // A broken list fails closed.
+      accountPlugins = new Set();
+    }
+  };
   const initial = await settings.get();
   applyPolicy(initial.allowedModels);
   applyCalendarPlugins(initial.calendarPlugins);
+  applyAccountPlugins(initial.accountPlugins);
   settings.onChange((next) => {
     applyPolicy(next.allowedModels);
     applyCalendarPlugins(next.calendarPlugins);
+    applyAccountPlugins(next.accountPlugins);
   });
 
   const host = bb.hosts.experimental_client({ contract: hostContract });
@@ -636,6 +664,71 @@ export default async function plugin(bb: BbPluginApi) {
       },
     },
     { experimental_discoverable: true, experimental_description: "Exchange Mail setup state for a bb build's onboarding page." },
+  );
+
+  // ---------- Sign-in handed over by a trusted plugin (src/shared/setup.ts) ----------
+
+  /** The host's answer without its English text: only the code, which names no address and no login. */
+  const codeOf = (error: unknown) => /^\[mail:([a-z-]+)/.exec(error instanceof Error ? error.message : String(error))?.[1] ?? "unknown";
+
+  bb.rpc.register(
+    accountSignInContract,
+    {
+      accountSignIn: async ({ user, password, lang = "en", hostId: requested }, context) => {
+        const caller = context.experimental_caller;
+        if (caller.kind !== "plugin") {
+          throw new experimental_PluginRpcRefusal({
+            code: "forbidden",
+            message: "accountSignIn is for plugins listed in accountPlugins in Exchange Mail's settings. People sign in on the Mail page.",
+          });
+        }
+        if (!accountPlugins.has(caller.pluginId)) {
+          throw new experimental_PluginRpcRefusal({
+            code: "forbidden",
+            message: `Exchange Mail does not take a sign-in from ${caller.pluginId}: add it to accountPlugins in Exchange Mail's settings.`,
+          });
+        }
+        const url = (await settings.get()).ewsUrl.trim();
+        if (!url) return setupStep("problem", "noAddress", lang);
+        const machine = await setupMachine(requested);
+        if (!machine) return setupStep("problem", "noMachine", lang);
+        const known = (await bb.sdk.hosts.list()).find((candidate) => candidate.id === machine);
+        if (!known || known.lifecycle.phase === "destroyed" || known.status !== "connected") return setupStep("problem", "offline", lang);
+
+        let current: ConnectionStatus;
+        try {
+          current = await call("status", machine, {}, SETUP_TIMEOUT_MS);
+        } catch (error) {
+          bb.log.info(`accountSignIn: ${machine} could not read its state (${codeOf(error)})`);
+          return setupStep("problem", "unreadable", lang);
+        }
+        // A working connection stays, automatic sign-in without a password included.
+        const now = setupFromStatus(current, lang);
+        if (now.state === "done") return now;
+        // Exchange refused this login a moment ago: nothing goes to the server until the pause ends.
+        const sameLogin = current.auth === "password" && current.user !== null && accountName(current.user) === accountName(user);
+        if (sameLogin && current.blocked && current.retryAt !== null && Date.now() < current.retryAt) return setupStep("problem", "paused", lang);
+
+        try {
+          await connectionChanged(call("saveConnection", machine, { url, auth: "password", user, password }));
+        } catch (error) {
+          bb.log.info(`accountSignIn: ${caller.pluginId} on ${machine}: not saved (${codeOf(error)})`);
+          return setupStep("problem", "notSaved", lang);
+        }
+        const checked = await connectionChanged(call("check", machine, {}, 120_000)).catch((error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : String(error) }));
+        const code = checked.ok ? null : codeOf(new Error(checked.message));
+        bb.log.info(`accountSignIn: ${caller.pluginId} on ${machine}: ${checked.ok ? "connected" : `check failed (${code})`}`);
+        let after: ConnectionStatus;
+        try {
+          after = await call("status", machine, {}, SETUP_TIMEOUT_MS);
+        } catch {
+          return checked.ok ? setupStep("done", "done", lang) : setupStep("problem", "failed", lang);
+        }
+        const step = setupFromStatus(after, lang);
+        return code === "auth-refused" ? { ...step, rejected: true } : step;
+      },
+    },
+    { experimental_discoverable: true, experimental_description: "Sign Exchange Mail in with a login and password, for plugins listed in Exchange Mail's accountPlugins setting." },
   );
 
   // ---------- The calendar for other plugins (src/shared/calendar-rpc.ts) ----------
