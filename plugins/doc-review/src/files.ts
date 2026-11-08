@@ -11,19 +11,83 @@ import type { DocRow } from "./store.js";
 
 export type OpenerSource = z.infer<typeof openerSourceSchema>;
 
+/** bb caps a preview lease at one hour. */
+export const PREVIEW_LEASE_MS = 60 * 60 * 1000;
+
 /** Markdown bigger than this is refused: the panel renders it in one pass. */
 export const MARKDOWN_MAX_BYTES = 4 * 1024 * 1024;
 
+/** `C:\…` or `C:/…`: a path on a Windows host. */
+const WINDOWS_ABSOLUTE = /^[a-z]:[\\/]/i;
+
+export function isWindowsPath(absPath: string): boolean {
+  return WINDOWS_ABSOLUTE.test(absPath);
+}
+
+/**
+ * One spelling per file. POSIX paths are normalized as they are; Windows
+ * paths get forward slashes and an upper-case drive letter, so `c:\a\b.md`
+ * and `C:/a/b.md` open the same document. The bb server may run on Linux or
+ * macOS while the file sits on a Windows host, so `path.win32` is used
+ * explicitly rather than the server's own `path`.
+ */
+export function normalizeAbsolute(absPath: string): string {
+  if (!isWindowsPath(absPath)) return path.posix.normalize(absPath);
+  const forward = path.win32.normalize(absPath).replace(/\\/g, "/");
+  return forward.charAt(0).toUpperCase() + forward.slice(1);
+}
+
 export function joinPath(root: string, relative: string): string {
-  const normalized = path.posix.normalize(relative.replace(/^\/+/, ""));
+  // A backslash is a separator only under a Windows root: on Linux and
+  // macOS it is an ordinary character in a file name.
+  const windows = isWindowsPath(root);
+  const cleaned = (windows ? relative.replace(/\\/g, "/") : relative).replace(/^\/+/, "");
+  const normalized = path.posix.normalize(cleaned);
   if (normalized.startsWith("..")) {
     throw new Error("The path leaves its workspace.");
   }
-  return path.posix.join(root, normalized);
+  return windows ? normalizeAbsolute(path.posix.join(normalizeAbsolute(root), normalized)) : path.posix.join(root, normalized);
 }
+
+/**
+ * How long one read of a file on another machine answers again. Opening a
+ * page asks for its version, then the page, then its bytes; each used to read
+ * the whole file over the network.
+ */
+const REMOTE_READ_REUSE_MS = 2000;
+
+type RemoteFile = Awaited<ReturnType<BbPluginApi["sdk"]["files"]["read"]>>;
 
 export class DocFiles {
   private localHostIdPromise: Promise<string | null> | null = null;
+  private readonly remoteReads = new Map<string, { file: Promise<RemoteFile>; settledAtMs: number | null }>();
+
+  /** A read of a remote file, shared with any other asking within a moment. */
+  private readRemote(hostId: string, absPath: string): Promise<RemoteFile> {
+    const now = Date.now();
+    for (const [key, entry] of this.remoteReads) {
+      if (entry.settledAtMs !== null && now - entry.settledAtMs >= REMOTE_READ_REUSE_MS) {
+        this.remoteReads.delete(key);
+      }
+    }
+    const key = `${hostId}\u0000${absPath}`;
+    const known = this.remoteReads.get(key);
+    if (known) return known.file;
+    const entry: { file: Promise<RemoteFile>; settledAtMs: number | null } = {
+      file: this.bb.sdk.files.read({ hostId, path: absPath }),
+      settledAtMs: null,
+    };
+    this.remoteReads.set(key, entry);
+    entry.file.then(
+      () => {
+        entry.settledAtMs = Date.now();
+      },
+      () => {
+        if (this.remoteReads.get(key) === entry) this.remoteReads.delete(key);
+      },
+    );
+    return entry.file;
+  }
 
   constructor(
     private readonly bb: BbPluginApi,
@@ -92,7 +156,9 @@ export class DocFiles {
     }
     // "~/…" is a convenience for paths typed on the Doc Review page.
     if (rawPath === "~" || rawPath.startsWith("~/")) rawPath = path.posix.join(homedir(), rawPath.slice(1));
-    if (!path.posix.isAbsolute(rawPath)) throw new Error("Expected an absolute path.");
+    if (!path.posix.isAbsolute(rawPath) && !isWindowsPath(rawPath)) {
+      throw new Error("Expected an absolute path.");
+    }
     let hostId: string | null = source.experimental_hostId ?? null;
     if (!hostId && source.environmentId) {
       const environment = await this.bb.sdk.environments.get({
@@ -100,7 +166,7 @@ export class DocFiles {
       });
       hostId = environment.hostId;
     }
-    return { absPath: path.posix.normalize(rawPath), hostId: await this.canonicalHost(hostId) };
+    return { absPath: normalizeAbsolute(rawPath), hostId: await this.canonicalHost(hostId) };
   }
 
   /**
@@ -113,9 +179,7 @@ export class DocFiles {
       if (!info?.isFile()) return null;
       return `m${Math.round(info.mtimeMs)}-s${info.size}`;
     }
-    const file = await this.bb.sdk.files
-      .read({ hostId: doc.hostId, path: doc.absPath })
-      .catch(() => null);
+    const file = await this.readRemote(doc.hostId, doc.absPath).catch(() => null);
     return file ? `h${file.sha256.slice(0, 16)}` : null;
   }
 
@@ -126,7 +190,7 @@ export class DocFiles {
       if (info.size > maxBytes) throw new Error("This file is too large to review.");
       return readFile(doc.absPath);
     }
-    const file = await this.bb.sdk.files.read({ hostId: doc.hostId, path: doc.absPath });
+    const file = await this.readRemote(doc.hostId, doc.absPath);
     if (file.sizeBytes > maxBytes) throw new Error("This file is too large to review.");
     return Buffer.from(file.content, file.contentEncoding === "base64" ? "base64" : "utf8");
   }
@@ -137,7 +201,7 @@ export class DocFiles {
       if (info.size > MARKDOWN_MAX_BYTES) throw new Error("This file is too large to review.");
       return readFile(doc.absPath, "utf8");
     }
-    const file = await this.bb.sdk.files.read({ hostId: doc.hostId, path: doc.absPath });
+    const file = await this.readRemote(doc.hostId, doc.absPath);
     if (file.sizeBytes > MARKDOWN_MAX_BYTES) throw new Error("This file is too large to review.");
     return file.contentEncoding === "base64"
       ? Buffer.from(file.content, "base64").toString("utf8")
@@ -155,8 +219,7 @@ export class DocFiles {
       const preview = await this.bb.sdk.files.createPreview({
         ...(hostId ? { hostId } : {}),
         rootPath: path.posix.dirname(doc.absPath),
-        // bb caps a preview lease at one hour.
-        ttlMs: 60 * 60 * 1000,
+        ttlMs: PREVIEW_LEASE_MS,
       });
       return preview.baseUrl;
     } catch (error) {

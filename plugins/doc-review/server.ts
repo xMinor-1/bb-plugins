@@ -19,8 +19,9 @@ import { rpcContract, type Capture, type RecentDocument } from "./src/contract.j
 import { reviewCli } from "./src/cli.js";
 import { createAttachments } from "./src/attachments.js";
 import { createExchange } from "./src/exchange.js";
-import { DocFiles } from "./src/files.js";
+import { DocFiles, PREVIEW_LEASE_MS } from "./src/files.js";
 import { BRIDGE_SCRIPT, HTML_SANDBOX, injectIntoHtml } from "./src/html-bridge.js";
+import { acceptsGzip, HtmlPageCache, preparePage } from "./src/html-pages.js";
 import { buildHandoffMessage } from "./src/message.js";
 import { Renderer, renderWidth, type PageSize } from "./src/render.js";
 import { findChrome, PageCamera } from "./src/snapshot.js";
@@ -111,6 +112,16 @@ export default async function plugin(bb: BbPluginApi) {
   const store = new ReviewStore(database as unknown as Db);
   const dataDir = path.dirname(database.name);
   const files = new DocFiles(bb, dataDir);
+  // Reopening a page, or the panel reloading it, skips reading the file and
+  // preparing it again; a page is served from here for at most half of its
+  // folder lease, so the links and images on it outlive any review session
+  // a fresh page would.
+  const htmlPages = new HtmlPageCache({
+    maxEntries: 4,
+    maxBytes: 8 * 1024 * 1024,
+    minLeaseLeftMs: PREVIEW_LEASE_MS / 2,
+  });
+  bb.onDispose(() => htmlPages.clear());
   const renderer = new Renderer(dataDir);
 
   const settings = bb.settings.define({
@@ -217,13 +228,14 @@ export default async function plugin(bb: BbPluginApi) {
     return version;
   }
 
-  function toDto(doc: DocRow, version: string): ReviewDoc {
+  async function toDto(doc: DocRow, version: string): Promise<ReviewDoc> {
     return {
       id: doc.id,
       kind: doc.kind,
       name: docName(doc),
       absPath: doc.absPath,
       hostId: doc.hostId,
+      previewHostId: doc.kind === "web" ? null : (doc.hostId ?? (await files.localHostId())),
       version,
     };
   }
@@ -319,19 +331,29 @@ export default async function plugin(bb: BbPluginApi) {
     const doc = store.getDoc(docId);
     if (!doc || doc.kind !== "html") return context.text("Not found", 404);
     try {
-      const version = await currentVersion(doc);
-      if (version !== wanted) return context.text("This page changed; reload it.", 404);
-      const [source, baseUrl] = await Promise.all([
-        files.readBytes(doc, HTML_MAX_BYTES),
-        files.assetBaseUrl(doc),
-      ]);
-      const page = injectIntoHtml(source, {
-        baseHref: baseUrl ? `${baseUrl.replace(/\/+$/, "")}/` : null,
-        script: BRIDGE_SCRIPT,
-      });
-      return new Response(new Uint8Array(page.body), {
+      // The URL names the version, so a kept page for it is still that page.
+      let page = htmlPages.get(doc.id, wanted);
+      if (!page) {
+        const version = await currentVersion(doc);
+        if (version !== wanted) return context.text("This page changed; reload it.", 404);
+        const leaseFromMs = Date.now();
+        const [source, baseUrl] = await Promise.all([
+          files.readBytes(doc, HTML_MAX_BYTES),
+          files.assetBaseUrl(doc),
+        ]);
+        const injected = injectIntoHtml(source, {
+          baseHref: baseUrl ? `${baseUrl.replace(/\/+$/, "")}/` : null,
+          script: BRIDGE_SCRIPT,
+        });
+        page = await preparePage(injected, leaseFromMs + PREVIEW_LEASE_MS);
+        htmlPages.put(doc.id, wanted, page);
+      }
+      const gzipped = acceptsGzip(context.req.header("accept-encoding"));
+      return new Response(new Uint8Array(gzipped ? page.gzipped : page.body), {
         headers: {
           "content-type": page.contentType,
+          ...(gzipped ? { "content-encoding": "gzip" } : {}),
+          vary: "accept-encoding",
           "content-security-policy": `sandbox ${HTML_SANDBOX}`,
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
@@ -419,14 +441,14 @@ export default async function plugin(bb: BbPluginApi) {
       }
       const { absPath, hostId } = await files.resolve(rawPath, source);
       const doc = store.upsertDoc(hostId, absPath, kind);
-      const dto = toDto(doc, await currentVersion(doc));
+      const dto = await toDto(doc, await currentVersion(doc));
       if (remember) await rememberDocument(doc);
       return { doc: dto };
     },
 
     async "doc.get"({ docId }) {
       const doc = requireDoc(docId);
-      return { doc: toDto(doc, await currentVersion(doc)) };
+      return { doc: await toDto(doc, await currentVersion(doc)) };
     },
 
     async "docs.list"() {
@@ -493,7 +515,7 @@ export default async function plugin(bb: BbPluginApi) {
 
     async "web.open"({ url }) {
       const doc = store.upsertDoc(null, siteOf(url), "web");
-      return { doc: toDto(doc, WEB_VERSION) };
+      return { doc: await toDto(doc, WEB_VERSION) };
     },
 
     async "doc.markdown"({ docId }) {
@@ -741,7 +763,7 @@ export default async function plugin(bb: BbPluginApi) {
 
       let threadId: string;
       if (target.kind === "thread") {
-        await bb.sdk.threads.send({ threadId: target.threadId, mode: "auto", input });
+        await bb.sdk.threads.send({ threadId: target.threadId, mode: target.mode ?? "auto", input });
         threadId = target.threadId;
       } else {
         // Reuse the model and workspace of the thread the panel was opened in.

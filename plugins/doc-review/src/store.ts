@@ -186,6 +186,19 @@ export class ReviewStore {
   constructor(private readonly db: Db) {}
 
   upsertDoc(hostId: string | null, absPath: string, kind: DocKind): DocRow {
+    // Windows paths are case-insensitive and take either separator, and
+    // before 0.8.1 they were stored as the host spelled them: reuse the row a
+    // file already has so its comments stay attached.
+    if (/^[a-z]:[\\/]/i.test(absPath)) {
+      const known = this.db
+        .prepare(
+          `SELECT abs_path FROM docs
+           WHERE host_id IS ? AND lower(replace(abs_path, char(92), '/')) = lower(?)
+           ORDER BY created_at, id LIMIT 1`,
+        )
+        .get(hostId, absPath.replace(/\\/g, "/")) as { abs_path: string } | undefined;
+      if (known) absPath = known.abs_path;
+    }
     const id = docIdFor(hostId, absPath);
     const now = Date.now();
     this.db

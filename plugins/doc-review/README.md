@@ -24,7 +24,7 @@ PowerPoint, and Excel rendering and its classic PDF view live here now.
 | Word: `docx`, `doc`, `odt`, `rtf` and templates | Converted to PDF by LibreOffice, then page by page |
 | PowerPoint: `pptx`, `ppt`, `odp` and templates | Converted to PDF by LibreOffice, then slide by slide |
 | Excel: `xlsx`, `xlsm`, `xls`, `xlsb`, `ods` and templates | A grid with sheet tabs, formatting, merged cells, frozen panes, zoom |
-| `.html`, `.htm` | The live page in a sandboxed frame: its styles, pictures, and scripts next to the file load as usual |
+| `.html`, `.htm` | The live page in a sandboxed frame: its styles, pictures, and scripts next to the file load as usual; `#section` links scroll the page, relative file links open in bb's file preview |
 
 Any matching file opened in bb — a link in a message, the file picker,
 `bb thread open` — renders in a panel tab. A file attached to a chat message
@@ -91,8 +91,11 @@ The comments button in the toolbar hides the list beside the document for a
 full-width view; the choice is remembered across files, and a click on a
 comment's number on the page brings the list back.
 
-Comments stay as drafts until you press **Send to chat** (this chat) or pick
-**To a new chat** (same project, model, and workspace, fresh context). The
+Comments stay as drafts until you press **Send to chat** (this chat, the way
+Enter sends a message there) or pick another way from the menu beside it:
+**when the agent is done** (waits for its current work), **right now** (joins
+the work it is doing), or **To a new chat** (same project, model, and
+workspace, fresh context). The
 agent runs `bb doc-review resolve` or `bb doc-review reply`; the tab moves each
 comment to *Done* or *Needs you* with the agent's note, live. The reviewed
 file is never modified by the plugin; comments live in its own database.
@@ -333,12 +336,19 @@ bb doc-review import "deck (comments).pdf" --into deck.pptx
   (its workspace or thread storage); a link to another file opens that file
   at its top, without jumping to its `#section`.
 - HTML pages run with an opaque origin: `localStorage` is unavailable and a
-  page's own `fetch` of files next to it is refused. A link that leaves the
-  page shows a bar to return; comments work on the reviewed file only.
+  page's own `fetch` of files next to it is refused. A relative link to a file
+  opens it in bb's file preview, at `#L12` or `:12` when the link names a
+  line, and only inside the document's folder: a link above it is refused.
+  A link to a site leaves the page and shows a bar to return; comments work
+  on the reviewed file only.
 - Inside frames, comments work where the frame's page comes from `srcdoc`; a
   frame that loads another file or a site shows as is, without comments.
 - bb's preview of the folder lasts an hour; an HTML page left open longer may
-  fail to load pictures it had not loaded yet until it is reopened.
+  fail to load pictures it had not loaded yet until it is reopened. A page
+  reopened within half an hour comes from the plugin's memory, compressed,
+  without reading the file again.
+- Files on a Windows machine open by their `C:\…` path; `c:\a\b.html` and
+  `C:/a/b.html` are the same document with the same comments.
 - Live sites need bb Desktop, and the browser APIs they use are experimental
   in bb's plugin SDK. Frames inside a live page take no comments, and a
   comment cannot be edited there (delete it and write it again, or edit it

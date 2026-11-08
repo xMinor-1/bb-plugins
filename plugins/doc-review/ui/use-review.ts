@@ -68,18 +68,27 @@ export function useDocVersion(doc: ReviewDoc | null, setDoc: Dispatch<SetStateAc
   const version = doc?.version ?? null;
   useEffect(() => {
     if (!docId) return;
+    // A file on another machine can take longer than one interval to check;
+    // the next check waits for it instead of piling up behind it.
+    let checking = false;
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      rpc.call("doc.version", { docId }).then(
-        (result) => {
-          if (result.version && result.version !== version) {
-            setDoc((current) =>
-              current && current.id === docId ? { ...current, version: result.version! } : current,
-            );
-          }
-        },
-        () => undefined,
-      );
+      if (checking || document.visibilityState !== "visible") return;
+      checking = true;
+      rpc
+        .call("doc.version", { docId })
+        .then(
+          (result) => {
+            if (result.version && result.version !== version) {
+              setDoc((current) =>
+                current && current.id === docId ? { ...current, version: result.version! } : current,
+              );
+            }
+          },
+          () => undefined,
+        )
+        .finally(() => {
+          checking = false;
+        });
     }, VERSION_POLL_MS);
     return () => window.clearInterval(timer);
   }, [rpc, docId, version, setDoc]);

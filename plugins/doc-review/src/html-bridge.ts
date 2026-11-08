@@ -55,6 +55,9 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
   var pendingTarget = null;
   var revealLater = null;
   var revealNested = false;
+  // Set once the page holding this frame says so: only the top page hands
+  // file links to the panel.
+  var framed = false;
   // How much the page holding this frame shrinks or grows it on screen.
   var viewScale = 1;
   var scaleTimer = 0;
@@ -310,7 +313,10 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
   function frameMessage(element, type) {
     var message = { type: type };
     // Only the top page draws; its overlay covers the frames.
-    if (type === "mode") message.mode = mode === "draw" ? "idle" : mode;
+    if (type === "mode") {
+      message.mode = mode === "draw" ? "idle" : mode;
+      message.framed = true;
+    }
     if (type === "comments") {
       message.items = [];
       for (var i = 0; i < items.length; i += 1) {
@@ -1066,6 +1072,31 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
       if (item.element && item.element.contains(caret.node)) { post({ type: "select", id: item.id }); return; }
     }
   }, true);
+  // Links, after the page's own handlers (an app that routes its links calls
+  // preventDefault and keeps them). The <base> points at bb's preview of the
+  // file's folder, so left alone a "#section" link would leave the page and a
+  // link to a file next to it would replace the document in the frame.
+  window.addEventListener("click", function (event) {
+    if (host || mode !== "text" || event.defaultPrevented || event.button !== 0) return;
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    var link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    if (!link || isUi(link) || link.hasAttribute("download")) return;
+    var targetName = (link.getAttribute("target") || "").toLowerCase();
+    if (targetName && targetName !== "_self") return;
+    var href = (link.getAttribute("href") || "").trim();
+    if (href.charAt(0) === "#") {
+      event.preventDefault();
+      var id = href.slice(1);
+      try { id = decodeURIComponent(id); } catch (error) { /* keep the literal id */ }
+      var anchor = id ? document.getElementById(id) || document.getElementsByName(id)[0] : null;
+      if (anchor) anchor.scrollIntoView();
+      else if (!id) window.scrollTo(0, 0);
+      return;
+    }
+    if (framed || !href || /^[?\/\\]|^[a-z][a-z0-9+.-]*:/i.test(href)) return;
+    event.preventDefault();
+    post({ type: "file-link", href: href });
+  }, false);
   document.addEventListener("contextmenu", function (event) {
     if (mode !== "text") return;
     var found = selectionAnchor();
@@ -1109,6 +1140,7 @@ export const BRIDGE_SCRIPT = String.raw`(function () {
       announce();
     } else if (data.type === "mode") {
       var next = data.mode === "element" || data.mode === "draw" || data.mode === "idle" ? data.mode : "text";
+      if (data.framed === true) framed = true;
       if (next !== "draw" && mode === "draw") clearSketch();
       mode = next;
       if (DRAW_TOOLS.indexOf(data.tool) >= 0) tool = data.tool;
