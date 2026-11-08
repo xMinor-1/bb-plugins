@@ -313,6 +313,50 @@ describe.skipIf(!browser)("host service on a mock web client", () => {
 });
 
 describe.skipIf(!browser)("the profile a sign-in needs", () => {
+  it("builds the directory right after signing in, so search works without another button", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "express-e2e-"));
+    const other = new MessengerService({ dataDir: dir, confirmer, idleMs: 60_000, signInGraceMs: 1000, signInHeadless: true });
+    const started = await startClient();
+    try {
+      expect((await other.status(started.url)).directory).toBeNull();
+      const result = await other.signIn(started.url);
+      expect(result, result.message).toMatchObject({ ok: true, chats: 5, people: 3 });
+      expect(result.message).toMatch(/^Signed in\. The directory has 5 chats and 3 people/);
+      const status = await other.status(started.url);
+      expect(status).toMatchObject({ signedIn: true, directory: { chats: 5, people: 3 } });
+      // The window is gone; the directory came from the browser without a window.
+      expect((await other.tool(started.url, { tool: "find", query: "Саша Волков" })).chat?.id).toBe("c1");
+    } finally {
+      await other.close();
+      other.dispose();
+      started.server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("keeps the sign-in when the directory cannot be built after it, and says why", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "express-e2e-"));
+    const other = new MessengerService({ dataDir: dir, confirmer, idleMs: 60_000, signInGraceMs: 1000, signInHeadless: true });
+    const started = await startClient();
+    // The client goes away the moment the window closes.
+    const real = other.sync.bind(other);
+    other.sync = async (target: string) => {
+      started.server.closeAllConnections();
+      await new Promise((resolve) => started.server.close(resolve));
+      return real(target);
+    };
+    try {
+      const result = await other.signIn(started.url);
+      expect(result).toMatchObject({ ok: true, chats: 0, people: 0 });
+      expect(result.message).toContain("[express:unreachable]");
+      expect((await other.status(started.url)).signedIn).toBe(true);
+    } finally {
+      await other.close();
+      other.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it("refuses new operations from the moment a sign-in is asked for, while the one in progress finishes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "express-e2e-"));
     const other = new MessengerService({ dataDir: dir, confirmer, idleMs: 60_000, signInGraceMs: 1000 });

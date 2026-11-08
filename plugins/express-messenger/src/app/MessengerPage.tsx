@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { intlLocale, LanguageSwitch, useLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { ASKS } from "./asks";
 import { useHostError } from "./errors";
 import { messages } from "./messages";
 
@@ -111,12 +112,12 @@ export function MessengerPage() {
   useEffect(loadRules, [loadRules]);
   useRealtime(RULES_CHANGED, loadRules);
 
-  const act = async (kind: NonNullable<typeof busy>, work: () => Promise<{ ok: boolean; message: string }>) => {
+  const act = async <R extends { ok: boolean; message: string }>(kind: NonNullable<typeof busy>, work: () => Promise<R>, say?: (result: R) => string) => {
     setBusy(kind);
     setNote(null);
     try {
       const result = await work();
-      setNote({ tone: result.ok ? "ok" : "error", text: hostError(result.message) });
+      setNote({ tone: result.ok ? "ok" : "error", text: result.ok && say ? say(result) : hostError(result.message) });
     } catch (cause) {
       setNote({ tone: "error", text: errorText(cause) });
     } finally {
@@ -186,10 +187,14 @@ export function MessengerPage() {
             <p className="text-sm text-muted-foreground">{t.loading}</p>
           ) : null}
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("signIn", () => rpc.call("signIn", { hostId: hostId! }))}>
+            <Button size="sm" disabled={!ready || busy !== null || status?.browser === null} onClick={() =>
+                act("signIn", () => rpc.call("signIn", { hostId: hostId! }), (result) =>
+                  result.chats > 0 ? t.signedInDirectory(result.chats, result.people) : t.signedInNoDirectory(hostError(result.message)),
+                )
+              }>
               {busy === "signIn" ? t.signingIn : t.signIn}
             </Button>
-            <Button size="sm" variant="outline" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("sync", () => rpc.call("sync", { hostId: hostId! }))}>
+            <Button size="sm" variant="outline" disabled={!ready || busy !== null || status?.browser === null} onClick={() => act("sync", () => rpc.call("sync", { hostId: hostId! }), (result) => t.directoryBuilt(result.chats, result.people))}>
               {busy === "sync" ? t.syncing : t.sync}
             </Button>
             <Button
@@ -203,6 +208,25 @@ export function MessengerPage() {
               {t.forget}
             </Button>
           </div>
+        </Section>
+
+        <Section title={t.askTitle}>
+          <p className="text-sm text-muted-foreground">{t.askIntro}</p>
+          {status && status.signedIn !== true ? <Notice tone="info">{t.askNeedsSignIn}</Notice> : null}
+          <ul className="divide-y divide-border">
+            {ASKS[lang].map((ask) => (
+              <li key={ask.title} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">{ask.title}</div>
+                  <div className="text-xs text-muted-foreground">{ask.prompt}</div>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => navigate.toCompose({ initialPrompt: ask.prompt, focusPrompt: true, ...(hostId ? { hostId } : {}) })}>
+                  {t.askOpen}
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground">{t.askAgentNote}</p>
         </Section>
 
         <Section title={t.agentsTitle}>

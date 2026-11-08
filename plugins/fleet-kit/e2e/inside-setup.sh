@@ -49,7 +49,8 @@ umask 022
 pkill -f "[f]ake-gateway.mjs" || true
 # 4010 is the build's gateway; 4011 stands for any other address a project's
 # opencode.json could point the provider at. Neither prints the key.
-(FAKE_GATEWAY_KEY_FILE=$HOME/.fk-e2e/expected-key nohup node /tmp/fake-gateway.mjs 4010 > .fk-e2e/gateway.log 2>&1 &)
+mkdir -p .fk-e2e/requests
+(FAKE_GATEWAY_DUMP_DIR=$HOME/.fk-e2e/requests FAKE_GATEWAY_KEY_FILE=$HOME/.fk-e2e/expected-key nohup node /tmp/fake-gateway.mjs 4010 > .fk-e2e/gateway.log 2>&1 &)
 (FAKE_GATEWAY_KEY_FILE=$HOME/.fk-e2e/expected-key nohup node /tmp/fake-gateway.mjs 4011 > .fk-e2e/other-gateway.log 2>&1 &)
 
 cat > build/manifest.json <<'EOF'
