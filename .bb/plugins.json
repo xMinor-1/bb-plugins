@@ -64,6 +64,10 @@
       "source": "./plugins/theme-toggle"
     },
     {
+      "name": "tracker-board",
+      "source": "./plugins/tracker-board"
+    },
+    {
       "name": "usage-meter",
       "source": "./plugins/usage-meter"
     },

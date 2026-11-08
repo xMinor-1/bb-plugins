@@ -82,8 +82,28 @@ export const statusSchema = z.object({
   secrets: z.array(secretStatusSchema),
   opencode: opencodeStatusSchema.nullable(),
   notices: z.array(noticeSchema),
+  /** The build's offer of the person's own agents; null when the build has none. */
+  ownAgents: z
+    .object({
+      title: z.string().nullable(),
+      warning: z.string(),
+      providers: z.array(z.object({ id: z.string(), name: z.string() })),
+      delegate: z.object({ provider: z.string(), model: z.string() }).nullable(),
+      on: z.boolean(),
+      at: z.string().nullable(),
+      /** Windows cancelled or left unanswered on this machine. */
+      refusals: z.number().optional(),
+      /** Until when a new window waits after the last refusal; null when it can open now. */
+      retryAt: z.string().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 export type Status = z.infer<typeof statusSchema>;
+
+/** What turning "Own agents" on or off came to. Only `on` changed anything when turning on. */
+export const ownAgentsOutcomeSchema = z.enum(["on", "off", "cancelled", "timeout", "unavailable", "busy", "paused", "not-offered"]);
+export type OwnAgentsOutcome = z.infer<typeof ownAgentsOutcomeSchema>;
 
 /** `checking`: the plugin has not answered within the page's wait; its answer comes with the next update. */
 export const setupStateSchema = z.enum(["done", "todo", "problem", "installing", "later", "checking"]);
@@ -185,6 +205,11 @@ export const rpcContract = defineRpcContract({
   branch_toggle: {
     input: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), on: z.boolean() }).strict(),
     output: z.object({ on: z.boolean() }),
+  },
+  /** Turning on asks the person in a system window first: a call alone changes nothing. */
+  own_agents_set: {
+    input: z.object({ on: z.boolean(), lang: z.enum(["en", "ru"]).optional() }).strict(),
+    output: z.object({ on: z.boolean(), outcome: ownAgentsOutcomeSchema }),
   },
   setup_mark: {
     input: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/), mark: setupMarkSchema.nullable() }).strict(),

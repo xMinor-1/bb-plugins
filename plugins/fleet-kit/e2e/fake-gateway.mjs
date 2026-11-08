@@ -6,7 +6,8 @@
 // models. Each request is logged as one JSON line with `auth` set to "ok",
 // "bad" or "missing"; the key itself is never printed.
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const port = Number(process.argv[2] ?? 4010);
 const keyFile = process.env.FAKE_GATEWAY_KEY_FILE;
@@ -38,6 +39,10 @@ const server = createServer((req, res) => {
       body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
     } catch {
       body = null;
+    }
+    // FAKE_GATEWAY_DUMP_DIR: keep each request body, so a check can read the instructions an agent was given.
+    if (process.env.FAKE_GATEWAY_DUMP_DIR && body !== null) {
+      writeFileSync(join(process.env.FAKE_GATEWAY_DUMP_DIR, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`), JSON.stringify(body));
     }
     console.log(
       JSON.stringify({ at: new Date().toISOString(), method: req.method, url: req.url, auth, model: body?.model ?? null, stream: body?.stream ?? null }),
