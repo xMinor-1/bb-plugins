@@ -132,8 +132,24 @@ bb server (server.ts)                     machine where agents run (src/host.ts)
   `summary` is one line in `lang` with no address, login or report names,
   `path` is the Qlik page. It reads the saved state only and sends nothing to Qlik;
   a machine's answer serves for 5 seconds, and a change on the panel drops it.
-  It is the only RPC method other plugins may call: the panel's methods refuse
-  any caller but the panel, the bb CLI and agents.
+  Besides `accountSignIn` below, it is the only RPC method other plugins may
+  call: the panel's methods refuse any caller but the panel, the bb CLI and
+  agents.
+- **Sign-in from a trusted plugin.** `accountSignIn` lets a build's control
+  panel, such as Fleet Kit, ask for the company account once and hand it over.
+  Only plugins listed in the `accountPlugins` setting (*Plugins that may sign
+  you in*, ids separated by commas, empty by default) may call it; anyone else,
+  the panel and the bb CLI included, gets a `forbidden` refusal. Input
+  `{ user, password, lang?: "en" | "ru", hostId?: string }`, the login as
+  `DOMAIN\user`. It saves the account on the machine with the address from the
+  `url` setting, the same way the Qlik page does, checks the sign-in and answers
+  like `setupStatus` after the check: `{ state, summary, path, rejected? }`.
+  After a good sign-in the answer is still `todo` until someone picks reports
+  for agents. `rejected: true` means Qlik refused the login or password; the
+  caller should not send them again. Without an address, with a login missing
+  its domain, or while an earlier refusal blocks sign-ins it answers `problem`
+  without asking Qlik, and a sign-in that already passed its check is left as
+  it is. The answer never holds the login or the password.
 - The password store is asked whether a password is there without reading it
   (Keychain item attributes, the DPAPI or private file's presence), so frequent
   status checks do not touch the password.
