@@ -10,8 +10,11 @@ bad=0
 say() { echo "$*" | tee -a "$OUT/summary.txt"; }
 result() { if [ "$1" = 0 ]; then say "PASS  $2"; else bad=$((bad + 1)); say "FAIL  $2"; fi; }
 
-URL=$(node -p "require('$HERE/versions.json')['mac-arm64'].url")
-SHA=$(node -p "require('$HERE/versions.json')['mac-arm64'].sha256")
+# The package for this processor: Apple silicon or Intel.
+KEY=$([ "$(uname -m)" = arm64 ] && echo mac-arm64 || echo mac-x64)
+say "machine: $(uname -m), package $KEY"
+URL=$(node -p "require('$HERE/versions.json')['$KEY'].url")
+SHA=$(node -p "require('$HERE/versions.json')['$KEY'].sha256")
 PKG="$(mktemp -d)/libreoffice.dmg"
 curl -fsSL --retry 3 -o "$PKG" "$URL"
 [ "$(shasum -a 256 "$PKG" | cut -d' ' -f1)" = "$SHA" ]; result $? "the .dmg matches versions.json"

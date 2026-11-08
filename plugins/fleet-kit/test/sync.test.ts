@@ -377,7 +377,7 @@ describe("programs plugins need (apps)", () => {
   async function prepared(manifest: Record<string, unknown>, outcome: any = { state: "installed", path: "C:\\Users\\p\\apps\\office\\26.8.2\\Office\\program\\soffice.exe" }) {
     const env = await setup(manifest, [self()]);
     const asked: any[] = [];
-    env.deps.settings = { ...env.deps.settings, opencodeInstallDir: join(tmpdir(), "x5", "runtime", "opencode") };
+    env.deps.settings = { ...env.deps.settings, opencodeInstallDir: join(tmpdir(), "build", "runtime", "opencode") };
     env.deps.machine = "win32-x64";
     env.deps.ensureApp = async (input) => {
       asked.push(input);
@@ -392,7 +392,7 @@ describe("programs plugins need (apps)", () => {
     const outcome = await runSync(env.deps, "start");
     expect(pluginCalls(env.calls)).toEqual(["install notes", "config notes allowedProviders,greeting", "app 26.8.2", "config notes officePath", "install board"]);
     expect(env.plugins.get("notes")!.values.officePath).toContain("soffice.exe");
-    expect(env.asked[0].directory).toBe(join(tmpdir(), "x5", "runtime", "apps", "office"));
+    expect(env.asked[0].directory).toBe(join(tmpdir(), "build", "runtime", "apps", "office"));
     expect(env.asked[0].file.parts).toEqual([part]);
     expect(outcome.report.steps.find((step) => step.area === "app")).toMatchObject({ item: "Office", outcome: "changed", code: "appInstalled" });
   });

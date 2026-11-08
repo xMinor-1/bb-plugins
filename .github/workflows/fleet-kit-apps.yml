@@ -7,7 +7,8 @@
 # - windows-test: a standard user (no administrator rights, non-ASCII name with a space) installs the zip with
 #   Fleet Kit's own code (src/host/install-app.ts), then doc-review's own code (src/libreoffice.ts) converts a
 #   .docx and a .pptx to PDF. Nothing may appear in Program Files or the uninstall list.
-# - mac-test: the same code installs the official .dmg into the home folder without sudo, then converts the same.
+# - mac-test: on Apple silicon and Intel, the same code installs the official .dmg into the home folder without sudo,
+#   then converts the same.
 name: fleet-kit apps
 
 on:
@@ -70,7 +71,12 @@ jobs:
           retention-days: 14
 
   mac-test:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Apple silicon and Intel: each gets its own official .dmg.
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +93,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: libreoffice-report-macos
+          name: libreoffice-report-${{ matrix.os }}
           path: /tmp/lo-out
           retention-days: 14

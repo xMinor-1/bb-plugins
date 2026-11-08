@@ -772,7 +772,7 @@ e2e/x.sh 'node ~/pw/panel-smoke.mjs'
 push to its files or `src/host/install-app.ts`) unpacks the official LibreOffice MSI
 into a zip with `msiexec /a` and the Visual C++ runtime next to the program, installs
 it with `ensureApp` as a standard Windows user (non-ASCII name, long paths off), and
-installs the official `.dmg` on macOS; then doc-review's own code converts a `.docx`
+installs the official `.dmg` on macOS, Apple silicon and Intel; then doc-review's own code converts a `.docx`
 and a `.pptx`. The zip stays as the artifact `libreoffice-win-x64` for whoever mirrors it.
 
 ## License
