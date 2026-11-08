@@ -45,16 +45,12 @@ export const rpcContract = defineRpcContract({
         name: z.string(),
         summary: z.string(),
         notice: z.string(),
-        /** Short text drawn as the sidebar icon instead of the database mark; null for the mark. */
-        iconText: z.string().nullable(),
         /** The address people sign in to. They do not type it. */
         address: z.string().nullable(),
         /** Why the configuration cannot be used; null when it can. */
         problem: z.string().nullable(),
         canCheck: z.boolean(),
         rules: z.array(ruleSchema),
-        /** The build's plain words for who may read the data; null shows the rules. */
-        rulesText: z.string().nullable(),
       })
       .strict(),
   },
@@ -91,7 +87,6 @@ interface ServiceConfig {
   name: string;
   summary: string;
   notice: string;
-  iconText: string | null;
   guide: string;
   baseUrl: string | null;
   methods: ServiceMethod[];
@@ -103,7 +98,6 @@ interface RawSettings {
   serviceName: string;
   summary: string;
   notice: string;
-  iconText: string;
   baseUrl: string;
   methods: string;
   checkMethod: string;
@@ -136,22 +130,12 @@ function readConfig(raw: RawSettings): ServiceConfig {
     name: raw.serviceName.trim() || "Data Service",
     summary: raw.summary.trim(),
     notice: raw.notice.trim(),
-    iconText: readIconText(raw.iconText),
     guide: raw.guide,
     baseUrl,
     methods,
     checkMethod,
     problem: problems[0] ?? null,
   };
-}
-
-export const ICON_TEXT_MAX = 3;
-
-/** The icon text, or null for the database mark: empty or longer than the icon fits. */
-export function readIconText(value: string): string | null {
-  const text = value.trim();
-  const length = Array.from(text).length;
-  return length > 0 && length <= ICON_TEXT_MAX ? text : null;
 }
 
 /** What the agent should do about a failure. Text for agents stays English. */
@@ -202,13 +186,6 @@ export default async function plugin(bb: BbPluginApi) {
       experimental_multiline: true,
       experimental_schema: z.string().max(1000),
     },
-    iconText: {
-      type: "string",
-      label: "Sidebar icon text",
-      description: `Optional: up to ${ICON_TEXT_MAX} characters drawn as the sidebar icon instead of the database mark, for example the service's short name.`,
-      default: "",
-      experimental_schema: z.string().max(20).refine((value) => value.trim() === "" || readIconText(value) !== null, `Up to ${ICON_TEXT_MAX} characters`),
-    },
     baseUrl: {
       type: "string",
       label: "Service address",
@@ -239,13 +216,6 @@ export default async function plugin(bb: BbPluginApi) {
       experimental_multiline: true,
       experimental_schema: z.string().max(100_000),
     },
-    allowedModelsText: {
-      type: "string",
-      label: "Who may read the data, in plain words",
-      description: "Optional: what the sign-in page says instead of the rules below, for example \"Only agents on the company's models\". Empty shows the rules as written.",
-      default: "",
-      experimental_schema: z.string().max(300),
-    },
     allowedModels: {
       type: "string",
       label: "Agents allowed to read the data",
@@ -264,10 +234,8 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   let policy: Policy = createPolicy([]);
-  let config: ServiceConfig = readConfig({ serviceName: "", summary: "", notice: "", iconText: "", baseUrl: "", methods: "", checkMethod: "", guide: "" });
-  let rulesText = "";
-  const apply = (raw: RawSettings & { allowedModels: string; allowedModelsText: string }) => {
-    rulesText = raw.allowedModelsText.trim();
+  let config: ServiceConfig = readConfig({ serviceName: "", summary: "", notice: "", baseUrl: "", methods: "", checkMethod: "", guide: "" });
+  const apply = (raw: RawSettings & { allowedModels: string }) => {
     try {
       policy = createPolicy(parseRules(raw.allowedModels));
     } catch (error) {
@@ -461,12 +429,10 @@ export default async function plugin(bb: BbPluginApi) {
       name: config.name,
       summary: config.summary,
       notice: config.notice,
-      iconText: config.iconText,
       address: config.baseUrl,
       problem: config.problem,
       canCheck: config.checkMethod !== null && config.problem === null,
       rules: [...policy.rules],
-      rulesText: rulesText || null,
     }),
     status: async ({ hostId }) => {
       await kv.set("ui:lastHost", hostId);

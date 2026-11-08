@@ -35,6 +35,10 @@ const pluginShape = {
   config: z.record(z.string().regex(/^[A-Za-z][A-Za-z0-9]*$/), scalar).optional(),
   status: z.enum(["required", "planned"]),
   note: z.string().optional(),
+  /** The name the First run page shows while the plugin installs; else its branch or step title, else the id. */
+  title: z.string().min(1).max(80).optional(),
+  /** Shown next to the plugin while it waits and installs, such as how large its download is. */
+  installNote: z.string().min(1).max(200).optional(),
 };
 
 const pluginEntry = z
@@ -65,6 +69,46 @@ const mcpEntry = z
   .strict();
 
 /**
+ * One sign-in for several plugins: the page asks for the login and password
+ * once, keeps them in the credential store and hands each plugin its own
+ * form of the login (`{login}` is what the person typed, without a domain
+ * before a backslash or after an @). A `windows` plugin signs in in its own
+ * window: the step has a button that opens it.
+ */
+const accountBlock = z
+  .object({
+    loginHint: z.string().min(1).max(300).optional(),
+    passwordHint: z.string().min(1).max(300).optional(),
+    plugins: z
+      .array(
+        z
+          .object({
+            plugin: id,
+            /** The login as this plugin wants it, such as "{login}", "DOMAIN\\{login}" or "{login}@example.com". */
+            login: z.string().regex(/\{login\}/, "use {login} where the person's login goes").max(200),
+            /** False: listed, but the shared sign-in is not handed to it (its own form stays). */
+            enabled: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .default([]),
+    windows: z
+      .array(
+        z
+          .object({
+            plugin: id,
+            /** The plugin's RPC that opens its sign-in window; it takes `{ hostId }`. */
+            method: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/).default("signIn"),
+            hint: z.string().min(1).max(300).optional(),
+          })
+          .strict(),
+      )
+      .default([]),
+  })
+  .strict();
+export type AccountBlock = z.infer<typeof accountBlock>;
+
+/**
  * A step of the "First run" page: a build secret the page asks for itself, or
  * a plugin the page asks for its state (RPC `setupStatus`). `path` is where the
  * step's button leads when the plugin cannot say.
@@ -77,6 +121,7 @@ const onboardingStep = z
     optional: z.boolean().optional(),
     secret: id.optional(),
     plugin: id.optional(),
+    account: accountBlock.optional(),
     path: z
       .string()
       .regex(/^\/plugins\/[a-z0-9][a-z0-9-]*(\/[A-Za-z0-9._~-]+)*$/, "use a bb page such as /plugins/<id>/<panel>")
@@ -84,8 +129,11 @@ const onboardingStep = z
   })
   .strict()
   .superRefine((step, ctx) => {
-    if ((step.secret === undefined) === (step.plugin === undefined)) {
-      ctx.addIssue({ code: "custom", message: "name exactly one of secret and plugin" });
+    if ([step.secret, step.plugin, step.account].filter((value) => value !== undefined).length !== 1) {
+      ctx.addIssue({ code: "custom", message: "name exactly one of secret, plugin and account" });
+    }
+    if (step.account !== undefined && step.path !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["path"], message: "an account step is done on the First run page itself" });
     }
     if (step.secret !== undefined && step.path !== undefined) {
       ctx.addIssue({ code: "custom", path: ["path"], message: "a secret step is done on the First run page itself" });
@@ -202,47 +250,6 @@ const opencodeFile = z
   })
   .strict();
 
-const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/, "use a sha256 in lowercase hex");
-const appUrl = z.string().regex(/^(https:\/\/|file:\/\/\/|http:\/\/(localhost|127\.0\.0\.1)[:/])\S+$/, "use an https:// address");
-/** A path inside the package: forward slashes, no "..", not absolute. */
-const appProgram = z
-  .string()
-  .min(1)
-  .max(500)
-  .refine((value) => !value.startsWith("/") && !value.includes("\\") && !/^[A-Za-z]:/.test(value) && value.split("/").every((part) => part !== "" && part !== "." && part !== ".."), "use a relative path with forward slashes");
-
-/** A program's package for one operating system and processor, in parts no bigger than the server takes. */
-const appFile = z
-  .object({
-    format: z.enum(["zip", "dmg"]),
-    parts: z.array(z.object({ url: appUrl, sha256: sha256Hex }).strict()).min(1).max(100),
-    sha256: sha256Hex,
-    program: appProgram,
-  })
-  .strict();
-
-/**
- * A program a plugin needs on the machine, such as an office suite a document viewer converts with. Fleet Kit puts
- * it in the person's own folder, without administrator rights, and writes the program's path to the plugin's setting.
- */
-const appEntry = z
-  .object({
-    id,
-    title: z.string().min(1).max(100),
-    version: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z._-]*$/).max(50),
-    /** Installed only while this plugin is on here. */
-    plugin: id,
-    /** The plugin's setting that takes the program's full path. */
-    setting: z.string().regex(/^[A-Za-z][A-Za-z0-9]*$/),
-    /** Install just before this plugin's turn, after the ones before it; without it, after all plugins. */
-    before: id.optional(),
-    /** By <platform>-<arch>, as Node names them: darwin-arm64, win32-x64. A machine with none goes without. */
-    files: z.record(z.string().regex(/^[a-z0-9]+-[a-z0-9]+$/), appFile),
-    note: z.string().optional(),
-  })
-  .strict();
-export type ManifestApp = z.infer<typeof appEntry>;
-
 const rootShape = {
   /** Where Fleet Kit gets the OpenCode of install.opencode, by <platform>-<arch>; "-baseline" is for processors without AVX2. */
   opencodeInstall: z
@@ -268,14 +275,26 @@ const rootShape = {
     .object({
       minVersion: exactVersion,
       settings: z.record(z.string().regex(/^[a-z][A-Za-z0-9]*$/), scalar).optional(),
+      /**
+       * bb's sidebar as the build wants it on a new machine: which entries
+       * show (`<pluginId>/<panel id>`, bb's own as `__bb__/<id>`) and which
+       * footer actions move into More. Set once; a person's later change stays.
+       */
+      ui: z
+        .object({
+          visiblePluginPanels: z.array(z.string().regex(/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/, "use <pluginId>/<panel id>")).optional(),
+          /** bb shows every entry missing from this order, whatever visiblePluginPanels says: list the hidden ones here too. */
+          pluginPanelOrder: z.array(z.string().regex(/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/, "use <pluginId>/<panel id>")).optional(),
+          hiddenFooterItems: z.array(z.string().regex(/^(builtin:[a-z0-9-]+|plugin:[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+)$/, "use builtin:<id> or plugin:<pluginId>/<id>")).optional(),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
   marketplaces: z
     .array(z.object({ source: z.string().min(1), subdirectory: z.string().min(1).optional() }).strict())
     .optional(),
   plugins: z.array(pluginEntry),
-  /** Programs plugins need, installed for the person in plugin order (see `before`). */
-  apps: z.array(appEntry).optional(),
   removePlugins: z.array(id).optional(),
   secrets: z.array(z.object({ name: id, title: z.string().min(1), hint: z.string().optional() }).strict()),
   allowedProviders: z.array(id).min(1),
@@ -609,7 +628,6 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
     }
     if (new Set(manifest.agents.allowed).size !== manifest.agents.allowed.length) errors.push("agents.allowed: an agent is listed twice");
   }
-  checkApps(manifest, errors);
   for (const replaced of manifest.branding?.replaces ?? []) {
     if (ids.has(replaced)) errors.push(`branding.replaces: "${replaced}" is also in plugins; it would be installed and removed on every sync`);
     if (replaced === SELF_ID) errors.push("branding.replaces: Fleet Kit cannot remove itself");
@@ -656,6 +674,13 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
           : step.plugin !== undefined && !ids.has(step.plugin)
             ? `refers to the plugin "${step.plugin}", which is not in plugins`
             : null;
+      if (problem === null && step.account !== undefined) {
+        // A plugin the build does not list is dropped from the step, not the step itself.
+        const unknown = [...step.account.plugins, ...step.account.windows].map((entry) => entry.plugin).filter((plugin) => !ids.has(plugin));
+        for (const plugin of unknown) warnings.push(`onboarding.${step.id}: refers to the plugin "${plugin}", which is not in plugins; it is left out`);
+        step.account.plugins = step.account.plugins.filter((entry) => ids.has(entry.plugin));
+        step.account.windows = step.account.windows.filter((entry) => ids.has(entry.plugin));
+      }
       seen.add(step.id);
       if (problem !== null) warnings.push(`onboarding.${step.id}: ${problem}; the step is not shown`);
       return problem === null;
@@ -667,31 +692,6 @@ export function checkManifest(raw: unknown, options: CheckOptions = {}): Manifes
   }
   if (/-/.test(manifest.version)) warnings.push(`version: ${manifest.version} is a pre-release`);
   return { manifest: errors.length === 0 ? manifest : null, errors, warnings, newerFormat: false };
-}
-
-function checkApps(manifest: Manifest, errors: string[]) {
-  const order = manifest.plugins.map((entry) => entry.id);
-  const seen = new Set<string>();
-  for (const app of manifest.apps ?? []) {
-    const where = `apps.${app.id}`;
-    if (seen.has(app.id)) errors.push(`${where}: listed twice`);
-    seen.add(app.id);
-    const at = order.indexOf(app.plugin);
-    const entry = manifest.plugins[at];
-    if (entry === undefined) errors.push(`${where}.plugin: "${app.plugin}" is not in plugins`);
-    else if (app.plugin === SELF_ID) errors.push(`${where}.plugin: a program for Fleet Kit itself is not supported`);
-    else if (entry.config !== undefined && app.setting in entry.config) {
-      errors.push(`${where}.setting: plugins.${app.plugin}.config sets "${app.setting}" too; the installed program's path would be overwritten`);
-    }
-    if (app.before !== undefined) {
-      const before = order.indexOf(app.before);
-      if (before < 0) errors.push(`${where}.before: "${app.before}" is not in plugins`);
-      else if (at >= 0 && before <= at) errors.push(`${where}.before: "${app.before}" comes before "${app.plugin}" in plugins, so the program would install before its plugin`);
-    }
-    for (const [key, file] of Object.entries(app.files)) {
-      if (file.format === "dmg" && !key.startsWith("darwin-")) errors.push(`${where}.files.${key}: a .dmg opens only on macOS`);
-    }
-  }
 }
 
 /**

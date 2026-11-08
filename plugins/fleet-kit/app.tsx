@@ -3,7 +3,7 @@
 // (src/app/setup-page.tsx): the build's setup steps. Data comes from the
 // backend over RPC; the backend's "status-changed" signal triggers a refetch.
 import { useCallback, useEffect, useState } from "react";
-import { definePluginApp, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
+import { definePluginApp, useBbNavigate, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
 import type { OwnAgentsOutcome, Status, Step } from "./contract";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,9 @@ import { defineMessages, getLang, intlLocale, LanguageSwitch, useLang, useMessag
 import { render } from "./src/shared/texts";
 import { watchBranding } from "./src/app/branding";
 import { Frame, Section, SecretRow, STATUS_CHANNEL } from "./src/app/parts";
-import { markSetupEntryRegistered, SETUP_PANEL, SetupBanner, SetupPage, setupEntryWanted, setupTitle, useSetupBadge } from "./src/app/setup-page";
+import { SETUP_SUBPATH, SetupBanner, SetupPage, setupTitle, startsOnSetup, useSetupBadge } from "./src/app/setup-page";
+import type { PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
+import { FirstRunRedirect } from "./src/app/first-run-redirect";
 type Outcome = NonNullable<Status["lastSync"]>["outcome"];
 
 const messages = defineMessages(
@@ -155,6 +157,9 @@ const ITEM_RU: Record<string, string> = {
   "thread-title": "названия тредов",
   "commit-message": "сообщения коммитов",
   voice: "голос",
+  sidebar: "боковая панель",
+  "sidebar.visiblePluginPanels": "пункты боковой панели",
+  "sidebar.hiddenFooterItems": "кнопки внизу панели",
 };
 
 function useStatus() {
@@ -436,6 +441,52 @@ function FleetKitPage() {
   );
 }
 
+/** The panel's two views: the First run steps and the build's status. */
+const STATUS_SUBPATH = "sync";
+
+function Tabs({ view }: { view: "setup" | "status" }) {
+  const navigate = useBbNavigate();
+  const lang = useLang();
+  const tab = (id: "setup" | "status", title: string, subPath: string) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={view === id}
+      data-tab={id}
+      onClick={() => (view === id ? undefined : navigate.toPluginPanel(PANEL_PATH, { subPath }))}
+      className={cn(
+        "-mb-px border-b-2 px-3 py-2 text-sm transition-colors",
+        view === id ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {title}
+    </button>
+  );
+  return (
+    <div role="tablist" className="mx-auto flex w-full max-w-3xl gap-1 border-b border-border px-4 pt-3">
+      {tab("setup", setupTitle(lang), SETUP_SUBPATH)}
+      {tab("status", lang === "ru" ? "Состояние сборки" : "Build status", STATUS_SUBPATH)}
+    </div>
+  );
+}
+
+/**
+ * One sidebar entry for both views. Its root opens First run until every
+ * step is done (and on a fresh bb, before the build is read), then the status.
+ */
+function FleetKitPanel({ subPath }: PluginNavPanelProps) {
+  const first = subPath.split("/")[0] ?? "";
+  const view = first === SETUP_SUBPATH ? "setup" : first === STATUS_SUBPATH ? "status" : startsOnSetup() ? "setup" : "status";
+  return (
+    <>
+      <Tabs view={view} />
+      {view === "setup" ? <SetupPage /> : <FleetKitPage />}
+    </>
+  );
+}
+
+const PANEL_PATH = "status";
+
 export default definePluginApp((app) => {
   // The build's name and logo. A content script and not an overlay: bb's onboarding screen, which carries its logo,
   // replaces the app shell, so overlays only appear after it. A content script has no RPC hook, so it asks the server.
@@ -449,25 +500,15 @@ export default definePluginApp((app) => {
       });
     },
   });
-  const withSetup = setupEntryWanted();
+  // Once per launch, from the new-thread screen: First run while steps are left.
+  app.slots.experimental_appOverlay({ id: "first-run", component: FirstRunRedirect });
+  // /plugins/fleet-kit/status opens First run while steps are left; /status/setup and /status/sync open a view.
   app.slots.navPanel({
     id: "fleet-kit",
     title: "Fleet Kit",
     icon: "PackageReceive",
-    path: "status",
-    component: FleetKitPage,
-    // Without the First run entry, steps that appear later are counted here.
-    ...(withSetup ? {} : { experimental_useBadge: useSetupBadge }),
-  });
-  if (!withSetup) return;
-  // The installer opens bb on this page: /plugins/fleet-kit/setup.
-  app.slots.navPanel({
-    id: "fleet-kit-setup",
-    title: setupTitle(getLang()),
-    icon: "Target",
-    path: SETUP_PANEL,
-    component: SetupPage,
+    path: PANEL_PATH,
+    component: FleetKitPanel,
     experimental_useBadge: useSetupBadge,
   });
-  markSetupEntryRegistered();
 });

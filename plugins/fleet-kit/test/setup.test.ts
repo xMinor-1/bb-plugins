@@ -114,7 +114,8 @@ describe("collectSetup", () => {
     expect(byId(setup, "mail")).toMatchObject({ kind: "plugin", state: "done", summary: "Почта подключена", path: "/plugins/mail/mail", manual: false });
     expect(byId(setup, "qlik")).toMatchObject({ state: "todo", hint: "Pick reports", path: "/plugins/qlik/qlik-sense" });
     expect(byId(setup, "mcp")).toMatchObject({ state: "problem", summary: "Проверка не прошла" });
-    expect(byId(setup, "voice")).toMatchObject({ state: "later", path: null });
+    // A plugin the build has not shipped yet has no step: the branch card names it.
+    expect(setup.steps.find((step) => step.id === "voice")).toBeUndefined();
     expect(setup).toMatchObject({ configured: true, remaining: 2, complete: false, secretStore: "macOS Keychain" });
   });
 
@@ -124,7 +125,24 @@ describe("collectSetup", () => {
     expect(calls).toEqual([]);
     expect(byId(setup, "mail").state).toBe("installing");
     expect(byId(setup, "qlik").state).toBe("installing");
-    expect(byId(setup, "voice").state).toBe("later");
+    expect(setup.steps.find((step) => step.id === "voice")).toBeUndefined();
+  });
+
+  it("shows a plugin waiting for its turn as queued and only the one being installed as installing", async () => {
+    const { value } = deps({ installed: [] });
+    const installs = {
+      startedAt: "2026-11-08T10:00:00Z",
+      finishedAt: null,
+      current: { id: "mail", title: "Mail", note: null, startedAt: "2026-11-08T10:00:00Z" },
+      queue: [{ id: "qlik", title: "Qlik", note: null }],
+      done: [],
+      averageSeconds: null,
+    };
+    const setup = await collectSetup({ ...value, installs });
+    expect(byId(setup, "mail").state).toBe("installing");
+    expect(byId(setup, "qlik").state).toBe("queued");
+    const after = await collectSetup({ ...value, installs: { ...installs, finishedAt: "2026-11-08T10:05:00Z" } });
+    expect(byId(after, "qlik").state).toBe("installing");
   });
 
   it("shows a plugin the last sync failed to install as a problem", async () => {
@@ -352,7 +370,7 @@ describe("branches on the First run page", () => {
 
   it("a new machine shows the shared steps at once and counts the branch as a step while plugins wait", async () => {
     const setup = await collectSetup(withState({ choice: null, start: "wait", applied: {} }));
-    expect(setup.steps.map((step) => step.id)).toEqual(["mail", "voice"]);
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail"]);
     expect(setup.branches).toMatchObject({ chosen: null, waiting: true, dropped: false });
     expect(setup.branches!.plugins.find((plugin) => plugin.id === "reports")).toMatchObject({ on: false, waiting: true });
     expect(setup.remaining).toBe(1);
@@ -360,7 +378,7 @@ describe("branches on the First run page", () => {
 
   it("a machine that had the build keeps every step, and the branch is not a step left", async () => {
     const setup = await collectSetup(withState({ choice: null, start: "all", applied: {} }));
-    expect(setup.steps.map((step) => step.id)).toEqual(["mail", "reports", "voice"]);
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail", "reports"]);
     expect(setup.branches).toMatchObject({ chosen: null, waiting: false });
     expect(setup.branches!.plugins.every((plugin) => plugin.on)).toBe(true);
     expect(setup.remaining).toBe(0);
@@ -374,8 +392,8 @@ describe("branches on the First run page", () => {
     expect(setup.complete).toBe(true);
     expect(setup.branches).toEqual({
       list: [
-        { id: "sales", title: "Sales", hint: "Reports and contacts" },
-        { id: "engineering", title: "Engineering", hint: null },
+        { id: "sales", title: "Sales", hint: "Reports and contacts", defaults: { mail: true, reports: true } },
+        { id: "engineering", title: "Engineering", hint: null, defaults: { mail: true, reports: false } },
       ],
       chosen: "engineering",
       dropped: false,
@@ -392,7 +410,7 @@ describe("branches on the First run page", () => {
     const choice = { branch: "gone", plugins: {}, at: "2026-11-07T10:00:00Z" };
     const setup = await collectSetup(withState({ choice, start: "wait", applied: { mail: true, reports: false, voice: true } }));
     expect(setup.branches).toMatchObject({ chosen: null, dropped: true, waiting: false });
-    expect(setup.steps.map((step) => step.id)).toEqual(["mail", "voice"]);
+    expect(setup.steps.map((step) => step.id)).toEqual(["mail"]);
     expect(setup.remaining).toBe(0);
   });
 

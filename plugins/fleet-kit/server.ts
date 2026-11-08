@@ -7,7 +7,7 @@
 // demand. Secrets are stored in the operating system's credential store.
 import { PluginCliError, cliCommand, defineCli, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { rpcContract, STATUS_CHANNEL, type Notice, type OpenCodeStatus, type Setup, type SetupMark, type Status, type SyncReport } from "./contract.js";
+import { rpcContract, STATUS_CHANNEL, type InstallProgress, type Notice, type OpenCodeStatus, type Setup, type SetupMark, type Status, type SyncReport } from "./contract.js";
 import { checkSecretValue, openSecretStore, SECRET_NAME, type SecretStore, type SecretStorePreference } from "./src/secret-store.js";
 import { emptyManaged, runSync, SELF_ID, type FleetKitSettings, type ManagedState } from "./src/sync.js";
 import type { Manifest } from "./src/manifest.js";
@@ -15,9 +15,11 @@ import { maskManifestUrl, parseManifestLocation } from "./src/fetch-manifest.js"
 import { opencodeConfigDirSchema, opencodeInstallDirSchema } from "./src/shared/settings.js";
 import { resolveOpenCodeLocation } from "./src/host/opencode-location.js";
 import { lockState, resetStuckLock } from "./src/host/lock-state.js";
-import { collectSetup, markProblem, SetupAsker, type StoredOnboarding } from "./src/setup.js";
+import { collectSetup, markProblem, PLUGIN_SETUP_MS, SetupAsker, type StoredOnboarding } from "./src/setup.js";
+import { ACCOUNT_CALL_MS, ACCOUNT_METHOD, accountAnswerSchema, accountSecretName, checkAccount, handOut, type AccountResults, type AccountValue } from "./src/account.js";
+import { pluginTitle } from "./src/install-progress.js";
 import { createChoiceQueue } from "./src/choice-store.js";
-import { chooseBranch, noBranchState, togglePlugin, turnsOff, type BranchChoice, type BranchState } from "./src/branches.js";
+import { chooseBranch, pluginWanted, noBranchState, togglePlugin, turnsOff, type BranchChoice, type BranchState } from "./src/branches.js";
 import { agentBuildOf, consentKey, emptyAgentBuild, normalizeAgentBuild, normalizeChoice, ownAgentsOn, skillInstructions, skillsFor, SKILL_TOOL, type AgentBuild, type OwnAgentsChoice } from "./src/own-agents.js";
 import { oneAtATime, systemConfirmWindow, type ConfirmWindow, type WindowText } from "./src/host/confirm-window.js";
 import type { OwnAgentsOutcome } from "./contract.js";
@@ -110,12 +112,6 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
       default: "",
       experimental_schema: opencodeInstallDirSchema,
     },
-    appsInstallDir: {
-      type: "string",
-      label: "Folder for programs plugins need, such as an office suite (empty: next to the OpenCode folder)",
-      default: "",
-      experimental_schema: opencodeInstallDirSchema,
-    },
     secretStore: {
       type: "select",
       label: "Where secrets are stored",
@@ -156,7 +152,6 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
       syncIntervalMinutes: value.syncIntervalMinutes,
       opencodeConfigDir: value.opencodeConfigDir.trim(),
       opencodeInstallDir: value.opencodeInstallDir.trim(),
-      appsInstallDir: value.appsInstallDir.trim(),
       allowDevSources: value.allowDevSources,
       paused: value.paused,
       secretStore: value.secretStore as SecretStorePreference,
@@ -199,6 +194,8 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
   const threadAgents = new Map<string, string>();
 
   const setupAnswers = new Map<"en" | "ru", { at: number; answer: Promise<Setup> }>();
+  /** The plugins the current or last sync of this process installs; the First run page shows the queue. */
+  let installs: InstallProgress | null = null;
 
   function publish() {
     setupAnswers.clear();
@@ -207,6 +204,8 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
 
   // A plugin that answers after the page stopped waiting: the page asks again and gets the answer.
   const asker = new SetupAsker((args) => bb.sdk.plugins.callRpc(args), () => publish());
+  // Before a password goes to a plugin, its own answer is waited for in full: one signed in already (Kerberos) gets nothing.
+  const patientAsker = new SetupAsker((args) => bb.sdk.plugins.callRpc(args), () => undefined, { waitMs: PLUGIN_SETUP_MS + 1_000, freshMs: 0 });
 
   async function setup(lang: "en" | "ru"): Promise<Setup> {
     const cached = setupAnswers.get(lang);
@@ -224,12 +223,83 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
         lastSync: (await kv.get<SyncReport>("lastSync")) ?? null,
         lang,
         branchState: await readBranchState(),
+        installs,
+        account: async (stepId) => ({ value: await readAccount(stepId), results: (await kv.get<AccountResults>(`accountResults:${stepId}`)) ?? {} }),
+        hostId: await primaryHost(),
       })),
+      installs,
       opencodeInstall: (await kv.get<OpenCodeStatus>("opencode"))?.install ?? null,
     }))();
     setupAnswers.set(lang, { at: Date.now(), answer });
     answer.catch(() => setupAnswers.delete(lang));
     return answer;
+  }
+
+  let hostId: string | null | undefined;
+  async function primaryHost(): Promise<string | null> {
+    if (hostId === undefined) hostId = await bb.sdk.system.config().then((config) => (config as { primaryHostId?: string | null }).primaryHostId ?? null, () => null);
+    return hostId ?? null;
+  }
+
+  /** An account step's login and password from the credential store; null when none or unreadable. */
+  async function readAccount(stepId: string): Promise<AccountValue | null> {
+    const raw = await store.get(accountSecretName(stepId)).catch(() => null);
+    if (raw === null) return null;
+    try {
+      const value = JSON.parse(raw) as Partial<AccountValue>;
+      return typeof value.login === "string" && typeof value.password === "string" ? { login: value.login, password: value.password } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Hands the saved sign-ins to the plugins that still need them: after it is typed and after every sync. One at a time. */
+  let handing: Promise<void> = Promise.resolve();
+  function handOutAccounts(lang: "en" | "ru" = "en"): Promise<void> {
+    handing = handing.then(async () => {
+      const onboarding = (await kv.get<StoredOnboarding>("onboarding")) ?? null;
+      const steps = (onboarding?.steps ?? []).filter((step) => step.account !== undefined);
+      if (steps.length === 0) return;
+      const installed = new Map((await bb.sdk.plugins.list()).plugins.map((plugin) => [plugin.id, plugin]));
+      const state = await readBranchState();
+      for (const step of steps) {
+        const value = await readAccount(step.id);
+        if (value === null) continue;
+        const key = `accountResults:${step.id}`;
+        const outcome = await handOut({
+          block: step.account!,
+          value,
+          results: (await kv.get<AccountResults>(key)) ?? {},
+          installed,
+          wanted: (plugin) => !(onboarding!.planned ?? []).includes(plugin) && pluginWanted(onboarding!.branches ?? undefined, state, plugin) === "on",
+          status: (plugin) => patientAsker.ask(plugin, lang),
+          signIn: (pluginId, user, password, language) =>
+            bb.sdk.plugins.callRpc({
+              pluginId,
+              method: ACCOUNT_METHOD,
+              input: { user, password, lang: language },
+              outputSchema: accountAnswerSchema,
+              signal: AbortSignal.timeout(ACCOUNT_CALL_MS),
+            }),
+          lang,
+        });
+        if (outcome.changed) {
+          await kv.set(key, outcome.results);
+          publish();
+        }
+      }
+    }).catch((error: unknown) => bb.log.warn(`could not hand out the sign-in: ${error instanceof Error ? error.message : String(error)}`));
+    return handing;
+  }
+
+  async function setAccount(stepId: string, login: string, password: string, lang: "en" | "ru") {
+    const step = ((await kv.get<StoredOnboarding>("onboarding"))?.steps ?? []).find((candidate) => candidate.id === stepId);
+    if (step?.account === undefined) throw new Error("The build has no such sign-in step.");
+    const value = checkAccount(login, password);
+    await store.set(accountSecretName(stepId), JSON.stringify(value));
+    publish();
+    // The page asks again as each plugin answers; the call itself returns once the pair is saved.
+    void handOutAccounts(lang);
   }
 
   async function secretsStatus(): Promise<Status["secrets"]> {
@@ -367,6 +437,10 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
           await kv.set("opencode", value);
           publish();
         },
+        onInstalls: (value) => {
+          installs = value;
+          publish();
+        },
         onManifest: async (manifest, branches) => {
           await saveFromManifest(manifest);
           await kv.set("branchSync", { start: branches.start, applied: branches.applied });
@@ -378,6 +452,8 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
     await kv.set("managed", outcome.managed);
     await kv.set("branchSync", { start: outcome.managed.branchStart ?? "all", applied: outcome.managed.branchApplied ?? {} });
     await kv.set("lastSync", outcome.report);
+    // Plugins this sync installed get the sign-in the person already typed.
+    void handOutAccounts();
     if (outcome.opencode !== null || outcome.manifest !== null) await kv.set("opencode", outcome.opencode);
     if (outcome.manifest !== null) await saveFromManifest(outcome.manifest);
     if (outcome.notices.length > 0) {
@@ -500,6 +576,7 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
       steps: manifest.onboarding ?? [],
       planned: manifest.plugins.filter((entry) => entry.status === "planned").map((entry) => entry.id),
       branches: manifest.branches ?? null,
+      titles: Object.fromEntries(manifest.plugins.map((entry) => [entry.id, pluginTitle(manifest, entry.id)])),
     } satisfies StoredOnboarding);
     agentBuild = agentBuildOf(manifest);
     await kv.set("agentBuild", agentBuild);
@@ -558,13 +635,16 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
   );
 
   /** Pick a branch. One that would turn plugins off is saved only once the person confirms the list. */
-  function pickBranch(branch: string, confirmed: boolean) {
+  /** `plugins`: the person's switches made while previewing the branch, saved with it in one change. */
+  function pickBranch(branch: string, confirmed: boolean, plugins: Record<string, boolean> = {}) {
     return changeChoice<{ chosen: string | null; turnsOff: string[] }>(async (current) => {
       const branches = await storedBranches();
       const state = { ...(await readBranchState()), choice: current };
-      const off = turnsOff(branches, state, branch);
+      let next = chooseBranch(branches, current, branch);
+      for (const [id, on] of Object.entries(plugins)) next = togglePlugin(branches, next, id, on);
+      const off = turnsOff(branches, state, next);
       if (off.length > 0 && !confirmed) return { save: null, result: { chosen: null, turnsOff: off } };
-      return { save: chooseBranch(branches, current, branch), result: { chosen: branch, turnsOff: off } };
+      return { save: next, result: { chosen: branch, turnsOff: off } };
     });
   }
 
@@ -618,9 +698,9 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
       return { reset };
     },
     setup_status: ({ lang }) => setup(lang),
-    branch_choose: async ({ branch, confirmed }) => {
+    branch_choose: async ({ branch, confirmed, plugins }) => {
       try {
-        return await pickBranch(branch, confirmed === true);
+        return await pickBranch(branch, confirmed === true, plugins);
       } catch (error) {
         return refuse(error);
       }
@@ -630,6 +710,22 @@ export default async function plugin(bb: BbPluginApi, options: PluginOptions = {
       return { on };
     },
     own_agents_set: ({ on, lang }) => setOwnAgents(on, lang ?? "en"),
+    account_set: async ({ id, login, password, lang }, context) => {
+      // Typed by the person on the page: another plugin or an agent never sets the build's sign-in.
+      if (context.experimental_caller.kind !== "client") throw new experimental_PluginRpcRefusal({ code: "forbidden", message: "Only the First run page saves the sign-in." });
+      try {
+        await setAccount(id, login, password, lang ?? "en");
+      } catch (error) {
+        return refuse(error);
+      }
+      return { saved: true };
+    },
+    account_clear: async ({ id }) => {
+      const removed = await store.delete(accountSecretName(id));
+      await kv.set(`accountResults:${id}`, {});
+      publish();
+      return { removed };
+    },
     setup_mark: async ({ id, mark }) => {
       const onboarding = (await kv.get<StoredOnboarding>("onboarding")) ?? null;
       const step = onboarding?.steps.find((candidate) => candidate.id === id);

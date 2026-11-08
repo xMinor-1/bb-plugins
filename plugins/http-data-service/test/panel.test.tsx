@@ -17,7 +17,7 @@ beforeEach(() => localStorage.clear());
 
 const EMPTY: ConnectionStatus = { platform: "darwin", user: null, hasPassword: false, passwordStore: null, blocked: false, addressChanged: false, lastCheck: null };
 const SIGNED: ConnectionStatus = { ...EMPTY, user: "person", hasPassword: true, passwordStore: "keychain", lastCheck: { ok: true, at: 1, code: null, status: null } };
-const CONFIG = { name: "Sales data", summary: "About sales.", notice: "Covers all clients.", iconText: null as string | null, address: "https://svc.example.com/api/", problem: null, canCheck: true, rules: [{ provider: "acp-opencode", model: "corp/*" }], rulesText: null as string | null };
+const CONFIG = { name: "Sales data", summary: "About sales.", notice: "Covers all clients.", address: "https://svc.example.com/api/", problem: null, canCheck: true, rules: [{ provider: "acp-opencode", model: "corp/*" }] };
 
 function open(options: { status?: ConnectionStatus; check?: { ok: boolean; code: never | null; status: number | null }; config?: Partial<Omit<typeof CONFIG, "problem">> & { problem?: string | null } } = {}) {
   let current = options.status ?? EMPTY;
@@ -72,33 +72,6 @@ describe("the panel's name", () => {
     } finally {
       Storage.prototype.getItem = read;
     }
-  });
-});
-
-describe("the sidebar icon", () => {
-  it("is the database mark until the server sends a text, then the text, remembered for the next load", async () => {
-    const { ServiceIcon } = await import("../src/app/icon");
-    const { useServiceName } = await import("../src/app/service-name");
-    const { container } = renderSlot({ component: () => <ServiceIcon className="icon" /> }, {});
-    expect(container.querySelector("ellipse")).not.toBeNull();
-    function Name() {
-      return <p>{useServiceName() ?? "none"}</p>;
-    }
-    renderSlot({ component: Name }, {}, { rpc: { config: () => ({ ...CONFIG, iconText: "AB" }) } as unknown as PluginRpcTestHandlers<typeof rpcContract> });
-    await screen.findByText("Sales data");
-    await waitFor(() => expect(container.querySelector("text")?.textContent).toBe("AB"));
-    expect(container.querySelector("ellipse")).toBeNull();
-    expect(localStorage.getItem("http-data-service:icon-text")).toBe("AB");
-  });
-
-  it("goes back to the database mark when the text is removed", async () => {
-    const { ServiceIcon, setIconText } = await import("../src/app/icon");
-    setIconText("AB");
-    const { container } = renderSlot({ component: () => <ServiceIcon /> }, {});
-    expect(container.querySelector("text")?.textContent).toBe("AB");
-    setIconText(null);
-    await waitFor(() => expect(container.querySelector("ellipse")).not.toBeNull());
-    expect(localStorage.getItem("http-data-service:icon-text")).toBeNull();
   });
 });
 
@@ -196,15 +169,6 @@ describe("after signing in", () => {
     expect(await screen.findByText("acp-opencode corp/*")).toBeTruthy();
     cleanup();
     open({ config: { rules: [] } });
-    expect(await screen.findByText(/No model is allowed yet/)).toBeTruthy();
-  });
-
-  it("says who may read in the build's words, without the rules", async () => {
-    open({ config: { rulesText: "Only agents on the company's models" } });
-    expect(await screen.findByText("Only agents on the company's models")).toBeTruthy();
-    expect(screen.queryByText("acp-opencode corp/*")).toBeNull();
-    cleanup();
-    open({ config: { rulesText: "Only agents on the company's models", rules: [] } });
     expect(await screen.findByText(/No model is allowed yet/)).toBeTruthy();
   });
 

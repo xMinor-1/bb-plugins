@@ -5,15 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReportPage } from "../components/ReportPage";
 import type { rpcContract } from "../server";
 
-type KeyStatus = { hasKey: boolean; source: "own" | "shared" | null; keyStore: "keychain" | "credential-manager" | "file" | null };
-type Config = {
-  label: string; formUrl: string; canSend: boolean; canAttach: boolean; combine: boolean; picturesStay: boolean; problem: string | null;
-  mode: "form" | "rest"; key: KeyStatus | null; keyHelp: string; keyProblem: string | null;
-};
+type Config = { label: string; formUrl: string; canSend: boolean; canAttach: boolean; combine: boolean; problem: string | null };
 type SendInput = { subject: string; description: string; client: string; images: Array<{ name: string; type: string; base64: string }> };
 
 const FORM = "https://forms.example.test/bugs";
-const READY: Config = { label: "Bug report", formUrl: FORM, canSend: true, canAttach: true, combine: false, picturesStay: false, problem: null, mode: "form", key: null, keyHelp: "", keyProblem: null };
+const READY: Config = { label: "Bug report", formUrl: FORM, canSend: true, canAttach: true, combine: false, problem: null };
 const picture = (name: string, bytes = [1, 2, 3], type = "image/png") => new File([new Uint8Array(bytes)], name, { type });
 
 /** jsdom has no DataTransfer: the parts the page reads. */
@@ -30,17 +26,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function render(
-  config: Config,
-  send: (input: SendInput) => unknown = () => ({ ok: true, key: "BUGS-1", url: "https://t.test/BUGS-1", warning: null }),
-  key: { save?: (input: { key: string }) => KeyStatus; forget?: () => KeyStatus } = {},
-) {
+function render(config: Config, send: (input: SendInput) => unknown = () => ({ ok: true, key: "BUGS-1", url: "https://t.test/BUGS-1" })) {
   const sent: SendInput[] = [];
   const slot = renderSlot<object, typeof rpcContract>({ component: ReportPage }, {}, {
     rpc: {
       config: () => config,
-      key_save: (input) => (key.save ? key.save(input) : { hasKey: true, source: "own", keyStore: "keychain" }),
-      key_forget: () => (key.forget ? key.forget() : { hasKey: false, source: null, keyStore: null }),
       send: async (input) => {
         sent.push(input as SendInput);
         return send(input as SendInput) as never;
@@ -143,83 +133,6 @@ describe("report page", () => {
     expect(link.rel).toBe("noopener noreferrer");
     expect(screen.getByRole("heading").textContent).toBe("Сообщить о баге");
     expect(screen.queryByRole("textbox")).toBeNull();
-  });
-});
-
-describe("report page, REST mode", () => {
-  const REST: Config = { ...READY, mode: "rest", key: { hasKey: false, source: null, keyStore: null }, keyHelp: "Profile → API keys." };
-
-  it("asks for the key first, saves it with Enter and then sends", async () => {
-    const saved: string[] = [];
-    const { sent } = render(REST, undefined, { save: ({ key }) => (saved.push(key), { hasKey: true, source: "own", keyStore: "keychain" }) });
-    const field = (await screen.findByPlaceholderText("Paste the key")) as HTMLInputElement;
-    expect(field.type).toBe("password");
-    expect(screen.getByTestId("brb-key").textContent).toMatch(/Profile → API keys\. The key stays in this computer's key store/);
-    fireEvent.change(subject(), { target: { value: "Bug" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("Save your API key first.");
-    expect(sent).toHaveLength(0);
-
-    fireEvent.change(field, { target: { value: "  xk_secret " } });
-    fireEvent.keyDown(field, { key: "Enter" });
-    await screen.findByText(/Sending with your API key, saved in Keychain on this computer/);
-    expect(saved).toEqual(["xk_secret"]);
-    expect(sent).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await screen.findByRole("link", { name: "BUGS-1" });
-    expect(sent).toHaveLength(1);
-  });
-
-  it("uses the tracker board's key, and does not offer to forget it", async () => {
-    render({ ...REST, key: { hasKey: true, source: "shared", keyStore: "credential-manager" } });
-    await screen.findByText("Sending with the API key you saved for the tracker board (Credential Manager).");
-    expect(screen.queryByRole("button", { name: "Forget key" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Change key" }));
-    expect(screen.getByPlaceholderText("Paste the key")).toBeTruthy();
-  });
-
-  it("forgets its own key", async () => {
-    render({ ...REST, key: { hasKey: true, source: "own", keyStore: "file" } });
-    fireEvent.click(await screen.findByRole("button", { name: "Forget key" }));
-    expect(await screen.findByPlaceholderText("Paste the key")).toBeTruthy();
-  });
-
-  it("says when pictures did not make it, and still shows the record", async () => {
-    render({ ...REST, key: { hasKey: true, source: "own", keyStore: "keychain" } }, () => ({
-      ok: true, key: "BUGS-2", url: null, warning: "The report is sent, but the pictures are not attached.",
-    }));
-    fireEvent.change(await screen.findByPlaceholderText("What went wrong, in a few words"), { target: { value: "Bug" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    expect((await screen.findByText("BUGS-2")).tagName).toBe("STRONG");
-    expect(screen.getByRole("alert").textContent).toBe("The report is sent, but the pictures are not attached.");
-  });
-
-  it("form without pictures: sends the text only, keeps the pictures and links to the form to attach them", async () => {
-    const { sent } = render({ ...REST, picturesStay: true, key: { hasKey: true, source: "own", keyStore: "keychain" } }, () => ({ ok: true, key: null, url: null, warning: null }));
-    await screen.findByText(/after sending you get a link to attach them in the tracker/);
-    fireEvent.change(subject(), { target: { value: "Bug" } });
-    fireEvent.drop(screen.getByTestId("brb-page"), { dataTransfer: transfer([picture("a.png"), picture("b.png", [4])]) });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    const left = await screen.findByTestId("brb-pictures-left");
-    expect(left.textContent).toBe("The form did not take the 2 pictures: they are still here. Attach them in the tracker: open the form.");
-    expect((left.querySelector("a") as HTMLAnchorElement).href).toBe(FORM);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]!.images).toEqual([]);
-    expect(subject().value).toBe("");
-    expect(thumbs()).toEqual(["a.png", "b.png"]);
-  });
-
-  it("form without pictures: no note when there was nothing to attach", async () => {
-    render({ ...REST, picturesStay: true, key: { hasKey: true, source: "own", keyStore: "keychain" } }, () => ({ ok: true, key: null, url: null, warning: null }));
-    fireEvent.change(await screen.findByPlaceholderText("What went wrong, in a few words"), { target: { value: "Bug" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await screen.findByText(/Sent/);
-    expect(screen.queryByTestId("brb-pictures-left")).toBeNull();
-  });
-
-  it("shows why the key could not be checked", async () => {
-    render({ ...REST, key: null, keyProblem: "Could not check the API key on this computer: offline" });
-    expect((await screen.findByRole("alert")).textContent).toBe("Could not check the API key on this computer: offline");
   });
 });
 

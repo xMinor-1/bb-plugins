@@ -4,7 +4,6 @@
 import { useEffect, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../../server";
-import { setIconText } from "./icon";
 
 const STORAGE_KEY = "http-data-service:service-name";
 export const DEFAULT_TITLE = "Data Service";
@@ -17,7 +16,7 @@ export function rememberedTitle(): string {
   }
 }
 
-/** The configured name, remembered for the next load. Null until the server answers. Also updates the sidebar icon. */
+/** The configured name, remembered for the next load. Null until the server answers. */
 export function useServiceName(): string | null {
   const rpc = useRpc<typeof rpcContract>();
   const [name, setName] = useState<string | null>(null);
@@ -27,7 +26,6 @@ export function useServiceName(): string | null {
       (config) => {
         if (!live) return;
         setName(config.name);
-        setIconText(config.iconText);
         try {
           localStorage.setItem(STORAGE_KEY, config.name);
         } catch {

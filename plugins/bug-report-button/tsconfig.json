@@ -19,7 +19,6 @@
   "include": [
     "server.ts",
     "app.tsx",
-    "contract.ts",
     "src",
     "components",
     "test"

@@ -9,7 +9,7 @@ import { messages } from "./messages";
 import { Notice, Section, errorText } from "./ui";
 
 type Machine = { id: string; name: string; connected: boolean };
-type Config = { name: string; summary: string; notice: string; iconText: string | null; address: string | null; problem: string | null; canCheck: boolean; rules: { provider: string; model: string }[]; rulesText: string | null };
+type Config = { name: string; summary: string; notice: string; address: string | null; problem: string | null; canCheck: boolean; rules: { provider: string; model: string }[] };
 
 export function DataServicePage() {
   const rpc = useRpc<typeof rpcContract>();
@@ -88,12 +88,7 @@ export function DataServicePage() {
           <>
             <ConnectionSection rpc={rpc} hostId={hostId} status={status} address={config.address} onStatus={setStatus} />
             <Section step={2} title={t.agentsTitle}>
-              {config.rules.length && config.rulesText ? (
-                <>
-                  <p className="text-sm">{config.rulesText}</p>
-                  <p className="text-xs text-muted-foreground">{t.agentsHint}</p>
-                </>
-              ) : config.rules.length ? (
+              {config.rules.length ? (
                 <>
                   <ul className="space-y-1 text-sm">
                     {config.rules.map((rule) => (

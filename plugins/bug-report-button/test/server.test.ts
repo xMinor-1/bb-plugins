@@ -17,11 +17,6 @@ type Schema = { safeParse: (value: unknown) => { success: boolean } };
 type Handlers = Record<string, (input: unknown) => Promise<unknown>>;
 
 /** The server entry with fake settings: its descriptors, and its RPC handlers over the given values. */
-type HostCall = { method: string; input: unknown; options: unknown };
-let hostAnswer: (method: string, input: unknown) => unknown = () => {
-  throw new Error("no host in this test");
-};
-
 function loadServer(
   values: Record<string, unknown> = {},
   uiPreferences: { list: () => Promise<unknown>; set: (args: unknown) => Promise<void> } = {
@@ -32,19 +27,10 @@ function loadServer(
   let descriptors: Record<string, { experimental_schema: Schema; default: unknown }> = {};
   let handlers: Handlers = {};
   const warnings: string[] = [];
-  const hostCalls: HostCall[] = [];
   const kv = new Map<string, unknown>();
   const api = {
     pluginId: "bug-report-button",
-    sdk: {
-      system: { uiPreferences, config: async () => ({ primaryHostId: "host-1" }) },
-      hosts: { list: async () => [{ id: "host-1", status: "connected", lifecycle: { phase: "ready" } }] },
-    },
-    hosts: {
-      experimental_client: () => ({
-        call: async (method: string, input: unknown, options: unknown) => (hostCalls.push({ method, input, options }), hostAnswer(method, input)),
-      }),
-    },
+    sdk: { system: { uiPreferences } },
     storage: { kv: { get: async (key: string) => kv.get(key), set: async (key: string, value: unknown) => void kv.set(key, value) } },
     settings: {
       define: (value: typeof descriptors) => {
@@ -57,7 +43,7 @@ function loadServer(
     log: { warn: (text: string) => warnings.push(text), info: () => {}, error: () => {}, debug: () => {} },
   };
   bugReportButton(api as unknown as Parameters<typeof bugReportButton>[0]);
-  return { descriptors, handlers, warnings, hostCalls, schema: (name: string) => descriptors[name]!.experimental_schema };
+  return { descriptors, handlers, warnings, schema: (name: string) => descriptors[name]!.experimental_schema };
 }
 
 describe("settings", () => {
@@ -279,93 +265,19 @@ describe("sending", () => {
     it("goes through the plugin's own send handler, with the app context in the template", async () => {
       const { url, seen } = await serve(() => ({ status: 200, text: '{"key":"BUGS-9"}' }));
       const { handlers } = loadServer({ submitUrl: url, submitFields: '{"t":"{subject}","d":"{description}\\n{context}"}', fileField: "f", fileMode: "combine" });
-      expect(await handlers.config!(null)).toEqual({ label: DEFAULT_LABEL, formUrl: "", canSend: true, canAttach: true, combine: true, picturesStay: false, problem: null, mode: "form", key: null, keyHelp: "", keyProblem: null });
+      expect(await handlers.config!(null)).toEqual({ label: DEFAULT_LABEL, formUrl: "", canSend: true, canAttach: true, combine: true, problem: null });
       const result = await handlers.send!({ subject: " Bug ", description: "Steps", client: "Chrome 140", images: [{ name: "a.png", type: "image/png", base64: "AQID" }] });
-      expect(result).toEqual({ ok: true, key: "BUGS-9", url: null, warning: null });
+      expect(result).toEqual({ ok: true, key: "BUGS-9", url: null });
       const parsed = await new Request(url, { method: "POST", headers: { "content-type": seen[0]!.type }, body: new Uint8Array(seen[0]!.body) }).formData();
       expect(parsed.get("t")).toBe("Bug");
-      expect(parsed.get("d")).toMatch(/^Steps\r?\nBug Report Button \d+\.\d+\.\d+\r?\n.+\r?\nChrome 140$/);
+      expect(parsed.get("d")).toMatch(/^Steps\r?\nBug Report Button 0\.2\.0\r?\n.+\r?\nChrome 140$/);
       expect([...new Uint8Array(await (parsed.get("f") as File).arrayBuffer())]).toEqual([1, 2, 3]);
     });
   });
 
   it("without a submit address the page links to the form instead", async () => {
     const { handlers } = loadServer({ formUrl: FORM });
-    expect(await handlers.config!(null)).toEqual({ label: DEFAULT_LABEL, formUrl: FORM, canSend: false, canAttach: false, combine: false, picturesStay: false, problem: null, mode: "form", key: null, keyHelp: "", keyProblem: null });
+    expect(await handlers.config!(null)).toEqual({ label: DEFAULT_LABEL, formUrl: FORM, canSend: false, canAttach: false, combine: false, problem: null });
     expect(await handlers.send!({ subject: "x", description: "", client: "", images: [] })).toEqual({ ok: false, error: "Sending is not set up: there is no submit address." });
-  });
-});
-
-describe("REST mode through the server", () => {
-  const REST = {
-    sendMode: "rest",
-    apiBaseUrl: "https://tracker.example.test/api/v1",
-    submitPath: "/forms/abc/submit",
-    submitFields: '{"title":"{subject}"}',
-    attachPath: "/issues/{key}/attachments",
-    shareKeyWith: "tracker-board",
-    keyHelp: "Profile → API keys.",
-  };
-  afterEach(() => {
-    hostAnswer = () => {
-      throw new Error("no host in this test");
-    };
-  });
-
-  it("asks the person's machine about the key, and saves and forgets it there", async () => {
-    hostAnswer = (method) => ({ hasKey: method !== "forget", source: method === "forget" ? null : "own", keyStore: method === "forget" ? null : "keychain" });
-    const { handlers, hostCalls } = loadServer(REST);
-    expect(await handlers.config!(null)).toEqual({
-      label: DEFAULT_LABEL, formUrl: "", canSend: true, canAttach: true, combine: false, picturesStay: false, problem: null, mode: "rest",
-      key: { hasKey: true, source: "own", keyStore: "keychain" }, keyHelp: "Profile → API keys.", keyProblem: null,
-    });
-    await handlers.key_save!({ key: "xk_1" });
-    await handlers.key_forget!(null);
-    expect(hostCalls.map((c) => [c.method, c.input, (c.options as { hostId: string }).hostId])).toEqual([
-      ["status", { baseUrl: "https://tracker.example.test/api/v1", shareWith: "tracker-board" }, "host-1"],
-      ["saveKey", { baseUrl: "https://tracker.example.test/api/v1", shareWith: "tracker-board", key: "xk_1" }, "host-1"],
-      ["forget", { baseUrl: "https://tracker.example.test/api/v1", shareWith: "tracker-board" }, "host-1"],
-    ]);
-  });
-
-  it("says when the machine cannot be asked, and is off until set up", async () => {
-    hostAnswer = () => {
-      throw new Error("host offline");
-    };
-    const { handlers } = loadServer(REST);
-    expect(await handlers.config!(null)).toMatchObject({ canSend: true, key: null, keyProblem: "Could not check the API key on this computer: host offline" });
-    const off = loadServer({ sendMode: "rest", formUrl: FORM });
-    expect(await off.handlers.config!(null)).toMatchObject({ mode: "rest", canSend: false, formUrl: FORM, problem: null });
-    expect(await off.handlers.send!({ subject: "x", description: "", client: "", images: [] })).toEqual({ ok: false, error: "Sending through the API is not set up." });
-  });
-
-  it("form files: the page joins pictures, and the machine gets one form request", async () => {
-    hostAnswer = () => ({ ok: true, status: 201, text: '{"key":"BUGS-4"}' });
-    const { handlers, hostCalls } = loadServer({ ...REST, restFiles: "form", fileField: "attachment" });
-    hostAnswer = (method) => (method === "status" ? { hasKey: true, source: "shared", keyStore: "keychain" } : { ok: true, status: 201, text: '{"key":"BUGS-4"}' });
-    expect(await handlers.config!(null)).toMatchObject({ mode: "rest", canAttach: true, combine: true });
-    const result = await handlers.send!({ subject: "Bug", description: "Steps", client: "", images: [{ name: "screenshots.png", type: "image/png", base64: "AQID" }] });
-    expect(result).toEqual({ ok: true, key: "BUGS-4", url: null, warning: null });
-    expect(hostCalls.map((c) => c.method)).toEqual(["status", "postForm"]);
-    expect(hostCalls[1]!.input).toMatchObject({ path: "/forms/abc/submit", fields: { title: "Bug" }, field: "attachment", files: [{ name: "screenshots.png" }] });
-  });
-
-  it("form without pictures: the page keeps them, and the machine gets only the JSON even if pictures come", async () => {
-    hostAnswer = (method) => (method === "status" ? { hasKey: true, source: "own", keyStore: "keychain" } : { ok: true, status: 201, text: '{"id":"7f0c","files":null}' });
-    const { handlers, hostCalls } = loadServer({ ...REST, restFiles: "none", attachPath: "", formUrl: FORM });
-    expect(await handlers.config!(null)).toMatchObject({ mode: "rest", canSend: true, canAttach: true, combine: false, picturesStay: true, formUrl: FORM });
-    const result = await handlers.send!({ subject: "Bug", description: "", client: "", images: [{ name: "a.png", type: "image/png", base64: "AQID" }] });
-    expect(result).toEqual({ ok: true, key: null, url: null, warning: null });
-    expect(hostCalls.map((c) => c.method)).toEqual(["status", "postJson"]);
-  });
-
-  it("sends JSON and then each picture through the machine", async () => {
-    hostAnswer = (method) => (method === "postJson" ? { ok: true, status: 201, text: '{"key":"BUGS-3"}' } : { ok: true, status: 201, text: "" });
-    const { handlers, hostCalls } = loadServer(REST);
-    const result = await handlers.send!({ subject: " Bug ", description: "Steps", client: "Chrome", images: [{ name: "a.png", type: "image/png", base64: "AQID" }] });
-    expect(result).toEqual({ ok: true, key: "BUGS-3", url: null, warning: null });
-    expect(hostCalls.map((c) => c.method)).toEqual(["postJson", "postFile"]);
-    expect(JSON.parse((hostCalls[0]!.input as { body: string }).body)).toEqual({ title: "Bug" });
-    expect(hostCalls[1]!.input).toMatchObject({ path: "/issues/BUGS-3/attachments", field: "file", file: { name: "a.png" } });
   });
 });

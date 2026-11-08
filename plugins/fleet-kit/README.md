@@ -29,12 +29,21 @@ brings bb to that description and keeps it there.
   the last sync changed, any errors, whether OpenCode is limited to the build's
   models, and a **Sync now** button. The panel is in English and Russian, with
   a switch in its header.
-- **First run**: a **First run** page lists the build's setup steps (the gateway
-  key, mail, reports and so on), each done or still to do, with a button to the
-  plugin's own page or the key's field right on the page. Until every step is
-  done or skipped, the sidebar entry shows how many are left and the Fleet Kit
-  page shows a reminder. A build without steps has no First run entry in the
-  sidebar. An installer can open bb on `/plugins/fleet-kit/setup`.
+- **First run**: the Fleet Kit entry has two views, **First run** and **Build
+  status**; until every step is done it opens on First run, and bb opens it by
+  itself once per launch from the new-thread screen. First run lists the
+  build's setup steps (the gateway key, a shared sign-in, reports and so on),
+  each done or still to do, with a button to the plugin's own page or the field
+  right on the page, and shows the plugins being installed: which one now,
+  which next, which are done and how long is left. Until every step is done or
+  skipped, the sidebar entry shows how many are left. Addresses:
+  `/plugins/fleet-kit/status/setup` and `/plugins/fleet-kit/status/sync`.
+- **Shared sign-in** (optional): one login and password for several plugins,
+  typed once, kept in the credential store and handed to each plugin in the
+  login form it wants. See [Shared sign-in](#shared-sign-in).
+- **Sidebar** (optional): the build can say which sidebar entries show and
+  which footer actions move into More on a new machine; a person's later change
+  stays.
 - **Branches** (optional): a build can offer sets of plugins — say, one for
   sales and one for engineering. The person picks a branch on the First run
   page, gets the plugins it recommends, can switch any optional plugin on or
@@ -67,7 +76,6 @@ does nothing.
 | `manifestToken` | Secret. Sent as `Authorization: Bearer` when fetching an `https://` manifest. |
 | `syncIntervalMinutes` | 5 to 1440, default 30. |
 | `opencodeInstallDir` | Where Fleet Kit installs OpenCode. Empty: it installs nothing and uses the OpenCode found on PATH. See [Installing OpenCode](#installing-opencode). |
-| `appsInstallDir` | Where Fleet Kit puts programs plugins need (`apps` in the manifest). Empty: an `apps` folder next to `opencodeInstallDir`; with that empty too, no program is installed. See [Programs plugins need](#programs-plugins-need). |
 | `opencodeConfigDir` | Keep this bb's OpenCode configuration in its own directory (see [A separate OpenCode directory](#a-separate-opencode-directory)). Empty: OpenCode's default, or `OPENCODE_CONFIG_DIR` if bb runs with it. |
 | `secretStore` | `auto` (the OS credential store) or `file` (a 0600 file). |
 | `paused` | Stop syncing. |
@@ -183,8 +191,6 @@ a newer Fleet Kit can still deliver it.
   settings are left to the person. `planned` entries are shown and skipped.
   Fleet Kit itself must be listed as `required`, and updates itself only from a
   source pinned with `@semver:` or `@ref:`.
-- `apps` — programs plugins need on the machine, such as an office suite a
-  document viewer converts files with. See [Programs plugins need](#programs-plugins-need).
 - `removePlugins` — the only way to remove a plugin. A plugin dropped from
   `plugins` stays installed; Fleet Kit never removes plugins bundled with bb.
 - `secrets` — every `{secret:name}` the manifest uses must be declared here.
@@ -213,8 +219,9 @@ a newer Fleet Kit can still deliver it.
   ignore the field with a warning.
 - `mcp`, `skills` — validated; this version does not apply them yet.
 - `onboarding` — the First run steps, in order: `id`, `title`, `hint`,
-  `optional`, and exactly one of `secret` (a name from `secrets`) or `plugin`
-  (an id from `plugins`). `path` (`/plugins/<id>/<panel>`) is where a plugin
+  `optional`, and exactly one of `secret` (a name from `secrets`), `plugin`
+  (an id from `plugins`) or `account` (a shared sign-in, see
+  [Shared sign-in](#shared-sign-in)). `path` (`/plugins/<id>/<panel>`) is where a plugin
   step's button leads when the plugin cannot report its state. A step that
   names an unknown secret or plugin, or repeats an id, is left out with a
   warning; the rest of the build still applies. Fleet Kit 0.2.x ignores the
@@ -229,6 +236,20 @@ a newer Fleet Kit can still deliver it.
   Fleet Kit itself is never optional. A name that is not in `plugins`, not in
   `optional` or not in `mcp` is left out with a warning. Fleet Kit 0.5.x and
   earlier ignore the block with a warning and install every plugin.
+
+- `plugins[].title`, `plugins[].installNote` — the name First run shows while
+  the plugin installs (else its branch or step title, else the id) and a line
+  next to it, such as the size of a large download. New plugins install one at
+  a time in the order of `plugins`: put a large one last.
+- `bb.ui` — the sidebar on a new machine: `visiblePluginPanels` (the entries
+  that show, `<pluginId>/<panel id>`, bb's own as `__bb__/new-thread`,
+  `__bb__/search-threads`, `__bb__/extensions`, `__bb__/skills`,
+  `__bb__/automations`), `pluginPanelOrder` (their order; bb shows any entry
+  missing from it as new whatever the visible list says, so list the hidden
+  ones too) and `hiddenFooterItems` (footer actions moved into More:
+  `builtin:report-bug`, `builtin:mobile`, `plugin:<pluginId>/<id>`). Fleet Kit
+  sets a value while bb still has its default or what Fleet Kit set last; a
+  value the person changed stays, and the sync says so.
 
 A manifest whose remote MCP server has no URL yet, or that names a pre-release
 bb, gets a warning.
@@ -521,52 +542,6 @@ system refuses to run the program (a policy, an antivirus, access rights), the s
 reports an error with the program's path and a text for an IT request, and tries
 no other way of starting it.
 
-### Programs plugins need
-
-Some plugins call a program on the machine. `apps` lets the build deliver it
-without the person's administrator rights or an installer:
-
-```json
-"apps": [
-  {
-    "id": "office",
-    "title": "Office suite",
-    "version": "26.8.2",
-    "plugin": "doc-viewer",
-    "setting": "officePath",
-    "before": "voice",
-    "files": {
-      "darwin-arm64": { "format": "dmg", "parts": [{ "url": "https://files.example.com/office.dmg.part-aa", "sha256": "…" }], "sha256": "…", "program": "Office.app/Contents/MacOS/office" },
-      "win32-x64": { "format": "zip", "parts": [{ "url": "https://files.example.com/office.zip.part-aa", "sha256": "…" }], "sha256": "…", "program": "Office/program/office.exe" }
-    }
-  }
-]
-```
-
-- Installed only while `plugin` is on here: a branch that leaves the plugin out
-  leaves the program out too. A program already on disk stays when the plugin is
-  turned off, as the plugin keeps its data.
-- Order: just before the plugin named in `before`, after every plugin listed
-  ahead of it; without `before`, after all plugins. A large program can so wait
-  for the quick plugins and still not hold up a larger download.
-- Files by `<platform>-<arch>` as Node names them. A machine the build has no
-  package for goes without, as a skipped step.
-- `parts` are downloaded in order, each checked against its `sha256` (three tries),
-  joined, and the whole file checked against `sha256`. Parts let a file server
-  with an upload limit serve a large package.
-- `zip` is unpacked whole with the system's own tool: `tar.exe` on Windows 10 and
-  later, `ditto` on macOS. `dmg` (macOS only) is attached read-only and the top
-  folder of `program`, for example `Office.app`, is copied out with `ditto`. Nothing
-  from the package runs during the install, and nothing is registered with the
-  system.
-- Each version goes to a fresh folder under `<appsInstallDir>/<id>/`, with
-  `installed.json` recording it. A version in place is not downloaded again;
-  older folders are removed, unless a running program holds them.
-- After the install, the program's full path goes to the plugin's `setting`. The
-  manifest must not set that key in the plugin's `config` too.
-- Failures are counted as for OpenCode: after three in a row the package is
-  fetched once in six hours, or by a sync the person starts.
-
 ### Secrets
 
 | System | Store |
@@ -661,12 +636,64 @@ not a manual step. One that is not installed or enabled yet shows as
 installing; one the manifest lists as `planned` shows as coming later and does
 not count. An optional step can be skipped.
 
-bb draws a sidebar entry for every registered page, so the First run entry is
-registered only when the build had steps the last time this browser looked;
-a build that gains or loses its steps changes the entry from the next page
-load, and until then the Fleet Kit entry shows the count. Passwords and
-tokens of plugins never pass through Fleet Kit: the person types them in the
-plugin's own form. **Start working** on the finished page opens a new thread.
+A plugin the manifest lists as `planned` has no step: the branch card names it
+in one line as coming in a later version.
+
+While a sync installs plugins, the page shows them: the one installing now,
+the queue, the ones done or failed, and minutes left from the average install
+so far. A plugin step waiting in the queue reads **In the queue**; only the one
+being installed spins.
+
+Picking a branch previews it: the switches show what it turns on and can be
+changed, and nothing installs until **Install**; the page then says that the
+install has started.
+
+Passwords and tokens of plugins pass through Fleet Kit only for a shared
+sign-in step; every other plugin takes them in its own form. **Start working**
+on the finished page opens a new thread.
+
+On launch, an app overlay opens First run once per browser session, only from
+the new-thread screen and only while steps are left; a person who has gone to a
+thread is left there.
+
+### Shared sign-in
+
+An `account` step asks for one login and password and signs several plugins in
+with them:
+
+```json
+{ "id": "account", "title": "Work account", "account": {
+  "loginHint": "Your work login",
+  "plugins": [
+    { "plugin": "mail", "login": "CORP\\{login}" },
+    { "plugin": "reports", "login": "{login}@corp.example" },
+    { "plugin": "crm", "login": "{login}", "enabled": false }
+  ],
+  "windows": [{ "plugin": "chat", "method": "signIn" }]
+} }
+```
+
+- `{login}` is what the person typed without a domain: `CORP\jdoe`,
+  `jdoe@corp.example` and `jdoe` all give `jdoe`.
+- The pair goes to the credential store (`account-<step id>`), then to each
+  plugin that is installed and not signed in already (its `setupStatus` is not
+  `done`): RPC `accountSignIn`, input `{ user, password, lang }`, output
+  `{ state, summary, path?, rejected? }`. The plugin lets Fleet Kit call it once
+  its `accountPlugins` setting names `fleet-kit` (set it in the plugin's
+  `config`). A plugin installed later gets the pair after the sync that
+  installs it.
+- `rejected: true` (the service refused the login or password): Fleet Kit does
+  not send the same pair to that plugin again until the person types a new one,
+  so a wrong password does not lock the account. A plugin that did not answer
+  is tried again on the next syncs, three times in all.
+- `enabled: false` lists a plugin without handing it the pair: it keeps its own
+  step and form.
+- `windows`: plugins that sign in in their own window. The step has a **Sign
+  in** button that calls the plugin's `method` with `{ hostId }` (bb's primary
+  machine) from the page.
+- The step is done when every plugin took the sign-in (one with more to do,
+  such as picking reports, says so on its own step) and every window sign-in is
+  done.
 
 ## Known limits
 
@@ -768,12 +795,24 @@ docker cp e2e/panel-smoke.mjs fleet-kit-e2e:/home/tester/pw/panel-smoke.mjs
 e2e/x.sh 'node ~/pw/panel-smoke.mjs'
 ```
 
-`apps` on real machines: the workflow `.github/workflows/fleet-kit-apps.yml` (on a
-push to its files or `src/host/install-app.ts`) unpacks the official LibreOffice MSI
-into a zip with `msiexec /a` and the Visual C++ runtime next to the program, installs
-it with `ensureApp` as a standard Windows user (non-ASCII name, long paths off), and
-installs the official `.dmg` on macOS, Apple silicon and Intel; then doc-review's own code converts a `.docx`
-and a `.pptx`. The zip stays as the artifact `libreoffice-win-x64` for whoever mirrors it.
+`e2e/first-run.mjs` checks the First run page on a bb that has had no build
+yet, so start a new container for it, not the one `scenario.sh` ran in. It
+installs Fleet Kit itself and points it at `~/build/first-run.json`, a build
+with a shared sign-in step, two branches, two optional plugins whose download
+is slow (about 20 seconds each, `FK_E2E_SLOW_MS`), a planned plugin and the
+build's sidebar (`bb.ui`). It checks the single sidebar entry, First run
+opening once per launch from the new-thread screen, the branch preview and
+Install, the install queue, the login handed to a fixture plugin in its
+format, the sidebar set once and kept after a change by hand, buttons at 400,
+900 and 1280 px, and console errors.
+
+```sh
+e2e/run.sh
+docker exec -u root fleet-kit-e2e bash -c 'apt-get update -qq && apt-get install -y -qq chromium'
+e2e/x.sh 'mkdir -p ~/pw && cd ~/pw && npm init -y >/dev/null && npm install playwright-core@1'
+docker cp e2e/first-run.mjs fleet-kit-e2e:/home/tester/pw/first-run.mjs
+e2e/x.sh 'node ~/pw/first-run.mjs'
+```
 
 ## License
 

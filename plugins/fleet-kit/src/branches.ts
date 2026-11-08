@@ -94,9 +94,9 @@ export function appliedNow(branches: Branches | undefined, state: BranchState): 
   return applied;
 }
 
-/** The optional plugins this machine has now that picking `branch` would turn off, by title. */
-export function turnsOff(branches: Branches, state: BranchState, branch: string): string[] {
-  const next: BranchState = { ...state, choice: chooseBranch(branches, state.choice, branch) };
+/** The optional plugins this machine has now that picking `branch` (or making the choice `next`) would turn off, by title. */
+export function turnsOff(branches: Branches, state: BranchState, branch: string | BranchChoice): string[] {
+  const next: BranchState = { ...state, choice: typeof branch === "string" ? chooseBranch(branches, state.choice, branch) : branch };
   return branches.optional
     .filter((entry) => pluginWanted(branches, state, entry.id) === "on" && pluginWanted(branches, next, entry.id) === "off")
     .map((entry) => entry.title);
