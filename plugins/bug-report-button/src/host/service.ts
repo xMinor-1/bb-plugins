@@ -28,6 +28,14 @@ export function requestUrl(baseUrl: string, path: string): string {
   return url.toString();
 }
 
+/** A multipart/form-data body: text fields, then each file under one field name. */
+export function multipartBody(fields: Record<string, string>, field: string, files: ReadonlyArray<{ name: string; type: string; base64: string }>): FormData {
+  const form = new FormData();
+  for (const [name, value] of Object.entries(fields)) form.append(name, value);
+  for (const file of files) form.append(field, new Blob([new Uint8Array(Buffer.from(file.base64, "base64"))], { type: file.type }), file.name);
+  return form;
+}
+
 export function failureOf(status: number): FailureCode {
   if (status === 401) return "unauthorized";
   if (status === 403) return "forbidden";

@@ -27,12 +27,18 @@ person's own API key. Until sending is set up, the page links to the form in the
 
 ### REST mode
 
-With `sendMode` = `rest` the report goes as JSON to a tracker's API, signed with the person's own API key:
+With `sendMode` = `rest` the report goes to a tracker's API, signed with the person's own API key. Pictures go one of
+two ways (`restFiles`):
+
+- `form`: the report and its pictures in one `multipart/form-data` request to `submitPath`: the filled `submitFields`
+  as text parts, the pictures under `fileField` (joined into one unless `fileMode` is `separate`).
+- `attach` (default): the report as JSON to `submitPath`, then each picture to `attachPath` of the created record.
 
 | Setting | Meaning |
 | --- | --- |
 | `apiBaseUrl` | The API address, such as `https://tracker.example.com/api/v1`. The key goes only there |
-| `submitPath` | Path under it that takes the report, such as `/forms/<form id>/submit`. The body is `submitFields` filled in, as JSON |
+| `submitPath` | Path under it that takes the report, such as `/forms/<form id>/submit`. The body is `submitFields` filled in |
+| `restFiles` | `form` or `attach`, see above |
 | `attachPath` | Path that takes one picture of the created record, with `{key}`, such as `/issues/{key}/attachments`. Empty: no pictures |
 | `attachField` | Field name of the picture in that request (default `file`) |
 | `authHeader`, `authFormat` | How the key goes: header `X-API-Key` with `{key}` by default; `Authorization` with `Bearer {key}` also works |
@@ -43,8 +49,8 @@ The person pastes their key on the page once. The plugin's host part, on their m
 (macOS Keychain, Windows Credential Manager, elsewhere a 0600 file) under its own name, and sends it only to the origin
 it was saved for. Redirects are not followed, so the key never goes to another address. With `shareKeyWith` the host
 reads that plugin's key from the same store, only if that plugin saved it for the same address, and never changes or
-deletes it. Pictures are attached one by one after the record exists; if the tracker's answer names no record, or a
-picture fails, the report stays sent and the page says which pictures did not make it.
+deletes it. With `attach`, pictures are attached one by one after the record exists; if the tracker's answer names no record, or
+a picture fails, the report stays sent and the page says which pictures did not make it.
 
 `{context}` is the plugin version, the operating system and the app's user agent and window size: handy in a bug.
 

@@ -6,14 +6,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Answer } from "../contract";
 import { openFileSecretStore, openSecretStore, secretFileDirectory } from "../src/host/secret-store";
-import { ReportHost, requestUrl } from "../src/host/service";
+import { multipartBody, ReportHost, requestUrl } from "../src/host/service";
 import { buildJson, failureText, readRestConfig, sendRest, type RestConfig } from "../src/rest";
 
 const BASE = "https://tracker.example.test/api/v1";
 const SETTINGS = {
   apiBaseUrl: `${BASE}/`,
   submitPath: "/forms/abc/submit",
-  submitFields: '{"tema":"{subject}","opisanie":"{description}\\n\\n{context}"}',
+  submitFields: '{"title":"{subject}","body":"{description}\\n\\n{context}"}',
   attachPath: "/issues/{key}/attachments",
   shareKeyWith: "tracker-board",
   recordUrl: "https://tracker.example.test/{key}",
@@ -25,14 +25,19 @@ describe("REST settings", () => {
     expect(readRestConfig(SETTINGS)).toEqual({
       baseUrl: BASE,
       submitPath: "/forms/abc/submit",
-      fields: { tema: "{subject}", opisanie: "{description}\n\n{context}" },
+      fields: { title: "{subject}", body: "{description}\n\n{context}" },
       auth: { header: "X-API-Key", format: "{key}" },
       attachPath: "/issues/{key}/attachments",
       attachField: "file",
       shareWith: "tracker-board",
       recordUrl: "https://tracker.example.test/{key}",
       keyHelp: "Profile → API keys.",
+      files: "attach",
+      fileField: "file",
+      combine: true,
     });
+    expect(readRestConfig({ ...SETTINGS, restFiles: "form", fileField: "attachment", fileMode: "separate" })).toMatchObject({ files: "form", fileField: "attachment", combine: false });
+    expect(readRestConfig({ ...SETTINGS, restFiles: "form", fileField: "a b" })).toHaveProperty("error");
   });
 
   it("is off until the address and the path are set, and refuses broken values", () => {
@@ -65,6 +70,7 @@ describe("REST sending", () => {
     return {
       log,
       calls: {
+        postForm: async (input: unknown) => (log.push(["form", input]), json),
         postJson: async (input: unknown) => (log.push(["json", input]), json),
         postFile: async (input: { path: string; file: { name: string } }) => (log.push(["file", input.path, input.file.name]), file(input.path, input.file.name)),
       },
@@ -76,7 +82,7 @@ describe("REST sending", () => {
     expect(await sendRest(config, report, images, c)).toEqual({ ok: true, key: "BUGS-7", url: "https://tracker.example.test/BUGS-7", warning: null });
     expect(log[0]).toEqual([
       "json",
-      { baseUrl: BASE, shareWith: "tracker-board", auth: { header: "X-API-Key", format: "{key}" }, path: "/forms/abc/submit", body: '{"tema":"Save fails","opisanie":"Steps\\n\\nbb"}' },
+      { baseUrl: BASE, shareWith: "tracker-board", auth: { header: "X-API-Key", format: "{key}" }, path: "/forms/abc/submit", body: '{"title":"Save fails","body":"Steps\\n\\nbb"}' },
     ]);
     expect(log.slice(1)).toEqual([
       ["file", "/issues/BUGS-7/attachments", "a.png"],
@@ -100,6 +106,20 @@ describe("REST sending", () => {
     const result = await sendRest(config, report, images, c);
     expect(result).toEqual({ ok: true, key: null, url: null, warning: "The report is sent, but the pictures are not: the tracker did not say which record it created." });
     expect(log).toHaveLength(1);
+  });
+
+  it("form files: one multipart request with the fields and the pictures under the form's file field", async () => {
+    const form = readRestConfig({ ...SETTINGS, restFiles: "form", fileField: "attachment", submitFields: '{"title":"{subject}\\n\\n{description}"}' }) as RestConfig;
+    const { log, calls: c } = calls({ ok: true, status: 201, text: '{"key":"BUGS-9"}' });
+    expect(await sendRest(form, report, images, c)).toEqual({ ok: true, key: "BUGS-9", url: "https://tracker.example.test/BUGS-9", warning: null });
+    expect(log).toEqual([
+      [
+        "form",
+        { baseUrl: BASE, shareWith: "tracker-board", auth: { header: "X-API-Key", format: "{key}" }, path: "/forms/abc/submit", fields: { title: "Save fails\n\nSteps" }, field: "attachment", files: images },
+      ],
+    ]);
+    const refused = calls({ ok: false, code: "badRequest", status: 400, detail: "attachment: bad file" });
+    expect(await sendRest(form, report, images, refused.calls)).toEqual({ ok: false, error: "The tracker refused the report (HTTP 400): attachment: bad file" });
   });
 
   it("turns a refusal into words", async () => {
@@ -218,6 +238,22 @@ describe("host: the key and the request", () => {
     }
     close();
     expect(await h.post({ baseUrl: base, shareWith: null, auth, path: "/x", body: "{}", type: null })).toMatchObject({ ok: false, code: "unreachable" });
+  });
+
+  it("sends a whole form, fields and several files, as one multipart request", async () => {
+    const h = host();
+    await h.saveKey(base, null, "xk_own");
+    const body = multipartBody({ title: "Тема\n\nОписание", extra: "x" }, "attachment", [
+      { name: "a.png", type: "image/png", base64: "AQID" },
+      { name: "b.png", type: "image/png", base64: "BA==" },
+    ]);
+    expect(await h.post({ baseUrl: base, shareWith: null, auth, path: "/forms/abc/submit", body, type: null })).toMatchObject({ ok: true });
+    const got = seen[0]!;
+    expect(got.headers["x-api-key"]).toBe("xk_own");
+    const parsed = await new Request("http://x", { method: "POST", headers: { "content-type": got.headers["content-type"]! }, body: new Uint8Array(got.body) }).formData();
+    expect(parsed.get("title")).toBe("Тема\r\n\r\nОписание");
+    expect(parsed.get("extra")).toBe("x");
+    expect((parsed.getAll("attachment") as File[]).map((file) => file.name)).toEqual(["a.png", "b.png"]);
   });
 
   it("keeps each plugin's key under its own service name", () => {

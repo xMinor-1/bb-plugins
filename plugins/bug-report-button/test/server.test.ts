@@ -301,7 +301,7 @@ describe("REST mode through the server", () => {
     sendMode: "rest",
     apiBaseUrl: "https://tracker.example.test/api/v1",
     submitPath: "/forms/abc/submit",
-    submitFields: '{"tema":"{subject}"}',
+    submitFields: '{"title":"{subject}"}',
     attachPath: "/issues/{key}/attachments",
     shareKeyWith: "tracker-board",
     keyHelp: "Profile → API keys.",
@@ -339,13 +339,24 @@ describe("REST mode through the server", () => {
     expect(await off.handlers.send!({ subject: "x", description: "", client: "", images: [] })).toEqual({ ok: false, error: "Sending through the API is not set up." });
   });
 
+  it("form files: the page joins pictures, and the machine gets one form request", async () => {
+    hostAnswer = () => ({ ok: true, status: 201, text: '{"key":"BUGS-4"}' });
+    const { handlers, hostCalls } = loadServer({ ...REST, restFiles: "form", fileField: "attachment" });
+    hostAnswer = (method) => (method === "status" ? { hasKey: true, source: "shared", keyStore: "keychain" } : { ok: true, status: 201, text: '{"key":"BUGS-4"}' });
+    expect(await handlers.config!(null)).toMatchObject({ mode: "rest", canAttach: true, combine: true });
+    const result = await handlers.send!({ subject: "Bug", description: "Steps", client: "", images: [{ name: "screenshots.png", type: "image/png", base64: "AQID" }] });
+    expect(result).toEqual({ ok: true, key: "BUGS-4", url: null, warning: null });
+    expect(hostCalls.map((c) => c.method)).toEqual(["status", "postForm"]);
+    expect(hostCalls[1]!.input).toMatchObject({ path: "/forms/abc/submit", fields: { title: "Bug" }, field: "attachment", files: [{ name: "screenshots.png" }] });
+  });
+
   it("sends JSON and then each picture through the machine", async () => {
     hostAnswer = (method) => (method === "postJson" ? { ok: true, status: 201, text: '{"key":"BUGS-3"}' } : { ok: true, status: 201, text: "" });
     const { handlers, hostCalls } = loadServer(REST);
     const result = await handlers.send!({ subject: " Bug ", description: "Steps", client: "Chrome", images: [{ name: "a.png", type: "image/png", base64: "AQID" }] });
     expect(result).toEqual({ ok: true, key: "BUGS-3", url: null, warning: null });
     expect(hostCalls.map((c) => c.method)).toEqual(["postJson", "postFile"]);
-    expect(JSON.parse((hostCalls[0]!.input as { body: string }).body)).toEqual({ tema: "Bug" });
+    expect(JSON.parse((hostCalls[0]!.input as { body: string }).body)).toEqual({ title: "Bug" });
     expect(hostCalls[1]!.input).toMatchObject({ path: "/issues/BUGS-3/attachments", field: "file", file: { name: "a.png" } });
   });
 });

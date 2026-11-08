@@ -17,7 +17,7 @@ import {
 } from "./src/report";
 import { PANEL_ID, REVEALED_KEY, revealOnce } from "./src/reveal";
 import { DEFAULT_FILE_FIELD, readFields, readSendConfig, sendReport } from "./src/send";
-import { DEFAULT_AUTH, readRestConfig, sendRest } from "./src/rest";
+import { DEFAULT_AUTH, readRestConfig, restTakesPictures, sendRest } from "./src/rest";
 import { hostContract, keyStatusSchema, type KeyStatus } from "./contract";
 
 const VERSION = (() => {
@@ -151,6 +151,14 @@ export default function bugReportButton(bb: BbPluginApi) {
       experimental_schema: z.string().max(500).refine((value) => value.trim() === "" || value.trim().startsWith("/"), "The path must start with /"),
       default: "",
     },
+    restFiles: {
+      type: "string",
+      label: "Pictures (REST)",
+      description:
+        '"form": the report and its pictures go in one multipart/form-data request to the submit path, pictures under Picture field (several are joined into one unless Several pictures is "separate"). "attach": the report goes as JSON, then each picture to Attachments path.',
+      experimental_schema: z.enum(["form", "attach"]),
+      default: "attach",
+    },
     attachPath: {
       type: "string",
       label: "Attachments path (REST)",
@@ -230,8 +238,8 @@ export default function bugReportButton(bb: BbPluginApi) {
           label,
           formUrl: url,
           canSend,
-          canAttach: canSend && rest.attachPath !== "",
-          combine: false,
+          canAttach: canSend && restTakesPictures(rest),
+          combine: canSend && rest.files === "form" && rest.combine,
           problem: "error" in rest && rest.error !== "not-configured" ? rest.error : null,
           mode: "rest" as const,
           key,
@@ -272,7 +280,8 @@ export default function bugReportButton(bb: BbPluginApi) {
         try {
           const hostId = await machine();
           const call = { hostId, timeoutMs: 90_000 };
-          const result = await sendRest(rest, { subject: subject.trim(), description: description.trim(), context }, rest.attachPath ? images : [], {
+          const result = await sendRest(rest, { subject: subject.trim(), description: description.trim(), context }, restTakesPictures(rest) ? images : [], {
+            postForm: (input) => host.call("postForm", input, call),
             postJson: (input) => host.call("postJson", input, call),
             postFile: (input) => host.call("postFile", input, call),
           });

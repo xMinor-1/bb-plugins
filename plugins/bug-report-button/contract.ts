@@ -3,7 +3,7 @@
 // sends it to the configured address and nowhere else. The server holds the settings and builds the requests.
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { IMAGE_TYPES, MAX_IMAGE_BYTES } from "./src/report";
+import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES } from "./src/report";
 
 export const KEY_SOURCES = ["own", "shared"] as const;
 export const keyStoreKindSchema = z.enum(["keychain", "credential-manager", "file"]);
@@ -46,6 +46,7 @@ export const authSchema = z
   .strict();
 export type Auth = z.infer<typeof authSchema>;
 
+const fileSchema = z.object({ name: z.string().min(1).max(200), type: z.enum(IMAGE_TYPES), base64: z.string().min(1).max(Math.ceil(MAX_IMAGE_BYTES / 3) * 4) }).strict();
 const target = { baseUrl, shareWith, auth: authSchema, path: z.string().min(1).max(2000) };
 
 export const answerSchema = z.union([
@@ -60,13 +61,25 @@ export const hostContract = defineRpcContract({
   forget: { input: z.object({ baseUrl, shareWith }).strict(), output: keyStatusSchema },
   /** POST of a JSON body. */
   postJson: { input: z.object({ ...target, body: z.string().max(200_000) }).strict(), output: answerSchema },
+  /** POST of a form as multipart/form-data: text fields and files under one field name. */
+  postForm: {
+    input: z
+      .object({
+        ...target,
+        fields: z.record(z.string().regex(/^[A-Za-z0-9_.\-[\]]{1,100}$/), z.string().max(20_000)).refine((value) => Object.keys(value).length <= 20, "Too many fields"),
+        field: z.string().regex(/^[A-Za-z0-9_.\-[\]]{0,100}$/),
+        files: z.array(fileSchema).max(MAX_IMAGES),
+      })
+      .strict(),
+    output: answerSchema,
+  },
   /** POST of one file as multipart/form-data. */
   postFile: {
     input: z
       .object({
         ...target,
         field: z.string().regex(/^[A-Za-z0-9_.\-[\]]{1,100}$/),
-        file: z.object({ name: z.string().min(1).max(200), type: z.enum(IMAGE_TYPES), base64: z.string().min(1).max(Math.ceil(MAX_IMAGE_BYTES / 3) * 4) }).strict(),
+        file: fileSchema,
       })
       .strict(),
     output: answerSchema,

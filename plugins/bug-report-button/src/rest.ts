@@ -1,5 +1,5 @@
-// The REST mode: the report goes as JSON to a tracker's API with the person's own API key, and pictures are attached to
-// the created record one by one. The key stays on the person's machine (the host entry); this module only builds the
+// The REST mode: the report goes to a tracker's API with the person's own API key. Pictures go either in the same
+// request, as a file field of the form (multipart/form-data), or one by one as attachments of the created record. The key stays on the person's machine (the host entry); this module only builds the
 // requests from the settings and reads the answers.
 import type { Answer, Auth, FailureCode } from "../contract";
 import { readFormUrl } from "./config";
@@ -21,6 +21,12 @@ export type RestConfig = {
   shareWith: string | null;
   recordUrl: string;
   keyHelp: string;
+  /** "form": the report and its pictures in one multipart request; "attach": JSON, then each picture on the record. */
+  files: "form" | "attach";
+  /** "form": the form's file field. */
+  fileField: string;
+  /** "form": several pictures are joined into one, for a field that takes one file. */
+  combine: boolean;
 };
 
 function readPath(value: unknown): string {
@@ -46,6 +52,9 @@ export function readRestConfig(values: Record<string, unknown>): RestConfig | { 
   const share = typeof values.shareKeyWith === "string" ? values.shareKeyWith.trim() : "";
   const recordUrl = typeof values.recordUrl === "string" && values.recordUrl.includes("{key}") ? values.recordUrl.trim() : "";
   const keyHelp = typeof values.keyHelp === "string" ? values.keyHelp.trim().slice(0, 300) : "";
+  const files = values.restFiles === "form" ? "form" : "attach";
+  const fileField = typeof values.fileField === "string" ? values.fileField.trim() : "file";
+  if (fileField && !FIELD_KEY.test(fileField)) return { error: "The picture field name setting has characters a form field cannot have." };
   return {
     baseUrl,
     submitPath,
@@ -56,12 +65,24 @@ export function readRestConfig(values: Record<string, unknown>): RestConfig | { 
     shareWith: PLUGIN_ID.test(share) ? share : null,
     recordUrl,
     keyHelp,
+    files,
+    fileField,
+    combine: values.fileMode !== "separate",
   };
+}
+
+/** Pictures go with the report at all: the form has a file field, or the record takes attachments. */
+export function restTakesPictures(config: RestConfig): boolean {
+  return config.files === "form" ? config.fileField !== "" : config.attachPath !== "";
+}
+
+export function filledFields(fields: Record<string, string>, report: { subject: string; description: string; context: string }): Record<string, string> {
+  return Object.fromEntries(Object.entries(fields).map(([key, template]) => [key, fillTemplate(template, report)]));
 }
 
 /** The JSON body: each field's template filled in. */
 export function buildJson(fields: Record<string, string>, report: { subject: string; description: string; context: string }): string {
-  return JSON.stringify(Object.fromEntries(Object.entries(fields).map(([key, template]) => [key, fillTemplate(template, report)])));
+  return JSON.stringify(filledFields(fields, report));
 }
 
 export function attachPathFor(config: RestConfig, key: string): string {
@@ -89,7 +110,17 @@ export function failureText(answer: Extract<Answer, { ok: false }>): string {
 }
 
 
+type RestImage = { name: string; type: ImageType; base64: string };
 export type RestCalls = {
+  postForm: (input: {
+    baseUrl: string;
+    shareWith: string | null;
+    auth: Auth;
+    path: string;
+    fields: Record<string, string>;
+    field: string;
+    files: RestImage[];
+  }) => Promise<Answer>;
   postJson: (input: { baseUrl: string; shareWith: string | null; auth: Auth; path: string; body: string }) => Promise<Answer>;
   postFile: (input: {
     baseUrl: string;
@@ -110,6 +141,17 @@ export async function sendRest(
   calls: RestCalls,
 ): Promise<RestResult> {
   const target = { baseUrl: config.baseUrl, shareWith: config.shareWith, auth: config.auth };
+  if (config.files === "form") {
+    const sent = await calls.postForm({
+      ...target,
+      path: config.submitPath,
+      fields: filledFields(config.fields, report),
+      field: config.fileField,
+      files: config.fileField ? [...images] : [],
+    });
+    if (!sent.ok) return { ok: false, error: failureText(sent) };
+    return { ok: true, ...readAnswer(sent.text, config.recordUrl), warning: null };
+  }
   const answer = await calls.postJson({ ...target, path: config.submitPath, body: buildJson(config.fields, report) });
   if (!answer.ok) return { ok: false, error: failureText(answer) };
   const { key, url } = readAnswer(answer.text, config.recordUrl);
