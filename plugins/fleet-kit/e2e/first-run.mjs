@@ -231,12 +231,17 @@ try {
   const accountCard = form.locator("xpath=ancestor::li[@data-step]");
   await form.locator('input[name="login"]').fill("bad:login");
   await form.locator('input[name="password"]').fill(PASSWORD);
+  const errorsBefore = errors.length;
   await form.getByRole("button", { name: "Save" }).click();
   const stepError = accountCard.locator("[data-step-error]");
   check("account: a refused login is explained in the step", await stepError.waitFor({ timeout: 15_000 }).then(() => true, () => false));
   check("account: in the person's words", /Check the login/.test(await stepError.innerText().catch(() => "")), await stepError.innerText().catch(() => "absent"));
   check("account: not in the page's top line", (await page.locator('[role="alert"]:not([data-step-error])').count()) === 0,
     await page.locator('[role="alert"]:not([data-step-error])').allInnerTexts().then((texts) => texts.join(" | ")));
+  // The refused call is logged by the browser as one 422; anything else stays an error.
+  const afterRefusal = errors.splice(errorsBefore);
+  check("account: the refusal is one 422 in the console", afterRefusal.filter((line) => /status of 422/.test(line)).length === 1, afterRefusal.join(" | "));
+  errors.push(...afterRefusal.filter((line) => !/status of 422/.test(line)));
   check("account: the password stays typed for another try", (await form.locator('input[name="password"]').inputValue()) === PASSWORD);
   await form.locator('input[name="login"]').fill(LOGIN);
   await form.locator('input[name="password"]').fill(PASSWORD);
