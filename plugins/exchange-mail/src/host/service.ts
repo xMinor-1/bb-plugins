@@ -4,6 +4,12 @@ import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type {
   AuthMode,
+  MeetingDetails,
+  MeetingFields,
+  MeetingInput,
+  MeetingProposal,
+  MeetingResult,
+  MeetingScope,
   CalendarOutput,
   ConnectionStatus,
   Lang,
@@ -22,10 +28,12 @@ import type {
   ToolOutput,
 } from "../../contract.js";
 import { ATTACHMENT_MAX_BYTES, CALENDAR_MAX_DAYS, CALENDAR_MAX_EVENTS, FREE_TIME_MAX_DAYS } from "../shared/limits.js";
-import { checkPeriod, fixedOffset, formatEvents, formatFreeTime, freeSlots, minutesOf, rangeOf, systemOffset, toEvent, type Offset } from "./calendar.js";
+import { blocksTime, checkPeriod, eventId, fixedOffset, formatCommonTime, formatEvents, formatFreeTime, freeSlots, freeStretches, minutesOf, parseWhen, rangeOf, sameLocalDay, spanText, systemOffset, toEvent, type Offset } from "./calendar.js";
+import { everyone, formatProposal, missingFrom, proposalView, revisionOf, sameList, uniqueAddresses, type ProposalEntry } from "./meetings.js";
+import type { MeetingChanges } from "./ews/soap.js";
 import { normalizeText } from "../shared/mail-text.js";
 import { isAddress } from "../shared/recipients.js";
-import { oneAtATime, systemConfirmer, type SendConfirmer, type SendSummary } from "./confirm.js";
+import { oneAtATime, systemConfirmer, type MeetingSummary, type SendConfirmer, type SendSummary } from "./confirm.js";
 import { curlTransport, type HttpAuth, type Transport } from "./curl.js";
 import { EwsClient, normalizeEwsUrl } from "./ews/client.js";
 import { EwsError } from "./ews/parse.js";
@@ -41,7 +49,11 @@ import { accountName, SignInGate, type Refusal, type RefusalStore } from "./sign
 const EWS_FOLDER: Record<Folder, FolderName> = { inbox: "inbox", sent: "sentitems", drafts: "drafts", deleted: "deleteditems" };
 const FOLDER_TITLE: Record<Folder, string> = { inbox: "Inbox", sent: "Sent Items", drafts: "Drafts", deleted: "Deleted Items" };
 const PASSWORD = "password";
-const MAX_REFS = 5000;
+/** Message refs and calendar event ids together. */
+const MAX_REFS = 10_000;
+const MAX_PROPOSALS = 100;
+/** A meeting proposed may last two weeks at most. */
+const MEETING_MAX_MS = 14 * 86_400_000;
 const MAX_DRAFTS = 100;
 /** Pictures inside an HTML message: each and all together, so a message cannot make the panel fetch megabytes. */
 const INLINE_IMAGE_MAX_BYTES = 1_500_000;
@@ -127,6 +139,8 @@ export class MailService {
   private readonly writeDrafts = serial();
   private readonly writeRefs = serial();
   private readonly writeSignIn = serial();
+  private readonly writeMeetings = serial();
+  private readonly confirmingMeetings = new Set<string>();
   private refs: Map<string, string> | null = null;
   private refsDirty: NodeJS.Timeout | null = null;
 
@@ -255,6 +269,7 @@ export class MailService {
     await this.secrets.delete(PASSWORD).catch(() => false);
     await removeFile(this.connectionFile());
     await this.writeDrafts(() => removeFile(this.draftsFile()));
+    await this.writeMeetings(() => removeFile(this.meetingsFile()));
     await this.writeRefs(async () => {
       this.refs = new Map();
       await removeFile(this.refsFile());
@@ -309,9 +324,8 @@ export class MailService {
     return this.refs;
   }
 
-  private async remember(itemId: string): Promise<string> {
+  private async remember(itemId: string, ref = refFor(itemId)): Promise<string> {
     const map = await this.refMap();
-    const ref = refFor(itemId);
     if (map.get(ref) !== itemId) {
       map.delete(ref);
       map.set(ref, itemId);
@@ -478,6 +492,8 @@ export class MailService {
   private async readCalendar(from: number, to: number, signal?: AbortSignal): Promise<CalendarOutput> {
     const client = await this.client();
     const { events, last } = await client.calendar({ start: new Date(from).toISOString(), end: new Date(to).toISOString(), max: CALENDAR_MAX_EVENTS }, signal);
+    // The ids the panel and agents name events by, for proposals.
+    for (const event of events) await this.remember(event.item.id, eventId(event.item.id));
     return {
       // A CalendarView gives occurrences, never the recurring master itself; anything else that slips in is left out.
       events: events
@@ -707,6 +723,344 @@ export class MailService {
     };
   }
 
+  // ------------------------------------------------------------------ meetings
+
+  private meetingsFile = () => join(this.dataDir, "meetings.json");
+  private readMeetings = async () => (await readJson<ProposalEntry[]>(this.meetingsFile())) ?? [];
+  private dropMeeting = (id: string) => this.writeMeetings(async () => writeJson(this.meetingsFile(), (await this.readMeetings()).filter((p) => p.id !== id)));
+
+  private async eventItemId(eventId: string): Promise<string> {
+    const itemId = (await this.refMap()).get(eventId.trim());
+    if (!itemId) throw new UserError(`Unknown event "${eventId}". Read the calendar first (calendar_events) and use an [id] from it.`);
+    return itemId;
+  }
+
+  /** An event read whole, for the panel's edit form. */
+  async meetingDetails(eventId: string, signal?: AbortSignal): Promise<MeetingDetails> {
+    const item = await (await this.client()).calendarItem({ id: await this.eventItemId(eventId) }, signal);
+    const event = toEvent(item);
+    return {
+      eventId,
+      subject: item.subject,
+      start: event.start,
+      end: event.end,
+      location: item.location,
+      required: item.required,
+      optional: item.optional,
+      rooms: item.rooms,
+      body: item.body,
+      organizer: item.organizer,
+      isOrganizer: item.myResponse.toLowerCase() === "organizer",
+      myResponse: event.myResponse,
+      kind: event.kind,
+      isMeeting: item.isMeeting,
+      cancelled: item.cancelled,
+      private: event.private,
+    };
+  }
+
+  async meeting(id: string, threadId?: string): Promise<MeetingProposal | null> {
+    const entry = (await this.readMeetings()).find((p) => p.id === id);
+    if (!entry || (threadId !== undefined && entry.threadId !== threadId)) return null;
+    return proposalView(entry);
+  }
+
+  async discardMeeting(id: string, threadId?: string): Promise<{ ok: boolean }> {
+    if (!(await this.meeting(id, threadId))) return { ok: false };
+    await this.dropMeeting(id);
+    return { ok: true };
+  }
+
+  /**
+   * Works out a meeting change and keeps it as a proposal. Nothing is written
+   * to Exchange: the item is only read, to know what it is now and at which
+   * change key.
+   */
+  async proposeMeeting(input: MeetingInput, source: "agent" | "person", threadId: string | null, signal?: AbortSignal): Promise<MeetingProposal> {
+    const zone = this.zone();
+    const entries = await this.readMeetings();
+    const previous = input.replaces ? entries.find((p) => p.id === input.replaces) : undefined;
+    if (input.replaces && !previous) throw new UserError(`There is no proposal ${input.replaces} any more; make a new one instead.`);
+    if (previous && source === "agent" && (previous.source !== "agent" || previous.threadId !== threadId)) {
+      throw new UserError(`Proposal ${previous.id} was not made in this thread; make a new one instead.`);
+    }
+    if (!previous && entries.length >= MAX_PROPOSALS) throw new UserError("Too many meeting proposals are waiting. Confirm or discard some first.");
+    const client = await this.client();
+    const id = previous?.id ?? `p_${randomBytes(6).toString("hex")}`;
+    const people = (list: readonly string[] | undefined) => uniqueAddresses((list ?? []).map(parseRecipient).map(toAddress));
+    const text = (value: string | undefined) => (value === undefined ? undefined : value.replace(/\r\n?/g, "\n").trim());
+
+    let entry: Omit<ProposalEntry, "revision" | "createdAt">;
+    if (input.action === "create") {
+      const start = parseWhen(input.start, zone);
+      const end = parseWhen(input.end, zone);
+      checkMeetingTime(start, end, this.now());
+      const after: MeetingFields = {
+        subject: input.subject.trim(),
+        start: new Date(start).toISOString(),
+        end: new Date(end).toISOString(),
+        location: text(input.location) || null,
+        required: people(input.required),
+        optional: people(input.optional),
+        rooms: people(input.rooms),
+      };
+      if (!after.subject) throw new UserError("A meeting needs a subject.");
+      entry = {
+        id, action: "create", source, threadId, scope: "single", eventId: null, target: null, before: null, after,
+        body: text(input.body) || null, organizer: null, response: null, note: null, notify: everyone(after), removed: [], changes: null,
+      };
+    } else {
+      const itemId = await this.eventItemId(input.event);
+      const occurrence = await client.calendarItem({ id: itemId }, signal);
+      const event = toEvent(occurrence);
+      // Agents get only the time of a private event; they do not get to change it either.
+      if (event.private && source === "agent") throw new UserError("This event is private: the user changes it in the Mail panel or in Outlook.");
+      const recurring = event.kind !== "single";
+      if (recurring && !input.scope) {
+        throw new UserError(`Event ${input.event} is one meeting of a recurring series: set scope to "occurrence" for this one only or "series" for all of them.`);
+      }
+      const scope: MeetingScope = recurring ? input.scope! : "single";
+      const series = scope === "series" ? await client.recurringMaster({ id: itemId }, signal) : null;
+      const item = series ?? occurrence;
+      if (!item.item.changeKey) throw new EwsError("BadResponse", "Exchange did not return the meeting's version");
+      const isOrganizer = item.myResponse.toLowerCase() === "organizer";
+      const before: MeetingFields = {
+        subject: item.subject,
+        // An occurrence's own times, also for the series: the person sees the meeting they picked.
+        start: event.start,
+        end: event.end,
+        location: item.location,
+        required: item.required,
+        optional: item.optional,
+        rooms: item.rooms,
+      };
+      const base = { id, source, threadId, scope, eventId: input.event, target: { itemId: item.item.id, changeKey: item.item.changeKey }, before, organizer: item.organizer };
+
+      if (input.action === "respond") {
+        if (isOrganizer || !item.isMeeting) throw new UserError("The user organizes this one: there is no invitation to answer. Propose a change or a cancellation instead.");
+        if (item.cancelled) throw new UserError("This meeting was cancelled by its organizer: there is nothing to answer.");
+        entry = {
+          ...base, action: "respond", after: null, body: null, response: input.response, note: text(input.note) || null,
+          notify: [item.organizer ?? { name: "The organizer", email: "" }], removed: [], changes: null,
+        };
+      } else if (!isOrganizer) {
+        throw new UserError("Someone else organizes this meeting, so only they can change or cancel it. Answer the invitation instead (calendar_propose_response).");
+      } else if (input.action === "cancel") {
+        if (item.cancelled) throw new UserError("This meeting is already cancelled.");
+        entry = { ...base, action: "cancel", after: null, body: null, response: null, note: text(input.note) || null, notify: everyone(before), removed: [], changes: null };
+      } else {
+        if (item.cancelled) throw new UserError("This meeting is cancelled; propose a new one instead.");
+        const oldStart = Date.parse(event.start);
+        const oldEnd = Date.parse(event.end);
+        const start = input.start ? parseWhen(input.start, zone) : oldStart;
+        const end = input.end ? parseWhen(input.end, zone) : input.start ? start + (oldEnd - oldStart) : oldEnd;
+        const timeChanged = start !== oldStart || end !== oldEnd;
+        if (timeChanged && item.allDay) throw new UserError("This is an all-day event: change its days in Outlook.");
+        if (timeChanged) checkMeetingTime(start, end, this.now());
+        if (timeChanged && scope === "series" && !sameLocalDay(oldStart, start, zone)) {
+          throw new UserError("Moving a whole series to another day changes how it repeats: do that in Outlook. You can move this one occurrence, or change the series' time on the same day.");
+        }
+        let required = input.required ? people(input.required) : before.required;
+        let optional = input.optional ? people(input.optional) : before.optional;
+        let rooms = input.rooms ? people(input.rooms) : before.rooms;
+        if (input.add?.length) required = uniqueAddresses([...required, ...missingFrom(people(input.add), [...required, ...optional, ...rooms])]);
+        if (input.remove?.length) {
+          const gone = people(input.remove);
+          const unknown = missingFrom(gone, everyone(before));
+          if (unknown.length) throw new UserError(`${unknown.map((a) => a.email).join(", ")} ${unknown.length === 1 ? "is" : "are"} not on this meeting.`);
+          required = missingFrom(required, gone);
+          optional = missingFrom(optional, gone);
+          rooms = missingFrom(rooms, gone);
+        }
+        const location = input.location === undefined ? before.location : text(input.location) || null;
+        const subject = input.subject === undefined ? before.subject : input.subject.trim();
+        const body = input.body === undefined ? null : text(input.body) ?? "";
+        const after: MeetingFields = { subject, start: new Date(start).toISOString(), end: new Date(end).toISOString(), location, required, optional, rooms };
+
+        const changes: { -readonly [K in keyof MeetingChanges]: MeetingChanges[K] } = {};
+        if (subject !== before.subject) changes.subject = subject;
+        if (location !== before.location) changes.location = location;
+        if (body !== null && body !== item.body.trim()) changes.body = body;
+        if (timeChanged) {
+          // A series moves by the same amount from its own first meeting, keeping each meeting's new length.
+          const from = series ? Date.parse(series.start) + (start - oldStart) : start;
+          changes.start = new Date(from).toISOString();
+          changes.end = new Date(from + (end - start)).toISOString();
+        }
+        const lists = [["required", required, before.required], ["optional", optional, before.optional], ["rooms", rooms, before.rooms]] as const;
+        for (const [name, now, was] of lists) {
+          if (sameList(now, was)) continue;
+          // Exchange may list a colleague by an internal (X.500) address only, which cannot be written back.
+          const unwritable = now.find((a) => !a.email);
+          if (unwritable) throw new UserError(`${unwritable.name ?? "Someone"} is on this meeting without an email address bb can write back: change the attendees in Outlook.`);
+          changes[name] = now;
+        }
+        if (Object.keys(changes).length === 0) throw new UserError("Nothing changes: the meeting already looks like that.");
+        const removed = missingFrom(everyone(before), everyone(after));
+        entry = { ...base, action: "update", after, body: changes.body === undefined ? null : body, response: null, note: null, notify: everyone(after), removed, changes };
+      }
+    }
+
+    const saved: ProposalEntry = { ...entry, createdAt: this.now(), revision: revisionOf(entry) };
+    await this.writeMeetings(async () => {
+      const current = (await this.readMeetings()).filter((p) => p.id !== saved.id);
+      await writeJson(this.meetingsFile(), [...current, saved]);
+    });
+    return proposalView(saved);
+  }
+
+  /**
+   * Writes a proposal to Exchange only at the revision the person saw, and only
+   * after they confirm it in a system window on this machine:
+   *   1. the revision named must still be the proposal's — an agent replacing
+   *      it makes a new one;
+   *   2. the meeting must still be at the change key read when proposing — an
+   *      edit in Outlook or an update from the organizer changes it;
+   *   3. the window shows what changes and everyone who gets mail;
+   *   4. the write names that change key, so Exchange refuses a meeting that
+   *      changed while the window was open.
+   */
+  async confirmMeeting(id: string, revision: string, signal?: AbortSignal, options: { threadId?: string; lang?: Lang } = {}): Promise<MeetingResult> {
+    // One confirmation per proposal at a time: two cards confirming the same new meeting must not create it twice.
+    if (this.confirmingMeetings.has(id)) return { status: "cancelled", reason: "busy", message: NOT_CONFIRMED.busy };
+    this.confirmingMeetings.add(id);
+    try {
+      return await this.confirmMeetingOnce(id, revision, signal, options);
+    } finally {
+      this.confirmingMeetings.delete(id);
+    }
+  }
+
+  private async confirmMeetingOnce(id: string, revision: string, signal: AbortSignal | undefined, options: { threadId?: string; lang?: Lang }): Promise<MeetingResult> {
+    const entry = (await this.readMeetings()).find((p) => p.id === id);
+    if (!entry || (options.threadId !== undefined && entry.threadId !== options.threadId)) {
+      return { status: "gone", message: "This proposal is no longer waiting: it was confirmed, discarded or replaced." };
+    }
+    if (entry.revision !== revision) return { status: "changed", message: "The proposal changed after you opened it. Review the new version before confirming." };
+    const connection = await this.readConnection();
+    const client = await this.client();
+    const gone = async (): Promise<MeetingResult> => {
+      await this.dropMeeting(id);
+      return { status: "gone", message: "The meeting is not in the calendar any more: it was deleted or cancelled in Outlook." };
+    };
+    const moved: MeetingResult = { status: "changed", message: "The meeting changed in Outlook after this was proposed. Nothing was changed: make the proposal again from the meeting as it is now." };
+    const current = async () => {
+      if (!entry.target) return true;
+      const now = await client.currentId({ id: entry.target.itemId }, signal);
+      return now.changeKey === entry.target.changeKey;
+    };
+    try {
+      if (!(await current())) return moved;
+    } catch (error) {
+      if (error instanceof EwsError && error.code === "ErrorItemNotFound") return gone();
+      throw error;
+    }
+
+    const outcome = await this.confirmer.confirm(this.meetingSummary(entry, connection?.auth === "password" ? connection.user : null, options.lang ?? "en"), signal, options.lang ?? "en");
+    if (!outcome.ok) return { status: "cancelled", reason: outcome.reason, message: NOT_CONFIRMED[outcome.reason] };
+
+    // The proposal is taken off the list before anything is written, and only if it is still the version the window showed:
+    // an agent may have replaced it while the window was open.
+    const claimed = await this.writeMeetings(async () => {
+      const all = await this.readMeetings();
+      const now = all.find((p) => p.id === id);
+      if (!now || now.revision !== revision) return false;
+      await writeJson(this.meetingsFile(), all.filter((p) => p.id !== id));
+      return true;
+    });
+    if (!claimed) return { status: "changed", message: "The proposal changed while the window was open. Nothing was changed: review the new version." };
+    const putBack = () =>
+      this.writeMeetings(async () => {
+        const all = await this.readMeetings();
+        if (!all.some((p) => p.id === id)) await writeJson(this.meetingsFile(), [...all, entry]);
+      });
+
+    try {
+      if (!(await current())) {
+        await putBack();
+        return moved;
+      }
+      const ref = entry.target ? { id: entry.target.itemId, changeKey: entry.target.changeKey } : null;
+      if (entry.action === "create") {
+        await client.createMeeting({ ...entry.after!, body: entry.body }, signal);
+      } else if (entry.action === "update") {
+        const notify = entry.notify.length + entry.removed.length > 0;
+        await client.updateMeeting(ref!, entry.changes!, { notify }, signal);
+      } else if (entry.action === "cancel") {
+        if (entry.notify.length) await client.cancelMeeting(ref!, entry.note, signal);
+        else await client.deleteAppointment(ref!, signal);
+      } else {
+        await client.respondToMeeting(ref!, entry.response!, entry.note, signal);
+      }
+    } catch (error) {
+      if (error instanceof EwsError && error.code === "ErrorItemNotFound") return gone();
+      // Not written: the proposal waits again, for another try or a new one.
+      await putBack();
+      if (error instanceof EwsError && /Stale|Conflict|ChangeKey/i.test(error.code)) return moved;
+      throw error;
+    }
+    return { status: "done", at: this.now() };
+  }
+
+  private meetingSummary(entry: ProposalEntry, mailbox: string | null, lang: Lang): MeetingSummary {
+    const zone = this.zone();
+    const fields = (entry.after ?? entry.before)!;
+    const span = (f: MeetingFields) => spanText(Date.parse(f.start), Date.parse(f.end), zone, lang);
+    const before: { subject?: string; when?: string; location?: string | null } = {};
+    if (entry.action === "update" && entry.before && entry.after) {
+      if (entry.after.subject !== entry.before.subject) before.subject = entry.before.subject;
+      if (entry.after.start !== entry.before.start || entry.after.end !== entry.before.end) before.when = span(entry.before);
+      if (entry.after.location !== entry.before.location) before.location = entry.before.location;
+    }
+    const lists: { required?: MailAddress[]; optional?: MailAddress[]; rooms?: MailAddress[] } = {};
+    if (entry.action === "update" && entry.before && entry.after) {
+      for (const name of ["required", "optional", "rooms"] as const) if (!sameList(entry.after[name], entry.before[name])) lists[name] = entry.after[name];
+    }
+    return {
+      meeting: entry.action,
+      mailbox,
+      lists,
+      scope: entry.scope,
+      subject: fields.subject,
+      when: span(fields),
+      location: fields.location,
+      before,
+      body: entry.body,
+      added: entry.action === "update" ? missingFrom(everyone(entry.after), everyone(entry.before)) : [],
+      removed: entry.removed,
+      notify: entry.notify,
+      response: entry.response,
+      note: entry.note,
+    };
+  }
+
+  /** Times everyone is free: the user's own calendar and the others' free/busy from Exchange. */
+  private async findTime(input: Extract<ToolInput, { tool: "findTime" }>, signal?: AbortSignal): Promise<string> {
+    const zone = this.zone();
+    const range = rangeOf(input, this.now(), zone, { fromNow: true, maxDays: FREE_TIME_MAX_DAYS });
+    const options = {
+      dayStart: minutesOf(input.dayStart ?? "09:00"),
+      dayEnd: minutesOf(input.dayEnd ?? "18:00"),
+      minMinutes: input.minutes ?? 30,
+      weekends: input.weekends ?? false,
+      offset: zone,
+    };
+    if (options.dayEnd <= options.dayStart) throw new UserError("day_end must come after day_start.");
+    const emails = uniqueAddresses(input.attendees.map(parseRecipient).map(toAddress)).map((a) => a.email);
+    const client = await this.client();
+    const start = new Date(range.start).toISOString();
+    const end = new Date(range.end).toISOString();
+    const [own, others] = await Promise.all([this.readCalendar(range.start, range.end, signal), client.availability({ emails, start, end }, signal)]);
+    const busy = own.events.filter(blocksTime).map((event) => ({ start: Date.parse(event.start), end: Date.parse(event.end) }));
+    const people = emails.map((email, n) => {
+      const answer = others[n]!;
+      if (!answer.ok) return { email, known: false, why: answer.message };
+      for (const block of answer.busy) if (block.type !== "Free" && block.type !== "NoData") busy.push({ start: Date.parse(block.start), end: Date.parse(block.end) });
+      return { email, known: true, why: null };
+    });
+    return formatCommonTime(freeStretches(busy, range, options), range, options, people, own.more);
+  }
+
   // --------------------------------------------------------------- agent tools
 
   async tool(input: ToolInput, signal?: AbortSignal): Promise<ToolOutput> {
@@ -767,6 +1121,12 @@ export class MailService {
           const { events, more } = await this.readCalendar(range.start, range.end, signal);
           return { text: formatFreeTime(freeSlots(events, range, options), range, options, more), isError: false, draftId: null };
         }
+        case "findTime":
+          return { text: await this.findTime(input, signal), isError: false, draftId: null };
+        case "meeting": {
+          const proposal = await this.proposeMeeting(input.proposal, "agent", input.threadId, signal);
+          return { text: formatProposal(proposal, this.zone(), Boolean(input.proposal.replaces)), isError: false, draftId: null, meetingId: proposal.id };
+        }
         case "draft": {
           let kind: Draft["kind"] = input.forward ? "forward" : input.replyTo ? (input.replyAll ? "replyAll" : "reply") : "new";
           if (!input.replyTo && !input.forward && input.replaces) {
@@ -795,6 +1155,21 @@ export class MailService {
       return { text: describe(error), isError: true, draftId: null };
     }
   }
+}
+
+/** Why nothing changed, for agents and logs; the panel says it in its own words. */
+const NOT_CONFIRMED: Record<"cancelled" | "timeout" | "unavailable" | "busy", string> = {
+  cancelled: "You did not confirm in the system window. Nothing changed in the calendar and no mail went out.",
+  timeout: "Nobody answered the system window in time. Nothing changed in the calendar.",
+  unavailable: "bb could not show the confirmation window on this machine, so nothing changed. Make the change in Outlook instead.",
+  busy: "Another confirmation is waiting in a system window. Answer it first.",
+};
+
+/** A meeting ends after it starts, lasts at most two weeks, and has not ended yet. */
+function checkMeetingTime(start: number, end: number, now: number): void {
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) throw new UserError("The meeting must end after it starts.");
+  if (end - start > MEETING_MAX_MS) throw new UserError("A meeting can last two weeks at most.");
+  if (end <= now) throw new UserError("That time is already over: pick a time in the future.");
 }
 
 /** A picture type for a data: URL, read from the bytes, not the declared type: raster formats only, no SVG. */

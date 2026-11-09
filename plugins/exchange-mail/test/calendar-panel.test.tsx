@@ -154,6 +154,6 @@ describe("the week", () => {
     expect(screen.getByText("повторяется, перенесена")).toBeTruthy();
     expect(screen.getByText("вы отказались")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Следующая неделя" })).toBeTruthy();
-    expect(screen.getByText(/Только просмотр/)).toBeTruthy();
+    expect(screen.getByText(/каждое изменение ждёт вашего подтверждения/)).toBeTruthy();
   });
 });

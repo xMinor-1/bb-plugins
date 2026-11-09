@@ -224,6 +224,150 @@ export type CalendarOutput = z.infer<typeof calendarSchema>;
 const whenSchema = z.string().min(10).max(40);
 const clockSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 
+// ------------------------------------------------------------------ meetings
+//
+// Meetings are written only through a proposal: an agent or the panel asks for
+// a change, the host keeps it with a revision, a card shows it, and the person
+// confirms that revision in a system window. No method writes on its own.
+
+export const meetingActionSchema = z.enum(["create", "update", "cancel", "respond"]);
+export type MeetingAction = z.infer<typeof meetingActionSchema>;
+export const meetingResponseSchema = z.enum(["accept", "tentative", "decline"]);
+export type MeetingResponse = z.infer<typeof meetingResponseSchema>;
+/** single: a meeting that does not repeat; occurrence: one meeting of a series; series: every meeting of it. */
+export const meetingScopeSchema = z.enum(["single", "occurrence", "series"]);
+export type MeetingScope = z.infer<typeof meetingScopeSchema>;
+
+/** An event of calendar_events or the panel's week: e + 12 characters. */
+const eventRefSchema = z.string().regex(/^e[a-z0-9]{12}$/, "an event id from calendar_events, such as e1a2b3c4d5e6f");
+const attendeeList = z.array(z.string().min(3).max(320)).max(100);
+const meetingText = z.string().max(20_000);
+const subjectText = z.string().max(255);
+const placeText = z.string().max(255);
+const replacesRef = z.string().regex(/^p_[0-9a-f]{12}$/).optional();
+
+/** What is asked for. Times: a local time on the machine with the mailbox (2026-11-03T14:00) or ISO with a zone. */
+export const meetingInputSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.literal("create"),
+      subject: subjectText.min(1),
+      start: whenSchema,
+      end: whenSchema,
+      location: placeText.optional(),
+      body: meetingText.optional(),
+      required: attendeeList.optional(),
+      optional: attendeeList.optional(),
+      rooms: attendeeList.optional(),
+      replaces: replacesRef,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("update"),
+      event: eventRefSchema,
+      /** Required for a recurring meeting: one occurrence or the whole series. */
+      scope: z.enum(["occurrence", "series"]).optional(),
+      start: whenSchema.optional(),
+      end: whenSchema.optional(),
+      subject: subjectText.min(1).optional(),
+      /** "" takes the place off. */
+      location: placeText.optional(),
+      body: meetingText.optional(),
+      /** Whole lists: the panel knows the attendees. */
+      required: attendeeList.optional(),
+      optional: attendeeList.optional(),
+      rooms: attendeeList.optional(),
+      /** Changes to the list: agents know only how many are invited. */
+      add: attendeeList.optional(),
+      remove: attendeeList.optional(),
+      replaces: replacesRef,
+    })
+    .strict(),
+  z.object({ action: z.literal("cancel"), event: eventRefSchema, scope: z.enum(["occurrence", "series"]).optional(), note: meetingText.optional(), replaces: replacesRef }).strict(),
+  z
+    .object({
+      action: z.literal("respond"),
+      event: eventRefSchema,
+      scope: z.enum(["occurrence", "series"]).optional(),
+      response: meetingResponseSchema,
+      note: meetingText.optional(),
+      replaces: replacesRef,
+    })
+    .strict(),
+]);
+export type MeetingInput = z.infer<typeof meetingInputSchema>;
+
+export const meetingFieldsSchema = z
+  .object({
+    subject: z.string(),
+    /** ISO, UTC. */
+    start: z.string(),
+    end: z.string(),
+    location: z.string().nullable(),
+    required: z.array(addressSchema),
+    optional: z.array(addressSchema),
+    rooms: z.array(addressSchema),
+  })
+  .strict();
+export type MeetingFields = z.infer<typeof meetingFieldsSchema>;
+
+/** A proposal waiting for the person: what changes, and who gets mail about it. */
+export const meetingProposalSchema = z
+  .object({
+    id: z.string(),
+    action: meetingActionSchema,
+    source: z.enum(["agent", "person"]),
+    threadId: z.string().nullable(),
+    createdAt: z.number(),
+    scope: meetingScopeSchema,
+    /** The event in the calendar it is about (update, cancel, respond). */
+    eventId: z.string().nullable(),
+    /** The meeting as it is now (update, cancel, respond). */
+    before: meetingFieldsSchema.nullable(),
+    /** The meeting as it will be (create, update). */
+    after: meetingFieldsSchema.nullable(),
+    /** The text of the invitation: the new one (create, update), or null when it stays as it is. */
+    body: z.string().nullable(),
+    organizer: addressSchema.nullable(),
+    response: meetingResponseSchema.nullable(),
+    /** Sent with a cancellation or an answer. */
+    note: z.string().nullable(),
+    /** Who gets an invitation, an update, a cancellation or the answer. */
+    notify: z.array(addressSchema),
+    /** Taken off the meeting: they get a cancellation. */
+    removed: z.array(addressSchema),
+    /** The version the person confirms: any change to the proposal or to the meeting in Exchange makes a new one. */
+    revision: z.string(),
+  })
+  .strict();
+export type MeetingProposal = z.infer<typeof meetingProposalSchema>;
+
+export const meetingResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("done"), at: z.number() }).strict(),
+  z.object({ status: z.literal("changed"), message: z.string() }).strict(),
+  z.object({ status: z.literal("gone"), message: z.string() }).strict(),
+  /** The person did not confirm in the system window, or no window could be shown. Nothing changed. */
+  z.object({ status: z.literal("cancelled"), reason: z.enum(["cancelled", "timeout", "unavailable", "busy"]), message: z.string() }).strict(),
+]);
+export type MeetingResult = z.infer<typeof meetingResultSchema>;
+
+/** An event read whole, for the panel's edit form. */
+export const meetingDetailsSchema = meetingFieldsSchema
+  .extend({
+    eventId: z.string(),
+    body: z.string(),
+    organizer: addressSchema.nullable(),
+    isOrganizer: z.boolean(),
+    myResponse: z.enum(["organizer", "accepted", "tentative", "declined", "none", "unknown"]),
+    kind: z.enum(["single", "occurrence", "exception"]),
+    isMeeting: z.boolean(),
+    cancelled: z.boolean(),
+    private: z.boolean(),
+  })
+  .strict();
+export type MeetingDetails = z.infer<typeof meetingDetailsSchema>;
+
 /** What an agent may ask for. There is deliberately no send. */
 export const toolInputSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("list"), folder: folderSchema.optional(), unreadOnly: z.boolean().optional(), limit: z.number().int().min(1).max(50).optional(), offset: z.number().int().min(0).max(10_000).optional() }).strict(),
@@ -240,6 +384,20 @@ export const toolInputSchema = z.discriminatedUnion("tool", [
       from: whenSchema.optional(),
       to: whenSchema.optional(),
       minMinutes: z.number().int().min(5).max(600).optional(),
+      dayStart: clockSchema.optional(),
+      dayEnd: clockSchema.optional(),
+      weekends: z.boolean().optional(),
+    })
+    .strict(),
+  /** A meeting proposal: a card for the person, nothing written. */
+  z.object({ tool: z.literal("meeting"), threadId: z.string().max(200), proposal: meetingInputSchema }).strict(),
+  z
+    .object({
+      tool: z.literal("findTime"),
+      attendees: z.array(z.string().min(3).max(320)).min(1).max(20),
+      from: whenSchema.optional(),
+      to: whenSchema.optional(),
+      minutes: z.number().int().min(5).max(600).optional(),
       dayStart: clockSchema.optional(),
       dayEnd: clockSchema.optional(),
       weekends: z.boolean().optional(),
@@ -272,6 +430,8 @@ export const toolOutputSchema = z
     people: z.array(personSchema).optional(),
     /** The people tool: the address book has more matches than it listed. */
     more: z.boolean().optional(),
+    /** The meeting tool: the proposal it saved, for the card. */
+    meetingId: z.string().optional(),
   })
   .strict();
 export type ToolOutput = z.infer<typeof toolOutputSchema>;
@@ -317,5 +477,10 @@ export const hostContract = defineRpcContract({
   saveDraft: { input: draftInputSchema, output: draftSchema },
   discardDraft: { input: draftRef, output: z.object({ ok: z.boolean() }).strict() },
   send: { input: draftRef.extend({ revision: z.string().min(1).max(512), lang: langSchema.optional() }).strict(), output: sendResultSchema },
+  meeting: { input: draftRef, output: meetingProposalSchema.nullable(), experimental_retryable: true },
+  meetingDetails: { input: z.object({ eventId: eventRefSchema }).strict(), output: meetingDetailsSchema, experimental_retryable: true },
+  proposeMeeting: { input: z.object({ proposal: meetingInputSchema, source: z.enum(["agent", "person"]), threadId: z.string().max(200).nullable() }).strict(), output: meetingProposalSchema },
+  discardMeeting: { input: draftRef, output: z.object({ ok: z.boolean() }).strict() },
+  confirmMeeting: { input: draftRef.extend({ revision: z.string().min(1).max(512), lang: langSchema.optional() }).strict(), output: meetingResultSchema },
   tool: { input: toolInputSchema, output: toolOutputSchema },
 });

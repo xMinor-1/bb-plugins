@@ -1,6 +1,6 @@
 // Exchange Web Services operations over a Transport.
 import { TransportError, type HttpAuth, type Transport } from "../curl.js";
-import { EwsError, parseCreateItem, parseFindItems, parseGetAttachment, parseGetFolder, parseGetItem, parseCalendarView, parseGetItemId, parseResolveNames, parseSimple } from "./parse.js";
+import { EwsError, parseAvailability, parseCalendarItem, parseCreated, parseUpdateItem, parseCreateItem, parseFindItems, parseGetAttachment, parseGetFolder, parseGetItem, parseCalendarView, parseGetItemId, parseResolveNames, parseSimple } from "./parse.js";
 import * as soap from "./soap.js";
 
 export class AuthError extends Error {
@@ -119,6 +119,38 @@ export class EwsClient {
 
   async calendar(options: { start: string; end: string; max: number }, signal?: AbortSignal) {
     return parseCalendarView(await this.call(soap.calendarView(options), signal));
+  }
+
+  async calendarItem(ref: soap.ItemRef, signal?: AbortSignal) {
+    return parseCalendarItem(await this.call(soap.getCalendarItem(ref), signal));
+  }
+
+  async recurringMaster(occurrence: soap.ItemRef, signal?: AbortSignal) {
+    return parseCalendarItem(await this.call(soap.getRecurringMaster(occurrence), signal));
+  }
+
+  async createMeeting(fields: soap.MeetingFields, signal?: AbortSignal) {
+    return parseCreated(await this.call(soap.createMeeting(fields), signal));
+  }
+
+  async updateMeeting(ref: soap.ItemRef, changes: soap.MeetingChanges, options: { notify: boolean }, signal?: AbortSignal) {
+    return parseUpdateItem(await this.call(soap.updateMeeting(ref, changes, options), signal));
+  }
+
+  async cancelMeeting(ref: soap.ItemRef, note: string | null, signal?: AbortSignal) {
+    parseCreated(await this.call(soap.cancelMeeting(ref, note), signal));
+  }
+
+  async deleteAppointment(ref: soap.ItemRef, signal?: AbortSignal) {
+    parseSimple(await this.call(soap.deleteAppointment(ref), signal), "DeleteItem");
+  }
+
+  async respondToMeeting(ref: soap.ItemRef, response: soap.MeetingResponse, note: string | null, signal?: AbortSignal) {
+    parseCreated(await this.call(soap.respondToMeeting(ref, response, note), signal));
+  }
+
+  async availability(options: { emails: readonly string[]; start: string; end: string }, signal?: AbortSignal) {
+    return parseAvailability(await this.call(soap.getUserAvailability(options), signal), options.emails.length);
   }
 
   async markRead(ref: soap.ItemRef, isRead: boolean, signal?: AbortSignal) {

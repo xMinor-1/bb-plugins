@@ -21,7 +21,7 @@
 // lines): every script reads it from stdin, as ASCII-only source.
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import type { BodyFormat, DraftKind, Lang, MailAddress } from "../../contract.js";
+import type { BodyFormat, DraftKind, Lang, MailAddress, MeetingAction, MeetingResponse, MeetingScope } from "../../contract.js";
 
 export interface SendSummary {
   readonly kind: DraftKind;
@@ -39,13 +39,36 @@ export interface SendSummary {
   readonly quotedChars: number;
 }
 
+/** A meeting change waiting for the window. Times come written out in this machine's zone. */
+export interface MeetingSummary {
+  readonly meeting: MeetingAction;
+  readonly mailbox: string | null;
+  readonly scope: MeetingScope;
+  readonly subject: string;
+  /** The time it will have (create, update) or has (cancel, respond). */
+  readonly when: string;
+  readonly location: string | null;
+  /** update: what it was, for each field that changes. */
+  readonly before?: { readonly subject?: string; readonly when?: string; readonly location?: string | null };
+  /** create, update: the new text of the invitation, or null when it stays. */
+  readonly body: string | null;
+  readonly added: readonly MailAddress[];
+  readonly removed: readonly MailAddress[];
+  /** update: each list of attendees that changes, as it will be — someone moved from required to optional shows here. */
+  readonly lists?: { readonly required?: readonly MailAddress[]; readonly optional?: readonly MailAddress[]; readonly rooms?: readonly MailAddress[] };
+  /** Who gets mail: invitations, updates, the cancellation or the answer. */
+  readonly notify: readonly MailAddress[];
+  readonly response: MeetingResponse | null;
+  readonly note: string | null;
+}
+
 export type ConfirmOutcome =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: "cancelled" | "timeout" | "unavailable" | "busy"; readonly message: string };
 
 export interface SendConfirmer {
   /** `lang` is the panel's language: the window speaks it. */
-  confirm(summary: SendSummary, signal?: AbortSignal, lang?: Lang): Promise<ConfirmOutcome>;
+  confirm(summary: SendSummary | MeetingSummary, signal?: AbortSignal, lang?: Lang): Promise<ConfirmOutcome>;
 }
 
 /** How long the window waits for the person before it counts as Cancel. */
@@ -116,10 +139,113 @@ const WORDS = {
   },
 };
 
-const address = (a: MailAddress) => (a.name && a.name !== a.email ? `${a.name} <${a.email}>` : a.email);
+/** The meeting window's words. */
+const MEETING_WORDS = {
+  en: {
+    title: {
+      create: "Exchange Mail: create this meeting?",
+      update: "Exchange Mail: change this meeting?",
+      cancel: "Exchange Mail: cancel this meeting?",
+      respond: "Exchange Mail: answer this invitation?",
+    } satisfies Record<MeetingAction, string>,
+    confirm: { create: "Create", update: "Change", cancel: "Cancel meeting", respond: "Answer" } satisfies Record<MeetingAction, string>,
+    keep: "Back",
+    head: {
+      create: "A new meeting in your calendar",
+      update: "A change to your meeting",
+      cancel: "Cancelling your meeting",
+      respond: "Your answer to an invitation",
+    } satisfies Record<MeetingAction, string>,
+    from: (mailbox: string) => ` (${mailbox})`,
+    scope: { single: "", occurrence: "Only this occurrence of the series.", series: "Every occurrence of the series." } satisfies Record<MeetingScope, string>,
+    subject: "Subject",
+    noSubject: "(no subject)",
+    when: "When",
+    where: "Where",
+    nowhere: "(no place)",
+    was: (value: string) => `   was: ${value}`,
+    added: "Added",
+    removed: "Taken off (they get a cancellation)",
+    listNow: { required: "Attendees from now", optional: "Optional attendees from now", rooms: "Rooms from now" },
+    nobody: "nobody",
+    notify: {
+      create: "Invitations go to",
+      update: "The update goes to",
+      cancel: "The cancellation goes to",
+      respond: "The answer goes to",
+    } satisfies Record<MeetingAction, string>,
+    nobodyNotified: "Nobody gets mail: no one else is on it.",
+    response: { accept: "Accept", tentative: "Tentative", decline: "Decline" } satisfies Record<MeetingResponse, string>,
+    answer: "Answer",
+    note: "Note",
+    text: (n: number) => `Text of the invitation (${n} characters)`,
+    textKept: "Text of the invitation: stays as it is.",
+    onlyStart: (shown: number, n: number) => `[Only the start is shown here: ${shown} of ${n} characters. The whole text is on the card in bb.]`,
+    empty: "(empty)",
+    more: (n: number) => `, and ${n} more`,
+    warning: {
+      create: "Check the time and the people. Create the meeting and send the invitations?",
+      update: "Check what changes and who is told. Change the meeting?",
+      cancel: "It cannot be undone. Cancel the meeting and tell everyone?",
+      respond: "Send this answer to the organizer?",
+    } satisfies Record<MeetingAction, string>,
+  },
+  ru: {
+    title: {
+      create: "Exchange Mail: создать встречу?",
+      update: "Exchange Mail: изменить встречу?",
+      cancel: "Exchange Mail: отменить встречу?",
+      respond: "Exchange Mail: ответить на приглашение?",
+    } satisfies Record<MeetingAction, string>,
+    confirm: { create: "Создать", update: "Изменить", cancel: "Отменить встречу", respond: "Ответить" } satisfies Record<MeetingAction, string>,
+    keep: "Назад",
+    head: {
+      create: "Новая встреча в вашем календаре",
+      update: "Изменение вашей встречи",
+      cancel: "Отмена вашей встречи",
+      respond: "Ваш ответ на приглашение",
+    } satisfies Record<MeetingAction, string>,
+    from: (mailbox: string) => ` (${mailbox})`,
+    scope: { single: "", occurrence: "Только это повторение серии.", series: "Все повторения серии." } satisfies Record<MeetingScope, string>,
+    subject: "Тема",
+    noSubject: "(без темы)",
+    when: "Когда",
+    where: "Где",
+    nowhere: "(без места)",
+    was: (value: string) => `   было: ${value}`,
+    added: "Добавлены",
+    removed: "Убраны (им придёт отмена)",
+    listNow: { required: "Участники теперь", optional: "Участники по желанию теперь", rooms: "Переговорные теперь" },
+    nobody: "никого",
+    notify: {
+      create: "Приглашения получат",
+      update: "Изменение получат",
+      cancel: "Отмену получат",
+      respond: "Ответ получит",
+    } satisfies Record<MeetingAction, string>,
+    nobodyNotified: "Писем не будет: на встрече больше никого нет.",
+    response: { accept: "Принять", tentative: "Под вопросом", decline: "Отклонить" } satisfies Record<MeetingResponse, string>,
+    answer: "Ответ",
+    note: "Записка",
+    text: (n: number) => `Текст приглашения (символов: ${n})`,
+    textKept: "Текст приглашения: без изменений.",
+    onlyStart: (shown: number, n: number) => `[Здесь только начало: ${shown} из ${n} символов. Весь текст — на карточке в bb.]`,
+    empty: "(пусто)",
+    more: (n: number) => ` и ещё ${n}`,
+    warning: {
+      create: "Проверьте время и участников. Создать встречу и разослать приглашения?",
+      update: "Проверьте, что меняется и кому уйдёт письмо. Изменить встречу?",
+      cancel: "Вернуть её будет нельзя. Отменить встречу и сообщить всем?",
+      respond: "Отправить этот ответ организатору?",
+    } satisfies Record<MeetingAction, string>,
+  },
+};
+
+const address = (a: MailAddress) => (a.name && a.name !== a.email ? (a.email ? `${a.name} <${a.email}>` : a.name) : a.email);
 
 /** The window's text and buttons. Exported for tests: what the person is asked must name everything that goes. */
-export function confirmationText(summary: SendSummary, lang: Lang = "en"): { title: string; message: string; send: string; cancel: string } {
+export function confirmationText(summary: SendSummary | MeetingSummary, lang: Lang = "en"): { title: string; message: string; send: string; cancel: string } {
+  if ("meeting" in summary) return meetingText(summary, lang);
   const w = WORDS[lang];
   const listed = (label: string, list: readonly MailAddress[]) =>
     list.length === 0 ? null : `${label} (${list.length}): ${list.slice(0, MAX_LISTED).map(address).join(", ")}${list.length > MAX_LISTED ? w.more(list.length - MAX_LISTED) : ""}`;
@@ -150,6 +276,48 @@ export function confirmationText(summary: SendSummary, lang: Lang = "en"): { tit
     w.warning,
   ];
   return { title: w.title, message: lines.filter((line): line is string => line !== null).join("\n"), send: w.send, cancel: w.cancel };
+}
+
+/** The meeting window: what the meeting will be, what changes, and everyone who gets mail about it. */
+export function meetingText(summary: MeetingSummary, lang: Lang = "en"): { title: string; message: string; send: string; cancel: string } {
+  const w = MEETING_WORDS[lang];
+  const action = summary.meeting;
+  const people = (list: readonly MailAddress[]) => `${list.slice(0, MAX_LISTED).map(address).join(", ")}${list.length > MAX_LISTED ? w.more(list.length - MAX_LISTED) : ""}`;
+  const preview = (value: string, label: (n: number) => string) => {
+    const text = value.trim();
+    const cut = text.length > TEXT_PREVIEW;
+    const start = cut ? text.slice(0, TEXT_PREVIEW).trimEnd() : text;
+    return [`${label(text.length)}:`, (cut ? `${start}…` : text) || w.empty, cut ? w.onlyStart(start.length, text.length) : null];
+  };
+  const before = summary.before ?? {};
+  const lines: (string | null)[] = [
+    `${w.head[action]}${summary.mailbox ? w.from(summary.mailbox) : ""}.`,
+    w.scope[summary.scope] || null,
+    "",
+    `${w.subject}: ${summary.subject || w.noSubject}`,
+    before.subject !== undefined ? w.was(before.subject || w.noSubject) : null,
+    `${w.when}: ${summary.when}`,
+    before.when !== undefined ? w.was(before.when) : null,
+    `${w.where}: ${summary.location || w.nowhere}`,
+    before.location !== undefined ? w.was(before.location || w.nowhere) : null,
+    "",
+    summary.response ? `${w.answer}: ${w.response[summary.response]}` : null,
+    summary.added.length ? `${w.added} (${summary.added.length}): ${people(summary.added)}` : null,
+    summary.removed.length ? `${w.removed} (${summary.removed.length}): ${people(summary.removed)}` : null,
+    ...(["required", "optional", "rooms"] as const).map((name) => {
+      const now = summary.lists?.[name];
+      return now ? `${w.listNow[name]} (${now.length}): ${now.length ? people(now) : w.nobody}` : null;
+    }),
+    summary.notify.length ? `${w.notify[action]} (${summary.notify.length}): ${people(summary.notify)}` : w.nobodyNotified,
+  ];
+  if (action === "create" || action === "update") {
+    lines.push("");
+    if (summary.body === null) lines.push(w.textKept);
+    else lines.push(...preview(summary.body, w.text));
+  }
+  if (summary.note) lines.push("", ...preview(summary.note, (n) => `${w.note} (${n})`));
+  lines.push("", w.warning[action]);
+  return { title: w.title[action], message: lines.filter((line): line is string => line !== null).join("\n"), send: w.confirm[action], cancel: w.keep };
 }
 
 type WindowText = ReturnType<typeof confirmationText>;
@@ -365,7 +533,7 @@ export function oneAtATime(inner: SendConfirmer): SendConfirmer {
   let open = false;
   return {
     async confirm(summary, signal, lang) {
-      if (open) return { ok: false, reason: "busy", message: "Another send is waiting for confirmation in a system window. Answer it first." };
+      if (open) return { ok: false, reason: "busy", message: "Another confirmation is waiting in a system window. Answer it first." };
       open = true;
       try {
         return await inner.confirm(summary, signal, lang);
