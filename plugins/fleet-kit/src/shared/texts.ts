@@ -347,3 +347,26 @@ export function render(lang: Lang, text: { code?: string | undefined; params?: P
     return text.message;
   }
 }
+
+/**
+ * Why a First run step did not save, in words for the person at the machine.
+ * `raw` is the server's English error (the RPC refusal's message); known ones
+ * get their own sentence, anything else is shown after a short lead-in.
+ */
+export function stepErrorText(raw: string, lang: Lang): string {
+  const ru = lang === "ru";
+  const known: Array<[RegExp, string, string]> = [
+    [/^The login is empty or has spaces, a colon/, "Check the login: it cannot be empty or have spaces or a colon.", "Проверьте логин: он не может быть пустым, в нём не должно быть пробелов и двоеточия."],
+    [/^The password is empty or has control characters/, "Check the password: it cannot be empty or have line breaks.", "Проверьте пароль: он не может быть пустым, в нём не должно быть переводов строки."],
+    [/^The login or password is too long/, "The login or password is too long. Check what you typed.", "Логин или пароль слишком длинный. Проверьте, что ввели."],
+    [/^the secret is empty/, "The field is empty. Paste the value and save again.", "Поле пустое. Вставьте значение и сохраните ещё раз."],
+    [/^the secret is longer than/, "The value is too long. Check that you pasted only the key.", "Значение слишком длинное. Проверьте, что вставили только ключ."],
+    [/^the secret contains control characters/, "The value has a line break or a hidden character. Paste it again on one line.", "В значении перевод строки или невидимый символ. Вставьте его заново одной строкой."],
+    [/^macOS Keychain gives this value back changed/, "The macOS Keychain cannot keep this exact value, so it was not saved. If this is a password, change it and try again; or ask support.", "Связка ключей macOS не может сохранить именно это значение, поэтому оно не сохранено. Если это пароль, смените его и попробуйте снова или напишите в поддержку."],
+    [/^macOS Keychain (write failed|did not keep)/, "The macOS Keychain did not save it. Check that the Mac is unlocked, allow access if macOS asks, and save again.", "Связка ключей macOS не сохранила значение. Проверьте, что Mac разблокирован, разрешите доступ, если macOS спросит, и сохраните ещё раз."],
+    [/^macOS Keychain read failed/, "Fleet Kit could not read the macOS Keychain. Allow access if macOS asks, and save again.", "Пульт не смог прочитать Связку ключей macOS. Разрешите доступ, если macOS спросит, и сохраните ещё раз."],
+    [/^Windows Credential Manager/, "Windows Credential Manager did not save it; a company policy may block it. Ask support.", "Диспетчер учётных данных Windows не сохранил значение: его может запрещать политика компании. Напишите в поддержку."],
+  ];
+  for (const [pattern, en, rus] of known) if (pattern.test(raw)) return ru ? rus : en;
+  return ru ? `Не получилось: ${raw}` : `That did not work: ${raw}`;
+}

@@ -11,9 +11,9 @@ import type { BranchSetup, InstallProgress, Setup, SetupMark, SetupStep } from "
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
-import { render } from "../shared/texts.js";
+import { render, stepErrorText } from "../shared/texts.js";
 import { defineMessages, LanguageSwitch, pluralRu, useLang, useMessages } from "@/lib/i18n";
-import { AccountBody } from "./account-step";
+import { AccountBody, StepError } from "./account-step";
 import { errorText, Frame, SecretInput, STATUS_CHANNEL, useSavedIn } from "./parts";
 
 /** First run is the Fleet Kit panel's `setup` view: /plugins/fleet-kit/status/setup. */
@@ -269,9 +269,11 @@ function explanation(t: Texts, step: SetupStep): string | null {
   return null;
 }
 
-function StepCard({ step, secretStore, onMark, onSecret, onAccount, onForget }: {
+function StepCard({ step, secretStore, error, onMark, onSecret, onAccount, onForget }: {
   step: SetupStep;
   secretStore: string;
+  /** Why the last action on this step failed, as the server said it; shown inside the card. */
+  error: string | null;
   onMark: (mark: SetupMark | null) => void;
   onSecret: (value: string) => Promise<void>;
   onAccount: (login: string, password: string) => Promise<void>;
@@ -312,9 +314,10 @@ function StepCard({ step, secretStore, onMark, onSecret, onAccount, onForget }: 
           <SecretInput className="mt-2 pl-6" label={step.title} onSave={onSecret} onCancel={step.state === "done" ? () => setReplacing(false) : undefined} />
         )
       ) : null}
+      {step.kind === "secret" ? <StepError error={error} /> : null}
 
       {step.kind === "account" && step.account ? (
-        <AccountBody account={step.account} title={step.title} secretStore={secretStore} onSave={onAccount} onForget={onForget} onOpen={openBbPage} />
+        <AccountBody account={step.account} title={step.title} secretStore={secretStore} error={error} onSave={onAccount} onForget={onForget} onOpen={openBbPage} />
       ) : null}
 
       {step.kind === "plugin" && actionable ? (
@@ -342,6 +345,7 @@ function StepCard({ step, secretStore, onMark, onSecret, onAccount, onForget }: 
           ) : null}
         </div>
       ) : null}
+      {step.kind === "plugin" ? <StepError error={error} /> : null}
     </li>
   );
 }
@@ -592,6 +596,22 @@ export function SetupPage() {
   const t = useMessages(messages);
   const navigate = useBbNavigate();
   const fail = (cause: unknown) => setError(errorText(cause));
+  // A step's own errors stay in its card until that step's next try; the line
+  // under the title is for loading and sync, which a poll clears.
+  const [stepErrors, setStepErrors] = useState<Record<string, string>>({});
+  const stepTry = <T,>(id: string, call: () => Promise<T>): Promise<T> => {
+    setStepErrors(({ [id]: _, ...rest }) => rest);
+    return call().then(
+      (value) => {
+        refetch();
+        return value;
+      },
+      (cause: unknown) => {
+        setStepErrors((errors) => ({ ...errors, [id]: errorText(cause) }));
+        throw cause;
+      },
+    );
+  };
   const counted = (setup?.steps ?? []).filter((step) => step.state !== "later" && shownState(step) !== "skipped");
   const done = counted.filter((step) => step.state === "done").length;
   return (
@@ -662,27 +682,12 @@ export function SetupPage() {
                 key={step.id}
                 step={step}
                 secretStore={setup.secretStore}
-                onMark={(mark) => void rpc.call("setup_mark", { id: step.id, mark }).then(() => refetch(), fail)}
-                onAccount={(login, password) =>
-                  rpc.call("account_set", { id: step.id, login, password, lang: pageLang }).then(
-                    () => refetch(),
-                    (cause) => {
-                      fail(cause);
-                      throw cause;
-                    },
-                  )
-                }
-                onForget={() => void rpc.call("account_clear", { id: step.id }).then(() => refetch(), fail)}
-                onSecret={(value) =>
-                  rpc.call("secret_set", { name: step.target, value }).then(
-                    () => refetch(),
-                    (cause) => {
-                      // Shown here; the rejection keeps the typed key in the field.
-                      fail(cause);
-                      throw cause;
-                    },
-                  )
-                }
+                error={stepErrors[step.id] === undefined ? null : stepErrorText(stepErrors[step.id]!, pageLang)}
+                onMark={(mark) => void stepTry(step.id, () => rpc.call("setup_mark", { id: step.id, mark })).catch(() => undefined)}
+                // The rejection reaches the form, which keeps what was typed to try again.
+                onAccount={(login, password) => stepTry(step.id, () => rpc.call("account_set", { id: step.id, login, password, lang: pageLang })).then(() => undefined)}
+                onForget={() => void stepTry(step.id, () => rpc.call("account_clear", { id: step.id })).catch(() => undefined)}
+                onSecret={(value) => stepTry(step.id, () => rpc.call("secret_set", { name: step.target, value })).then(() => undefined)}
               />
             ))}
           </ol>

@@ -147,16 +147,34 @@ function fileStore(directory: string): SecretStore {
 
 // ------------------------------------------------------------ macOS Keychain
 
-/** `security -i` tokenizes its input; quote and refuse what it cannot carry. */
-function keychainQuote(value: string): string {
-  if (/["\\\s]/.test(value)) {
-    throw new Error("macOS Keychain values written by this plugin cannot contain quotes, backslashes or spaces");
-  }
-  return `"${value}"`;
+/** The value as `add-generic-password -X` takes it: the hex of its UTF-8 bytes, nothing for `security -i` to split or unquote. */
+export function keychainHex(value: string): string {
+  return Buffer.from(value, "utf8").toString("hex");
 }
 
-function keychainStore(service: string): SecretStore {
-  const security = "/usr/bin/security";
+/**
+ * The password as `find-generic-password -w` prints it, back to the stored text.
+ * `security` prints a plain ASCII value as is and any other value as the hex of
+ * its bytes, so hex that decodes to valid UTF-8 with a non-ASCII character is
+ * read as such. An ASCII value that happens to be exactly that kind of hex
+ * cannot be told apart: set() reads every value back and refuses it.
+ */
+export function keychainValue(printed: string): string {
+  const text = printed.replace(/\r?\n$/, "");
+  if (text.length === 0 || text.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(text)) return text;
+  const bytes = Buffer.from(text, "hex");
+  if (!bytes.some((byte) => byte >= 0x80)) return text;
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return /[\x00-\x1f\x7f]/.test(decoded) ? text : decoded;
+  } catch {
+    return text;
+  }
+}
+
+export const KEYCHAIN_CHANGED = "macOS Keychain gives this value back changed (it reads as hex-encoded text), so it was not kept; use another value";
+
+function keychainStore(service: string, security = "/usr/bin/security"): SecretStore {
   return {
     kind: "keychain",
     label: "macOS Keychain",
@@ -171,7 +189,7 @@ function keychainStore(service: string): SecretStore {
       const result = await run(security, ["find-generic-password", "-s", service, "-a", name, "-w"]);
       if (result.code === 44) return null;
       if (result.code !== 0) throw new Error(`macOS Keychain read failed (security exit ${result.code})`);
-      const value = result.stdout.replace(/\r?\n$/, "");
+      const value = keychainValue(result.stdout);
       return value === "" ? null : value;
     },
     async set(name, value) {
@@ -182,11 +200,15 @@ function keychainStore(service: string): SecretStore {
       // the person; the default list — /usr/bin/security, which created the
       // item — is the narrowest that works. Any program running as this user
       // can therefore read the password through `security`.
-      const secret = keychainQuote(checkSecretValue(value));
-      const command = `add-generic-password -U -s ${service} -a ${name} -l "${service} ${name}" -w ${secret}\n`;
+      const secret = checkSecretValue(value);
+      const command = `add-generic-password -U -s ${service} -a ${name} -l "${service} ${name}" -X ${keychainHex(secret)}\n`;
       const result = await run(security, ["-i"], { input: command });
       if (result.code !== 0) throw new Error(`macOS Keychain write failed (security exit ${result.code})`);
-      if ((await this.get(name)) !== checkSecretValue(value)) throw new Error("macOS Keychain did not keep the secret");
+      // Read it back: a value `security` would print differently is removed, not kept half-right.
+      const stored = await this.get(name);
+      if (stored === secret) return;
+      if (stored !== null) await this.delete(name);
+      throw new Error(stored === null ? "macOS Keychain did not keep the secret" : KEYCHAIN_CHANGED);
     },
     async delete(name) {
       checkName(name);
@@ -358,4 +380,9 @@ export function openSecretStore(service: string, preference: SecretStorePreferen
 /** For tests: a file store rooted anywhere. */
 export function openFileSecretStore(directory: string): SecretStore {
   return fileStore(directory);
+}
+
+/** For tests: the Keychain store driven by another `security` program. */
+export function openKeychainSecretStore(service: string, security: string): SecretStore {
+  return keychainStore(checkService(service), security);
 }

@@ -1,7 +1,7 @@
 // The body of a shared sign-in step: the login and password form (typed once,
 // kept in the credential store), what each plugin made of them, and a button
 // for each plugin that signs in in its own window.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { experimental_useRpcMutation } from "@get-bb/plugin-sdk/app";
 import { z } from "zod";
@@ -71,9 +71,26 @@ const ICON: Record<string, { name: string; className: string }> = {
   checking: { name: "Loading", className: "animate-spin text-muted-foreground" },
 };
 
-function AccountForm({ account, label, onSave, onCancel }: {
+/** Why a step's last action failed, in the person's words, inside the step's card. */
+export function StepError({ error, className }: { error: string | null; className?: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  // It appears after the click and makes the card longer: keep it in view.
+  useEffect(() => {
+    if (error) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [error]);
+  if (!error) return null;
+  return (
+    <p ref={ref} role="alert" data-step-error className={cn("mt-2 flex items-start gap-1.5 pl-6 text-xs text-destructive", className)}>
+      <Icon name="AlertTriangle" className="mt-px size-3.5 shrink-0" />
+      <span className="min-w-0 break-words">{error}</span>
+    </p>
+  );
+}
+
+function AccountForm({ account, label, error, onSave, onCancel }: {
   account: AccountStep;
   label: string;
+  error: string | null;
   onSave: (login: string, password: string) => Promise<void>;
   onCancel?: () => void;
 }) {
@@ -89,7 +106,7 @@ function AccountForm({ account, label, onSave, onCancel }: {
       await onSave(login, password);
       setPassword("");
     } catch {
-      // The page shows why; what was typed stays to try again.
+      // The step shows why; what was typed stays to try again.
     } finally {
       setPending(false);
     }
@@ -116,6 +133,7 @@ function AccountForm({ account, label, onSave, onCancel }: {
           </Button>
         ) : null}
       </div>
+      <StepError error={error} className="mt-0 pl-0" />
       <p className="text-xs text-muted-foreground">{t.once}</p>
     </form>
   );
@@ -176,10 +194,11 @@ function WindowLine({ line, hostId, onOpen }: { line: AccountStep["windows"][num
   );
 }
 
-export function AccountBody({ account, title, secretStore, onSave, onForget, onOpen }: {
+export function AccountBody({ account, title, secretStore, error, onSave, onForget, onOpen }: {
   account: AccountStep;
   title: string;
   secretStore: string;
+  error: string | null;
   onSave: (login: string, password: string) => Promise<void>;
   onForget: () => void;
   onOpen: (path: string) => void;
@@ -194,6 +213,7 @@ export function AccountBody({ account, title, secretStore, onSave, onForget, onO
         <AccountForm
           account={account}
           label={title}
+          error={error}
           onSave={(login, password) => onSave(login, password).then(() => setReplacing(false))}
           onCancel={account.saved ? () => setReplacing(false) : undefined}
         />
@@ -208,6 +228,7 @@ export function AccountBody({ account, title, secretStore, onSave, onForget, onO
           </Button>
         </div>
       ) : null}
+      {formShown ? null : <StepError error={error} />}
       <ul className="mt-2 flex flex-col gap-0.5 pl-6">
         {account.plugins.map((line) => {
           const icon = ICON[line.state]!;
