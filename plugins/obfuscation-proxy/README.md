@@ -13,17 +13,24 @@ Interface in English and Russian.
 
 ## What people see
 
-- A segment in the context row above the message box of every thread with an
-  external model: **Masking on** (green) with the thread's request and masked
-  value counts, or **Masking off** (red). A switch at the row's end turns it
-  on or off for that thread; the next request follows it, no restart needed.
+- A short **Masking** segment with a light in the context row above the
+  message box of every thread. The light is green when requests are masked,
+  amber when masking is off for the thread, red while masking is on and the
+  proxy is not running (messages wait), and grey when masking does not apply.
+  Hovering it for half a second shows what the state means, with the thread's
+  request and masked value counts. For Claude Code a switch at the row's end
+  turns masking on or off for that thread; the next request follows it, no
+  restart needed.
 - Click the segment to open the thread's feed: time, model, whether the
   request went masked, unmasked or was not sent, what was masked by kind
   (secrets, keys in code, personal data, internal hosts, terms…), status and
   duration. Token counting requests are tallied, not listed.
-- Threads on in-network models (see settings) show nothing.
+- Threads on in-network models (see settings) show a grey light: "The model
+  works inside your company's network, masking is not needed". Agents the
+  plugin does not route yet (Codex and others) show a grey light: "Masking is
+  not available for this agent yet". Neither has a switch or a feed.
 - While the proxy is downloading, starting, missing or did not download, the
-  segment says so, and a message to Claude Code waits in the thread's queue
+  segment's tooltip says so, and a message to Claude Code waits in the thread's queue
   with the reason instead of failing: "The masking proxy is still
   downloading. The message goes out by itself once the proxy runs." It goes
   out once the proxy runs, or at once if masking is turned off for the thread.
@@ -54,7 +61,8 @@ Interface in English and Russian.
 | Mask new threads by default | Masking starts on in every thread with an external model (default on). |
 | Proxy binary path | Absolute path to the binary on the bb server machine. |
 | Proxy download URL | Used when the path is empty. `{os}`, `{arch}`, `{ext}` are filled in; a `.sha256` file next to the binary is required and checked. The verified copy is reused offline. |
-| In-network models | Comma-separated model id prefixes that never leave your network. Every other model counts as external. |
+| In-network models | Comma-separated model id prefixes that never leave your network. Their threads show the segment inactive, with a grey light. Every other model counts as external. |
+| Hide the masking bar | Hides the segment in every thread (default off). Masking keeps working. |
 | Extra proxy configuration | YAML appended to the generated config (masking rules, egress proxy). `server`, `upstream` and `log` are set by the plugin. |
 
 The plugin answers Fleet Kit's setup check (`setupStatus` RPC): done while the

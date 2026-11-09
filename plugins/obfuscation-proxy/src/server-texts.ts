@@ -11,23 +11,23 @@ export function proxyState(status: ProxyStatus, lang: Lang): string {
   const detail = status.message === null ? "" : ` (${status.message})`;
   switch (status.state) {
     case "running":
-      return ru ? "Прокси обфускации работает" : "The masking proxy is running";
+      return ru ? "Прокси маскировки работает" : "The masking proxy is running";
     case "installing":
-      return ru ? "Прокси обфускации ещё скачивается" : "The masking proxy is still downloading";
+      return ru ? "Прокси маскировки ещё скачивается" : "The masking proxy is still downloading";
     case "starting":
-      return ru ? "Прокси обфускации запускается" : "The masking proxy is starting";
+      return ru ? "Прокси маскировки запускается" : "The masking proxy is starting";
     case "not-configured":
       if (status.problem === "no-file")
-        return ru ? `Прокси обфускации не установлен: нет файла${detail}` : `The masking proxy is not installed: no file${detail}`;
+        return ru ? `Прокси маскировки не установлен: нет файла${detail}` : `The masking proxy is not installed: no file${detail}`;
       return ru
-        ? "Прокси обфускации не установлен: в настройках плагина нет адреса загрузки"
+        ? "Прокси маскировки не установлен: в настройках плагина нет адреса загрузки"
         : "The masking proxy is not installed: the plugin settings have no download URL";
     case "failed":
       if (status.problem === "download")
-        return ru ? `Прокси обфускации не скачался${detail}` : `The masking proxy did not download${detail}`;
-      return ru ? `Прокси обфускации не запустился${detail}` : `The masking proxy did not start${detail}`;
+        return ru ? `Прокси маскировки не скачался${detail}` : `The masking proxy did not download${detail}`;
+      return ru ? `Прокси маскировки не запустился${detail}` : `The masking proxy did not start${detail}`;
     case "stopped":
-      return ru ? "Прокси обфускации остановлен" : "The masking proxy is stopped";
+      return ru ? "Прокси маскировки остановлен" : "The masking proxy is stopped";
   }
 }
 
@@ -40,7 +40,7 @@ function retries(status: ProxyStatus): boolean {
 export function waitReason(status: ProxyStatus, lang: Lang): string {
   const ru = lang === "ru";
   const off = ru
-    ? "Чтобы отправить без маскировки, выключите обфускацию над полем ввода."
+    ? "Чтобы отправить без маскировки, выключите маскировку над полем ввода."
     : "To send it unmasked, turn masking off above the message box.";
   const next = retries(status)
     ? ru
@@ -59,8 +59,8 @@ export function waitReason(status: ProxyStatus, lang: Lang): string {
 /** The error an agent shows when a request with masking on cannot go through the proxy. */
 export function refusedMessage(status: ProxyStatus, lang: Lang): string {
   return lang === "ru"
-    ? `Обфускация в этом треде включена. ${proxyState(status, lang)}. Ничего не отправлено. ` +
-        "Подождите, пока он запустится, или выключите обфускацию над полем ввода."
+    ? `Маскировка в этом треде включена. ${proxyState(status, lang)}. Ничего не отправлено. ` +
+        "Подождите, пока он запустится, или выключите маскировку над полем ввода."
     : `Masking is on for this thread. ${proxyState(status, lang)}. Nothing was sent. ` +
         "Wait for it to start, or turn masking off above the message box."
 }

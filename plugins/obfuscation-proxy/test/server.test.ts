@@ -66,19 +66,19 @@ describe("without a proxy binary", () => {
 
     const decision = await dispatch("claude-code");
     expect(decision).toMatchObject({ action: "wait" });
-    expect((decision as { reason: string }).reason).toMatch(/^Прокси обфускации не установлен: в настройках плагина нет адреса/u);
-    expect((decision as { reason: string }).reason).toContain("выключите обфускацию над полем ввода");
+    expect((decision as { reason: string }).reason).toMatch(/^Прокси маскировки не установлен: в настройках плагина нет адреса/u);
+    expect((decision as { reason: string }).reason).toContain("выключите маскировку над полем ввода");
     // Agents on in-network models are not this plugin's business.
     expect(await dispatch("acp-opencode")).toEqual({ action: "proceed" });
 
     expect(await harness.callRpc("setupStatus", { lang: "ru" })).toMatchObject({
       state: "problem",
-      summary: expect.stringMatching(/^Прокси обфускации не установлен/u),
+      summary: expect.stringMatching(/^Прокси маскировки не установлен/u),
     });
     // Without a language in the call, the one people last used.
     expect(await harness.callRpc("setupStatus", null)).toMatchObject({
       state: "problem",
-      summary: "Прокси обфускации не установлен: в настройках плагина нет адреса загрузки",
+      summary: "Прокси маскировки не установлен: в настройках плагина нет адреса загрузки",
     });
 
     // Turning masking off sends the queued message on.
@@ -105,8 +105,8 @@ describe("without a proxy binary", () => {
     expect(response.status).toBe(503);
     const body = (await response.json()) as { error: { message: string } };
     expect(body.error.message).toBe(
-      "Обфускация в этом треде включена. Прокси обфускации не установлен: в настройках плагина нет адреса загрузки. " +
-        "Ничего не отправлено. Подождите, пока он запустится, или выключите обфускацию над полем ввода.",
+      "Маскировка в этом треде включена. Прокси маскировки не установлен: в настройках плагина нет адреса загрузки. " +
+        "Ничего не отправлено. Подождите, пока он запустится, или выключите маскировку над полем ввода.",
     );
   });
 });
@@ -128,10 +128,10 @@ describe("when the release host refuses the download", () => {
     expect((await status()).proxy).toMatchObject({ problem: "download", message: expect.stringMatching(/^HTTP 401 /u) });
     const decision = await dispatch("claude-code");
     expect(decision).toMatchObject({ action: "wait" });
-    expect((decision as { reason: string }).reason).toMatch(/^Прокси обфускации не скачался \(HTTP 401 /u);
+    expect((decision as { reason: string }).reason).toMatch(/^Прокси маскировки не скачался \(HTTP 401 /u);
     expect(await harness.callRpc("setupStatus", { lang: "ru" })).toMatchObject({
       state: "problem",
-      summary: expect.stringMatching(/^Прокси обфускации не скачался \(HTTP 401 /u),
+      summary: expect.stringMatching(/^Прокси маскировки не скачался \(HTTP 401 /u),
     });
   });
 });
@@ -143,7 +143,7 @@ describe("with a proxy that takes a moment to start", () => {
     await until(async () => ["installing", "starting"].includes((await status()).proxy.state));
     const waiting = await dispatch("claude-code");
     expect(waiting).toMatchObject({ action: "wait" });
-    expect((waiting as { reason: string }).reason).toMatch(/^Прокси обфускации (запускается|ещё скачивается)\. Сообщение уйдёт само/u);
+    expect((waiting as { reason: string }).reason).toMatch(/^Прокси маскировки (запускается|ещё скачивается)\. Сообщение уйдёт само/u);
     expect(await harness.callRpc("setupStatus", { lang: "en" })).toMatchObject({ state: "todo" });
 
     const before = harness.inspection.recheckCount;
@@ -155,7 +155,7 @@ describe("with a proxy that takes a moment to start", () => {
     expect(await dispatch("claude-code")).toEqual({ action: "proceed" });
     expect(await harness.callRpc("setupStatus", { lang: "ru" })).toEqual({
       state: "done",
-      summary: "Прокси обфускации работает",
+      summary: "Прокси маскировки работает",
     });
   });
 

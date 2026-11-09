@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MaskMatcher, ThreadFeeds } from "../src/feed";
 import { parseProxyLogLine } from "../src/log-parser";
 import { ownedKeyInExtra, renderProxyConfig } from "../src/proxy-config";
-import { isExternalModel, parsePrefixes, sumMasked, type FeedEntry } from "../src/shared";
+import { parsePrefixes, segmentLed, segmentMode, sumMasked, type FeedEntry, type ThreadStatus } from "../src/shared";
 import { memoryStorage } from "./helpers";
 
 describe("parseProxyLogLine", () => {
@@ -64,16 +64,42 @@ describe("renderProxyConfig", () => {
   });
 });
 
-describe("isExternalModel", () => {
+describe("segmentMode", () => {
   const corporate = parsePrefixes("corp-gateway/, local-");
-  it("treats routed agents as external unless their model is in-network", () => {
-    expect(isExternalModel("claude-code", "claude-sonnet-5-5", [])).toBe(true);
-    expect(isExternalModel("claude-code", "corp-gateway/large", corporate)).toBe(false);
+  it("routes external models of agents the plugin serves", () => {
+    expect(segmentMode("claude-code", "claude-sonnet-5-5", [])).toBe("routed");
+    expect(segmentMode("claude-code", null, corporate)).toBe("routed");
   });
-  it("counts other agents only once in-network models are declared", () => {
-    expect(isExternalModel("acp-opencode", "anthropic/claude", [])).toBe(false);
-    expect(isExternalModel("acp-opencode", "anthropic/claude", corporate)).toBe(true);
-    expect(isExternalModel("acp-opencode", "corp-gateway/code", corporate)).toBe(false);
+  it("marks in-network models for any agent", () => {
+    expect(segmentMode("claude-code", "corp-gateway/large", corporate)).toBe("in-network");
+    expect(segmentMode("acp-opencode", "local-coder", corporate)).toBe("in-network");
+  });
+  it("marks agents the plugin does not route as unavailable, with or without the list", () => {
+    expect(segmentMode("codex", "gpt-5", [])).toBe("unavailable");
+    expect(segmentMode("acp-opencode", "anthropic/claude", corporate)).toBe("unavailable");
+    expect(segmentMode("codex", null, corporate)).toBe("unavailable");
+  });
+});
+
+describe("segmentLed", () => {
+  const status = (masking: boolean, state: ThreadStatus["proxy"]["state"]): ThreadStatus => ({
+    threadId: "t",
+    masking,
+    explicit: false,
+    proxy: { state, message: null, problem: null, since: 0 },
+    totals: { requests: 0, tokenCounts: 0, masked: 0, direct: 0, errors: 0, lastAt: null },
+  });
+  it("is grey for in-network models and agents not routed, whatever the status", () => {
+    expect(segmentLed("in-network", status(true, "running"))).toBe("idle");
+    expect(segmentLed("unavailable", null)).toBe("idle");
+  });
+  it("follows the switch and the proxy for routed threads", () => {
+    expect(segmentLed("routed", null)).toBe("loading");
+    expect(segmentLed("routed", status(true, "running"))).toBe("on");
+    expect(segmentLed("routed", status(false, "running"))).toBe("off");
+    expect(segmentLed("routed", status(false, "failed"))).toBe("off");
+    expect(segmentLed("routed", status(true, "starting"))).toBe("problem");
+    expect(segmentLed("routed", status(true, "not-configured"))).toBe("problem");
   });
 });
 

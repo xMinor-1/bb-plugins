@@ -1,9 +1,12 @@
 // Obfuscation Proxy — the masking state of a thread, above its message box.
 //
-// The segment shows plainly whether masking is on for the thread's external
-// model, with a switch at the row's end. Expanded, it lists the thread's
-// model requests: when, which model, how they left and what was masked.
+// The segment shows in every thread. For an external model the plugin routes,
+// it says whether masking is on, with a switch at the row's end; expanded, it
+// lists the thread's model requests: when, which model, how they left and what
+// was masked. For an in-network model or an agent the plugin does not route yet,
+// it stays muted with the reason and a disabled switch.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   definePluginApp,
   useComposers,
@@ -15,15 +18,18 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { RpcContract } from "./server";
 import { intlLocale, useLang, useMessages } from "@/lib/i18n";
+import { usePortalScopeProps } from "@/lib/portal-scope";
 import { cn } from "@/lib/utils";
 import { messages } from "./src/messages";
 import {
-  isExternalModel,
   parsePrefixes,
+  segmentLed,
+  segmentMode,
   PROXY_CHANGED,
-  ROUTED_PROVIDERS,
   THREAD_CHANGED,
   type FeedEntry,
+  type Led,
+  type SegmentMode,
   type ThreadStatus,
 } from "./src/shared";
 
@@ -38,8 +44,12 @@ function useThreadSelection(threadId: string): { providerId: string; model: stri
   return { providerId, model: composer?.selection?.model ?? null };
 }
 
-function useCorporatePrefixes(): string[] {
-  return parsePrefixes(useSettings().values?.corporateModels);
+/** What the segment shows for this thread's model; null while the composer has no selection. */
+function useMode(threadId: string): SegmentMode | null {
+  const selection = useThreadSelection(threadId);
+  const corporate = parsePrefixes(useSettings().values?.corporateModels);
+  if (selection === null) return null;
+  return segmentMode(selection.providerId, selection.model, corporate);
 }
 
 /** Calls `load` on mount, on the thread's realtime signals and keeps only the latest answer. */
@@ -66,11 +76,11 @@ function useThreadQuery<T>(threadId: string, load: () => Promise<T>, enabled = t
   return { data, refetch };
 }
 
-function useThreadStatus(threadId: string) {
+function useThreadStatus(threadId: string, enabled: boolean) {
   const rpc = useRpc<RpcContract>();
   const lang = useLang();
   const load = useCallback(() => rpc.call("thread_status", { threadId, lang }), [rpc, threadId, lang]);
-  return useThreadQuery<ThreadStatus>(threadId, load);
+  return useThreadQuery<ThreadStatus>(threadId, load, enabled);
 }
 
 function useFeed(threadId: string, enabled: boolean) {
@@ -86,59 +96,173 @@ function useFeed(threadId: string, enabled: boolean) {
 // ---------- Segment ----------
 
 function useVisible({ threadId }: ExperimentalThreadContextSegmentInput): boolean {
-  const selection = useThreadSelection(threadId);
-  const corporate = useCorporatePrefixes();
-  if (selection === null) return false;
-  return isExternalModel(selection.providerId, selection.model, corporate);
+  const hidden = useSettings().values?.hideSegment === true;
+  const mode = useMode(threadId);
+  return !hidden && mode !== null;
 }
 
 function useRouted(threadId: string): boolean {
-  const selection = useThreadSelection(threadId);
-  return selection !== null && ROUTED_PROVIDERS.includes(selection.providerId);
+  return useMode(threadId) === "routed";
 }
 
-type Tone = "ok" | "warn" | "danger" | "muted";
 
-const DOT: Record<Tone, string> = {
-  ok: "bg-emerald-500",
-  warn: "bg-amber-500",
-  danger: "bg-red-500",
-  muted: "bg-muted-foreground/50",
+/** The LED colors: a lit core with a soft halo, the same in light and dark themes. */
+const LED_STYLE: Record<Led, React.CSSProperties> = {
+  on: {
+    background: "radial-gradient(circle at 35% 30%, #a7f3d0 0%, #34d399 35%, #059669 100%)",
+    boxShadow: "0 0 0 1px rgb(5 150 105 / 0.35), 0 0 6px 1px rgb(16 185 129 / 0.55)",
+  },
+  off: {
+    background: "radial-gradient(circle at 35% 30%, #fde68a 0%, #f59e0b 45%, #b45309 100%)",
+    boxShadow: "0 0 0 1px rgb(180 83 9 / 0.35), 0 0 4px rgb(245 158 11 / 0.35)",
+  },
+  problem: {
+    background: "radial-gradient(circle at 35% 30%, #fecaca 0%, #ef4444 45%, #b91c1c 100%)",
+    boxShadow: "0 0 0 1px rgb(185 28 28 / 0.35), 0 0 6px 1px rgb(239 68 68 / 0.5)",
+  },
+  idle: {
+    background: "radial-gradient(circle at 35% 30%, rgb(255 255 255 / 0.35) 0%, transparent 60%), rgb(148 163 184 / 0.55)",
+    boxShadow: "inset 0 0 0 1px rgb(100 116 139 / 0.35)",
+  },
+  loading: {
+    background: "rgb(148 163 184 / 0.35)",
+    boxShadow: "inset 0 0 0 1px rgb(100 116 139 / 0.25)",
+  },
 };
 
-function describe(status: ThreadStatus | null, routed: boolean, t: (typeof messages)["en"]) {
-  if (!routed) return { tone: "muted" as Tone, label: t.unsupported, detail: null };
-  if (status === null) return { tone: "muted" as Tone, label: t.title, detail: null };
-  if (!status.masking) return { tone: "danger" as Tone, label: t.off, detail: null };
-  const { proxy, totals } = status;
-  if (proxy.state === "installing") return { tone: "warn" as Tone, label: t.on, detail: t.installing };
-  if (proxy.state === "starting") return { tone: "warn" as Tone, label: t.on, detail: t.starting };
-  if (proxy.state === "not-configured") return { tone: "danger" as Tone, label: t.on, detail: t.notConfigured };
-  if (proxy.state === "failed" && proxy.problem === "download")
-    return { tone: "danger" as Tone, label: t.on, detail: t.downloadFailed };
-  if (proxy.state !== "running") return { tone: "danger" as Tone, label: t.on, detail: t.down };
-  const detail = totals.requests === 0 ? t.noRequests : t.counts(totals.requests, totals.masked);
-  return { tone: "ok" as Tone, label: t.on, detail };
+function LedDot({ led }: { led: Led }) {
+  return (
+    <span
+      aria-hidden
+      data-led={led}
+      className={cn("inline-block size-2 shrink-0 rounded-full", led === "loading" && "animate-pulse")}
+      style={LED_STYLE[led]}
+    />
+  );
+}
+
+/** What the current state means, for the tooltip. */
+function tipLines(mode: SegmentMode, status: ThreadStatus | null, t: (typeof messages)["en"]): string[] {
+  if (mode === "in-network") return [t.tipInNetwork];
+  if (mode === "unavailable") return [t.tipUnavailable];
+  if (status === null) return [];
+  if (!status.masking) return [t.tipOff];
+  if (status.proxy.state !== "running") return [proxyLine(status, t)];
+  const { totals } = status;
+  return [t.tipOn, totals.requests === 0 ? t.noRequests : t.counts(totals.requests, totals.masked)];
+}
+
+const TIP_DELAY_MS = 500;
+
+/** A tooltip that opens after a short hover or on keyboard focus, portaled above the anchor. */
+function useDelayedTip() {
+  const anchor = useRef<HTMLElement | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [box, setBox] = useState<DOMRect | null>(null);
+  const clear = () => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  const show = (delay: number) => {
+    clear();
+    timer.current = setTimeout(() => {
+      if (anchor.current !== null) setBox(anchor.current.getBoundingClientRect());
+    }, delay);
+  };
+  const hide = () => {
+    clear();
+    setBox(null);
+  };
+  useEffect(() => clear, []);
+  const handlers = {
+    onPointerEnter: (event: React.PointerEvent) => {
+      if (event.pointerType === "mouse") show(TIP_DELAY_MS);
+    },
+    onPointerLeave: hide,
+    onFocus: () => show(0),
+    onBlur: hide,
+    onPointerDown: hide,
+  };
+  return { anchor, box, handlers };
+}
+
+function Tip({ box, lines }: { box: DOMRect; lines: string[] }) {
+  const scope = usePortalScopeProps();
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [shift, setShift] = useState(0);
+  useEffect(() => {
+    const node = ref.current;
+    if (node === null) return;
+    const rect = node.getBoundingClientRect();
+    const overRight = rect.right - (window.innerWidth - 8);
+    const overLeft = 8 - rect.left;
+    setShift(overRight > 0 ? -overRight : overLeft > 0 ? overLeft : 0);
+  }, [box]);
+  return createPortal(
+    <div
+      {...scope}
+      ref={ref}
+      role="tooltip"
+      data-masking-tip=""
+      style={{ position: "fixed", left: box.left + shift, bottom: window.innerHeight - box.top + 6, zIndex: 60 }}
+      className="pointer-events-none max-w-72 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md"
+    >
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </div>,
+    document.body,
+  );
 }
 
 function Summary({ threadId, isExpanded, onToggle }: ExperimentalThreadContextSegmentProps) {
   const t = useMessages(messages);
-  const routed = useRouted(threadId);
-  const { data: status } = useThreadStatus(threadId);
-  const { tone, label, detail } = describe(status, routed, t);
+  const mode = useMode(threadId) ?? "unavailable";
+  const routed = mode === "routed";
+  const { data: status } = useThreadStatus(threadId, routed);
+  const led = segmentLed(mode, status);
+  const lines = tipLines(mode, status, t);
+  const { anchor, box, handlers } = useDelayedTip();
+  const tip = box !== null && lines.length > 0 ? <Tip box={box} lines={lines} /> : null;
+  const label = (
+    <>
+      <LedDot led={led} />
+      <span className="shrink-0">{t.title}</span>
+    </>
+  );
+  if (!routed) {
+    return (
+      <span
+        ref={anchor}
+        tabIndex={0}
+        data-masking-state={mode}
+        aria-label={`${t.title}: ${lines.join(" ")}`}
+        className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-xs text-muted-foreground/70 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        {...handlers}
+      >
+        {label}
+        {tip}
+      </span>
+    );
+  }
   return (
     <button
+      ref={(node) => {
+        anchor.current = node;
+      }}
       type="button"
       onClick={onToggle}
       aria-expanded={isExpanded}
+      aria-label={lines.length > 0 ? `${t.title}: ${lines.join(" ")}` : t.title}
+      data-masking-state={led}
       className={cn(
         "flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-xs transition-colors hover:bg-state-hover",
-        tone === "danger" ? "text-red-600 dark:text-red-400" : "text-muted-foreground",
+        led === "problem" ? "text-red-600 dark:text-red-400" : "text-muted-foreground",
       )}
+      {...handlers}
     >
-      <span aria-hidden className={cn("size-2 shrink-0 rounded-full", DOT[tone])} />
-      <span className={cn("shrink-0", tone === "danger" && "font-medium")}>{label}</span>
-      {detail !== null && <span className="min-w-0 truncate">— {detail}</span>}
+      {label}
+      {tip}
     </button>
   );
 }
@@ -148,9 +272,10 @@ function Action({ threadId }: ExperimentalThreadContextSegmentProps) {
   const rpc = useRpc<RpcContract>();
   const lang = useLang();
   const routed = useRouted(threadId);
-  const { data: status, refetch } = useThreadStatus(threadId);
+  const { data: status, refetch } = useThreadStatus(threadId, routed);
   const [busy, setBusy] = useState(false);
-  if (!routed || status === null) return null;
+  if (!routed) return null;
+  if (status === null) return null;
   const on = status.masking;
   const toggle = () => {
     setBusy(true);
@@ -170,7 +295,7 @@ function Action({ threadId }: ExperimentalThreadContextSegmentProps) {
       onClick={toggle}
       className={cn(
         "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors disabled:opacity-60",
-        on ? "bg-emerald-500" : "bg-red-500",
+        on ? "bg-emerald-500" : "bg-amber-500",
       )}
     >
       <span
@@ -244,7 +369,7 @@ function proxyLine(status: ThreadStatus, t: (typeof messages)["en"]): string {
 function Details({ threadId, isExpanded }: ExperimentalThreadContextSegmentProps) {
   const t = useMessages(messages);
   const routed = useRouted(threadId);
-  const { data: status } = useThreadStatus(threadId);
+  const { data: status } = useThreadStatus(threadId, routed);
   const { data: entries } = useFeed(threadId, isExpanded && routed);
   if (!isExpanded || !routed || status === null) return null;
   return (

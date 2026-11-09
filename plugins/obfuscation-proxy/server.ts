@@ -65,9 +65,17 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "In-network models",
       description:
-        "Comma-separated model id prefixes that never leave your network. The masking switch is hidden for them, " +
-        "and every other model counts as external.",
+        "Comma-separated model id prefixes that never leave your network. For them the masking bar stays visible " +
+        "but inactive: a grey light and a tooltip saying masking is not needed. Every other model counts as external.",
       default: "",
+    },
+    hideSegment: {
+      type: "boolean",
+      label: "Hide the masking bar",
+      description:
+        "Hides the masking bar above the message box in every thread. Masking itself keeps working. " +
+        "For builds that do not need the bar.",
+      default: false,
     },
     extraConfig: {
       type: "string",
