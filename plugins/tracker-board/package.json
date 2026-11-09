@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-tracker-board",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A board for a REST task tracker inside bb: cards, child tasks from templates, bulk edits and an agent that changes tasks only after you confirm in chat.",
   "license": "MIT",
   "author": "Foma",

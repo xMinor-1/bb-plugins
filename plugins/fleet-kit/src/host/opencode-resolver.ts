@@ -110,6 +110,22 @@ function run(command, args, input, env) {
   });
 }
 
+// Same reading as keychainValue in secret-store.ts: \`security -w\` prints a value
+// that is not plain ASCII as the hex of its bytes.
+function keychainValue(printed) {
+  const text = printed.replace(/\\r?\\n$/, "");
+  if (text.length === 0 || text.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(text)) return text;
+  const bytes = new Uint8Array(text.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(text.slice(i * 2, i * 2 + 2), 16);
+  if (!bytes.some((byte) => byte >= 0x80)) return text;
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return /[\\x00-\\x1f\\x7f]/.test(decoded) ? text : decoded;
+  } catch {
+    return text;
+  }
+}
+
 async function readStore(name) {
   const store = SETTINGS.store;
   if (store.kind === "file") {
@@ -123,7 +139,7 @@ async function readStore(name) {
   if (store.kind === "keychain") {
     const result = await run("/usr/bin/security", ["find-generic-password", "-s", store.service, "-a", name, "-w"]);
     if (result.code !== 0) return null;
-    const value = result.stdout.replace(/\\r?\\n$/, "");
+    const value = keychainValue(result.stdout);
     return value === "" ? null : value;
   }
   if (store.kind === "credential-manager") {

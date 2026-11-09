@@ -227,9 +227,21 @@ try {
     check("account: window button calls the plugin with a hostId", await until("window", () => /hostId/.test(readFileSync(`${home}/.fk-e2e/account-window.log`, "utf8")), 10_000));
   } else check("account: window button shown", false, await windowLine.innerText());
   const form = page.locator("[data-account-form]");
+  // A refused save is explained inside the step, next to the form, not in the page's top line.
+  const accountCard = form.locator("xpath=ancestor::li[@data-step]");
+  await form.locator('input[name="login"]').fill("bad:login");
+  await form.locator('input[name="password"]').fill(PASSWORD);
+  await form.getByRole("button", { name: "Save" }).click();
+  const stepError = accountCard.locator("[data-step-error]");
+  check("account: a refused login is explained in the step", await stepError.waitFor({ timeout: 15_000 }).then(() => true, () => false));
+  check("account: in the person's words", /Check the login/.test(await stepError.innerText().catch(() => "")), await stepError.innerText().catch(() => "absent"));
+  check("account: not in the page's top line", (await page.locator('[role="alert"]:not([data-step-error])').count()) === 0,
+    await page.locator('[role="alert"]:not([data-step-error])').allInnerTexts().then((texts) => texts.join(" | ")));
+  check("account: the password stays typed for another try", (await form.locator('input[name="password"]').inputValue()) === PASSWORD);
   await form.locator('input[name="login"]').fill(LOGIN);
   await form.locator('input[name="password"]').fill(PASSWORD);
   await form.getByRole("button", { name: "Save" }).click();
+  check("account: the step error goes once saved", await stepError.waitFor({ state: "detached", timeout: 15_000 }).then(() => true, () => false));
   check("account: plugin line done", await page.locator('[data-account-plugin="fixture-acct"][data-state="done"]').waitFor({ timeout: 60_000 }).then(() => true, () => false),
     await page.locator('[data-account-plugin="fixture-acct"]').getAttribute("data-state").catch(() => "absent"));
   const got = existsSync(`${home}/.fk-e2e/account.json`) ? JSON.parse(readFileSync(`${home}/.fk-e2e/account.json`, "utf8")) : {};

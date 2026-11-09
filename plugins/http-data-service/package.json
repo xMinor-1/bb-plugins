@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-http-data-service",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Give approved agents read-only tools for a company HTTP data service: each person signs in once, and the methods come from configuration.",
   "license": "MIT",
   "author": "Foma",
