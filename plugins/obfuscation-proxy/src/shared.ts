@@ -88,14 +88,30 @@ export function parsePrefixes(value: unknown): string[] {
 }
 
 /**
- * Whether a thread's model sends data outside the user's network, so the
- * masking state must be visible. `corporate` are model prefixes an admin
- * declared as in-network.
+ * What the masking segment shows for a thread's model:
+ * - `routed`: an external model this plugin routes, with the switch and the feed;
+ * - `in-network`: a model an admin declared as in-network (`corporate` prefixes), masking is not needed;
+ * - `unavailable`: an agent this plugin does not route yet.
  */
-export function isExternalModel(providerId: string, model: string | null, corporate: readonly string[]): boolean {
+export type SegmentMode = "routed" | "in-network" | "unavailable";
+
+export function segmentMode(providerId: string, model: string | null, corporate: readonly string[]): SegmentMode {
   const name = model ?? "";
-  if (corporate.some((prefix) => name.startsWith(prefix))) return false;
-  if (ROUTED_PROVIDERS.includes(providerId)) return true;
-  // Other agents count as external only once an admin listed what is corporate.
-  return corporate.length > 0 && name !== "";
+  if (name !== "" && corporate.some((prefix) => name.startsWith(prefix))) return "in-network";
+  return ROUTED_PROVIDERS.includes(providerId) ? "routed" : "unavailable";
+}
+
+/** The light on the masking segment. */
+export type Led = "on" | "off" | "problem" | "idle" | "loading";
+
+/**
+ * `idle` for in-network models and agents the plugin does not route; for a
+ * routed thread `on` once the proxy runs, `problem` while masking is on and
+ * the proxy is not running (messages wait), `off` when switched off.
+ */
+export function segmentLed(mode: SegmentMode, status: ThreadStatus | null): Led {
+  if (mode !== "routed") return "idle";
+  if (status === null) return "loading";
+  if (!status.masking) return "off";
+  return status.proxy.state === "running" ? "on" : "problem";
 }

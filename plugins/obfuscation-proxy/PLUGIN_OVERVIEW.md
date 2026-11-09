@@ -2,9 +2,10 @@ Masks what your agents send to external models, and shows it in every thread.
 
 ## What you get
 
-- **A visible state in each thread.** Above the message box: "Masking on" with
-  request and masked value counts, or "Masking off" in red. One switch per
-  thread; it applies to the next request.
+- **A visible state in each thread.** Above the message box: "Masking" with a
+  light: green when requests are masked, amber when off, grey for in-network
+  models and agents not covered yet. A tooltip explains the state, with request
+  and masked value counts. One switch per thread; it applies to the next request.
 - **A live feed.** Click the state to see each model request: time, model,
   masked or not, and what was masked by kind (secrets, keys in code, personal
   data, internal hosts, terms).
