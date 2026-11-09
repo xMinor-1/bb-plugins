@@ -16,7 +16,10 @@ confirm in a system window on your computer.
 - **Calendar**, behind the Mail / Calendar switch at the top of the same page:
   your week from Monday, recurring meetings shown on every
   day they happen, moved and cancelled ones marked. Agents can ask what is on
-  a day and when you are free. Read only: meetings are made in Outlook.
+  a day, when you are free and when you and others are all free. Create a
+  meeting, change or cancel yours, answer invitations — from the week or as an
+  agent's proposal in the thread; nothing changes until you confirm it in a
+  system window.
 - Mail stays in Exchange. bb keeps no copy; drafts live in your Drafts folder,
   so you also see them in Outlook.
 
@@ -151,13 +154,57 @@ the system window, and both list every recipient.
   and 30 minutes by default, weekdays only unless asked) — "when am I free on
   Thursday". Busy, tentative and away events take time; cancelled, declined
   and free ones do not. It knows your own calendar only, not other people's.
+- `calendar_find_time` answers "find an hour with Ivanov and Petrova next
+  week": your own calendar plus the others' free/busy from Exchange
+  (`GetUserAvailability`, the *FreeBusy* view — busy times only, never their
+  subjects), in working hours, at least as long as the meeting. Someone
+  Exchange has no free/busy for is named in the answer.
 - The calendar is guarded like mail: only allowed models get the tools, and a
   thread that read it is marked the same way.
-- Nothing creates, answers or moves a meeting: there is no such tool or
-  button. One request reads 500 events and 62 days at most (31 for free
+- One request reads 500 events and 62 days at most (31 for free
   time; an hour more when the clocks go back inside the period); the page and
   the agent say when the calendar had more. A subject, place or organizer name
   is kept up to 1000 characters, the list of invitees up to 4000.
+
+### Meetings: proposed, then confirmed
+
+Nothing writes to the calendar on its own. Agents and the page make a
+**proposal**; the person confirms it, the same way a draft is sent.
+
+- Agents have `calendar_propose_meeting` (a new meeting: subject, time,
+  attendees, optional attendees, rooms, place, text), `calendar_propose_change`
+  (a meeting you organize: time, subject, place, text, people added or taken
+  off), `calendar_propose_cancel` (one you organize, with a note) and
+  `calendar_propose_response` (someone else's invitation: accept, tentative or
+  decline, with a note). Each answers with a `::meeting-proposal` line, shown
+  as a card in the thread. The agent learns how many people get mail, not who.
+- On the page, **New meeting** opens a form; a click on an event offers
+  **Change** and **Cancel meeting** for yours and **Answer** for an invitation.
+  The form only prepares the proposal; its card appears above the week.
+- Events come with a short id (`[e…]` in `calendar_events`). Private events
+  come to agents without one, and the host refuses an agent's proposal about
+  a private event: you change those on the page or in Outlook.
+- A **recurring meeting** is changed, cancelled or answered as one occurrence
+  or the whole series, and only when that is said: without `scope` the agent
+  gets an error, the form asks with two buttons. A series' time is moved on
+  the same day; moving it to another day changes how it repeats and is left
+  to Outlook. All-day events keep their days.
+- **Confirm** on the card opens a dialog, then the machine with the mailbox
+  shows the same system window as Send. It shows the time (and what it was),
+  subject, place, the series or the occurrence, who is added, who is taken
+  off, and everyone who gets an invitation, an update, the cancellation or
+  the answer.
+- Confirm names the proposal's revision. It covers what would be written and
+  the meeting's change key in Exchange when it was proposed. If an agent
+  replaced the proposal, or the meeting changed in Outlook — before or while
+  the window was open — nothing is written, and the card says so.
+- What is written: `CreateItem` of a `CalendarItem` with
+  `SendMeetingInvitations` (`SendToNone` when nobody else is on it),
+  `UpdateItem` with `ConflictResolution="NeverOverwrite"`, the change key and
+  `SendMeetingInvitationsOrCancellations`, `CancelCalendarItem` (an appointment
+  without attendees is deleted instead, nobody to tell), and `AcceptItem`,
+  `TentativelyAcceptItem` or `DeclineItem`. bb cannot create an online meeting
+  link: put the link into the place or the text.
 
 ### The calendar for other plugins
 
@@ -294,6 +341,11 @@ carefully:
 | `mail_draft` | save a reply, reply-all, forward or new message as a draft, or revise one |
 | `calendar_events` | meetings of a period, recurring ones expanded: time, subject, place, organizer, number invited, response, cancelled or moved; private ones as time only |
 | `calendar_free_time` | free stretches of working hours in a period, from the user's own calendar |
+| `calendar_find_time` | times the user and other people are all free, from Exchange free/busy |
+| `calendar_propose_meeting` | propose a new meeting; nothing is created until the user confirms the card |
+| `calendar_propose_change` | propose a change to a meeting the user organizes |
+| `calendar_propose_cancel` | propose cancelling a meeting the user organizes |
+| `calendar_propose_response` | propose an answer to an invitation: accept, tentative, decline |
 
 ## Settings
 
@@ -331,10 +383,12 @@ bb plugin config exchange-mail set accountPlugins "fleet-kit"
   with a `CalendarView` for the calendar),
   `GetItem` (plain text, or HTML with `TextBody` for the panel), `GetAttachment`,
   `ResolveNames` (address book, with full contact data),
-  `CreateItem` with `SaveOnly` (drafts only: message, reply, reply all,
+  `CreateItem` with `SaveOnly` (drafts: message, reply, reply all,
   forward), `SendItem` with the change key,
   `DeleteItem` (to Deleted Items), `UpdateItem` (marks a message read when you
-  open it in the panel; agents' reads do not).
+  open it in the panel; agents' reads do not), `GetUserAvailability`
+  (free/busy), and — only after a confirmed proposal — the meeting operations
+  listed above.
 - **Setup status for other plugins.** `setupStatus` is open to every plugin
   (a build's onboarding page, such as Fleet Kit's, asks it); `calendarEvents`
   and `accountSignIn` only to the plugins their settings list.
@@ -363,8 +417,9 @@ bb plugin config exchange-mail set accountPlugins "fleet-kit"
 
 - Agents read text files and PDF only; Word, Excel and pictures stay for people.
 - No shared mailboxes or Exchange Online (OAuth).
-- The calendar is read only: meetings are created, answered and moved in
-  Outlook. Other people's free/busy (the scheduling assistant) is not read.
+- No online meeting links, room finder or all-day events from bb; a series is
+  moved within its day only. Other people's calendars are read as free/busy,
+  never their meetings.
 - The address book finds people by the start of a name or an address, as the
   To box in Outlook does; it does not browse the directory or show
   photos and phone numbers.

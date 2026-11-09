@@ -15,7 +15,7 @@ export class EwsError extends Error {
   }
 }
 
-const ARRAYS = new Set(["Mailbox", "FileAttachment", "ItemAttachment", "ReferenceAttachment", "ExtendedProperty", "Resolution", "Entry"]);
+const ARRAYS = new Set(["Mailbox", "FileAttachment", "ItemAttachment", "ReferenceAttachment", "ExtendedProperty", "Resolution", "Entry", "Attendee", "FreeBusyResponse", "CalendarEvent"]);
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -428,10 +428,7 @@ export interface ParsedEvent {
 /** At most `max` characters, the cut marked with an ellipsis. */
 const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
 
-export function parseCalendarView(xmlText: string): { events: ParsedEvent[]; last: boolean } {
-  const message = responseMessage(xmlText, "FindItem");
-  const root = asNode(message.RootFolder);
-  const events = items(root?.Items).map(({ node }): ParsedEvent => {
+function eventOf(node: Node): ParsedEvent {
     const organizer = address(node.Organizer);
     return {
       item: ref(node.ItemId),
@@ -453,6 +450,108 @@ export function parseCalendarView(xmlText: string): { events: ParsedEvent[]; las
       displayTo: clip(text(node.DisplayTo), CALENDAR_ATTENDEES_MAX),
       displayCc: clip(text(node.DisplayCc), CALENDAR_ATTENDEES_MAX),
     };
-  });
+}
+
+export function parseCalendarView(xmlText: string): { events: ParsedEvent[]; last: boolean } {
+  const message = responseMessage(xmlText, "FindItem");
+  const root = asNode(message.RootFolder);
+  const events = items(root?.Items).map(({ node }) => eventOf(node));
   return { events: events.filter((event) => event.start && event.end), last: text(root?.["@IncludesLastItemInRange"]).toLowerCase() !== "false" };
+}
+
+/** A calendar item read whole: who is invited, by address, and the text of the invitation. */
+export interface ParsedCalendarItem extends ParsedEvent {
+  readonly required: Address[];
+  readonly optional: Address[];
+  readonly rooms: Address[];
+  /** Plain text, line breaks normalized. */
+  readonly body: string;
+}
+
+/** Attendees with an SMTP address; one known by an X.500 address only keeps its name and an empty address. */
+function attendeesOf(node: unknown): Address[] {
+  return list(asNode(node)?.Attendee)
+    .map((attendee) => address(attendee))
+    .filter((a): a is Address => a !== null)
+    .map((a) => ({ name: a.name === null ? null : clip(a.name, CALENDAR_TEXT_MAX), email: smtp(a.email) ?? "" }));
+}
+
+export function parseCalendarItem(xmlText: string): ParsedCalendarItem {
+  const message = responseMessage(xmlText, "GetItem");
+  const first = items(message.Items)[0];
+  if (!first) throw new EwsError("ErrorItemNotFound", "The meeting is not in the calendar any more");
+  const { node } = first;
+  return {
+    ...eventOf(node),
+    required: attendeesOf(node.RequiredAttendees),
+    optional: attendeesOf(node.OptionalAttendees),
+    rooms: attendeesOf(node.Resources),
+    body: normalizeText(text(node.Body).replace(/\r\n?/g, "\n")),
+  };
+}
+
+/** CreateItem for a meeting, a cancellation or an answer: the item it made, when Exchange says. */
+export function parseCreated(xmlText: string): ItemRef | null {
+  const message = responseMessage(xmlText, "CreateItem");
+  const first = items(message.Items)[0];
+  return first ? ref(first.node.ItemId) : null;
+}
+
+export function parseUpdateItem(xmlText: string): ItemRef | null {
+  const message = responseMessage(xmlText, "UpdateItem");
+  const first = items(message.Items)[0];
+  return first ? ref(first.node.ItemId) : null;
+}
+
+/** One person's free/busy: busy stretches (ISO, UTC), or why Exchange had none. */
+export type ParsedAvailability = { ok: true; busy: { start: string; end: string; type: string }[] } | { ok: false; code: string; message: string };
+
+/** Times in the answer are in the UTC zone the request named, written without a zone. */
+const utcTime = (value: string) => {
+  const trimmed = value.trim();
+  const ms = Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed) ? trimmed : `${trimmed}Z`);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+};
+
+/** GetUserAvailability answers one FreeBusyResponse per mailbox asked, in the same order. */
+export function parseAvailability(xmlText: string, count: number): ParsedAvailability[] {
+  let doc: Node;
+  try {
+    doc = parser.parse(xmlText) as Node;
+  } catch {
+    throw new EwsError("BadResponse", "Exchange answered with something that is not XML");
+  }
+  const body = asNode(asNode(doc.Envelope)?.Body);
+  if (!body) throw new EwsError("BadResponse", "Exchange answered without a SOAP body");
+  const fault = asNode(body.Fault);
+  if (fault) {
+    const detail = asNode(fault.detail);
+    throw new EwsError(text(detail?.ResponseCode) || "SoapFault", (text(detail?.Message) || text(fault.faultstring) || "Exchange refused the request").trim());
+  }
+  const response = asNode(body.GetUserAvailabilityResponse);
+  if (!response) throw new EwsError("BadResponse", "Exchange answered without a GetUserAvailability result");
+  const answers = list(asNode(response.FreeBusyResponseArray)?.FreeBusyResponse);
+  const out: ParsedAvailability[] = [];
+  for (let n = 0; n < count; n++) {
+    const answer = answers[n];
+    const status = asNode(answer?.ResponseMessage);
+    if (!answer || !status) {
+      out.push({ ok: false, code: "BadResponse", message: "Exchange said nothing about this person" });
+      continue;
+    }
+    if (text(status["@ResponseClass"]) === "Error") {
+      const code = text(status.ResponseCode) || "Error";
+      out.push({ ok: false, code, message: (text(status.MessageText) || code).trim() });
+      continue;
+    }
+    const view = asNode(answer.FreeBusyView);
+    const busy: { start: string; end: string; type: string }[] = [];
+    for (const event of list(asNode(view?.CalendarEventArray)?.CalendarEvent)) {
+      const start = utcTime(text(event.StartTime));
+      const end = utcTime(text(event.EndTime));
+      if (start && end && end > start) busy.push({ start, end, type: text(event.BusyType) || "Busy" });
+    }
+    out.push({ ok: true, busy });
+  }
+  return out;
 }

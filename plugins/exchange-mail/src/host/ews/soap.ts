@@ -1,7 +1,8 @@
 // EWS SOAP requests. Only the operations the plugin needs: list and search a
 // folder, read a message and its conversation, download an attachment, save a
 // draft (new, reply, reply all, forward), send a saved draft, delete a draft,
-// read folder counters, look people up in the address book, read the calendar.
+// read folder counters, look people up in the address book, read the calendar,
+// and — once the person confirmed — create, change, cancel and answer meetings.
 //
 // Every request is plain ASCII: characters outside it become XML character
 // references, so no code page between Node, curl and Exchange can mangle them.
@@ -267,5 +268,165 @@ export function calendarView(options: { start: string; end: string; max: number 
       `<m:CalendarView MaxEntriesReturned="${options.max}" StartDate="${xml(options.start)}" EndDate="${xml(options.end)}"/>` +
       `<m:ParentFolderIds>${folderId("calendar")}</m:ParentFolderIds>` +
       `</m:FindItem>`,
+  );
+}
+
+// ------------------------------------------------------------------ meetings
+//
+// Writing to the calendar. Each of these runs only after the person confirmed
+// the exact change in a system window (src/host/service.ts, confirmMeeting).
+
+const CALENDAR_ITEM_FIELDS = [...CALENDAR_FIELDS, "calendar:RequiredAttendees", "calendar:OptionalAttendees", "calendar:Resources", "item:Body"];
+
+/** A calendar item as it is now, attendees and plain-text body included. */
+export function getCalendarItem(ref: ItemRef): string {
+  return envelope(
+    `<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:BodyType>Text</t:BodyType>` +
+      `<t:AdditionalProperties>${CALENDAR_ITEM_FIELDS.map(field).join("")}</t:AdditionalProperties></m:ItemShape>` +
+      `<m:ItemIds>${itemId({ id: ref.id })}</m:ItemIds></m:GetItem>`,
+  );
+}
+
+/** The recurring master of an occurrence: the series itself. */
+export function getRecurringMaster(occurrence: ItemRef): string {
+  return envelope(
+    `<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:BodyType>Text</t:BodyType>` +
+      `<t:AdditionalProperties>${CALENDAR_ITEM_FIELDS.map(field).join("")}</t:AdditionalProperties></m:ItemShape>` +
+      `<m:ItemIds><t:RecurringMasterItemId OccurrenceId="${xml(occurrence.id)}"/></m:ItemIds></m:GetItem>`,
+  );
+}
+
+const attendees = (tag: string, list: readonly Address[] | undefined) =>
+  list && list.length
+    ? `<t:${tag}>${list
+        .map((a) => `<t:Attendee><t:Mailbox>${a.name ? `<t:Name>${xml(a.name)}</t:Name>` : ""}<t:EmailAddress>${xml(a.email)}</t:EmailAddress></t:Mailbox></t:Attendee>`)
+        .join("")}</t:${tag}>`
+    : "";
+
+export interface MeetingFields {
+  readonly subject: string;
+  /** ISO, UTC. */
+  readonly start: string;
+  readonly end: string;
+  readonly location: string | null;
+  readonly body: string | null;
+  readonly required: readonly Address[];
+  readonly optional: readonly Address[];
+  readonly rooms: readonly Address[];
+}
+
+const invites = (fields: { required: readonly Address[]; optional: readonly Address[]; rooms: readonly Address[] }) =>
+  fields.required.length + fields.optional.length + fields.rooms.length > 0;
+
+/** A new meeting in the calendar; invitations go to everyone on it, a copy stays in Sent Items. Without attendees it is an appointment and nothing is sent. */
+export function createMeeting(fields: MeetingFields): string {
+  const send = invites(fields) ? "SendToAllAndSaveCopy" : "SendToNone";
+  return envelope(
+    `<m:CreateItem SendMeetingInvitations="${send}"><m:SavedItemFolderId>${folderId("calendar")}</m:SavedItemFolderId><m:Items><t:CalendarItem>` +
+      `<t:Subject>${xml(fields.subject)}</t:Subject>` +
+      (fields.body ? `<t:Body BodyType="Text">${xml(fields.body)}</t:Body>` : "") +
+      `<t:Start>${xml(fields.start)}</t:Start><t:End>${xml(fields.end)}</t:End>` +
+      (fields.location ? `<t:Location>${xml(fields.location)}</t:Location>` : "") +
+      attendees("RequiredAttendees", fields.required) +
+      attendees("OptionalAttendees", fields.optional) +
+      attendees("Resources", fields.rooms) +
+      `</t:CalendarItem></m:Items></m:CreateItem>`,
+  );
+}
+
+/** Only the fields that change; null clears a place or a list. */
+export interface MeetingChanges {
+  readonly subject?: string;
+  readonly start?: string;
+  readonly end?: string;
+  readonly location?: string | null;
+  readonly body?: string | null;
+  readonly required?: readonly Address[];
+  readonly optional?: readonly Address[];
+  readonly rooms?: readonly Address[];
+}
+
+const set = (uri: string, inner: string) => `<t:SetItemField>${field(uri)}<t:CalendarItem>${inner}</t:CalendarItem></t:SetItemField>`;
+const unset = (uri: string) => `<t:DeleteItemField>${field(uri)}</t:DeleteItemField>`;
+
+/**
+ * Changes a meeting or a whole series at exactly the change key the person
+ * saw: with NeverOverwrite, Exchange refuses a change to an item that changed
+ * since. Everyone on it gets the update; people taken off get a cancellation.
+ */
+export function updateMeeting(ref: ItemRef, changes: MeetingChanges, options: { notify: boolean }): string {
+  if (!ref.changeKey) throw new Error("Changing a meeting needs the change key the person saw");
+  const updates: string[] = [];
+  if (changes.subject !== undefined) updates.push(set("item:Subject", `<t:Subject>${xml(changes.subject)}</t:Subject>`));
+  if (changes.body !== undefined) updates.push(changes.body ? set("item:Body", `<t:Body BodyType="Text">${xml(changes.body)}</t:Body>`) : unset("item:Body"));
+  if (changes.start !== undefined) updates.push(set("calendar:Start", `<t:Start>${xml(changes.start)}</t:Start>`));
+  if (changes.end !== undefined) updates.push(set("calendar:End", `<t:End>${xml(changes.end)}</t:End>`));
+  if (changes.location !== undefined) updates.push(changes.location ? set("calendar:Location", `<t:Location>${xml(changes.location)}</t:Location>`) : unset("calendar:Location"));
+  const lists = [
+    ["calendar:RequiredAttendees", "RequiredAttendees", changes.required],
+    ["calendar:OptionalAttendees", "OptionalAttendees", changes.optional],
+    ["calendar:Resources", "Resources", changes.rooms],
+  ] as const;
+  for (const [uri, tag, list] of lists) {
+    if (list !== undefined) updates.push(list.length ? set(uri, attendees(tag, list)) : unset(uri));
+  }
+  if (updates.length === 0) throw new Error("Nothing to change");
+  return envelope(
+    `<m:UpdateItem ConflictResolution="NeverOverwrite" SendMeetingInvitationsOrCancellations="${options.notify ? "SendToAllAndSaveCopy" : "SendToNone"}">` +
+      `<m:ItemChanges><t:ItemChange>${itemId(ref)}<t:Updates>${updates.join("")}</t:Updates></t:ItemChange></m:ItemChanges></m:UpdateItem>`,
+  );
+}
+
+/** Cancels a meeting the person organizes: everyone invited gets the cancellation with the note. */
+export function cancelMeeting(ref: ItemRef, note: string | null): string {
+  if (!ref.changeKey) throw new Error("Cancelling a meeting needs the change key the person saw");
+  return envelope(
+    `<m:CreateItem MessageDisposition="SendAndSaveCopy"><m:Items><t:CancelCalendarItem>` +
+      itemId(ref, "t:ReferenceItemId") +
+      (note ? `<t:NewBodyContent BodyType="Text">${xml(note)}</t:NewBodyContent>` : "") +
+      `</t:CancelCalendarItem></m:Items></m:CreateItem>`,
+  );
+}
+
+/** Removes an appointment nobody else is invited to: there is nobody to tell. */
+export function deleteAppointment(ref: ItemRef): string {
+  return envelope(
+    `<m:DeleteItem DeleteType="MoveToDeletedItems" SendMeetingCancellations="SendToNone"><m:ItemIds>${itemId(ref)}</m:ItemIds></m:DeleteItem>`,
+  );
+}
+
+export type MeetingResponse = "accept" | "tentative" | "decline";
+const RESPONSE_TAG: Record<MeetingResponse, string> = { accept: "AcceptItem", tentative: "TentativelyAcceptItem", decline: "DeclineItem" };
+
+/** Answers an invitation; the organizer gets the answer with the note. */
+export function respondToMeeting(ref: ItemRef, response: MeetingResponse, note: string | null): string {
+  if (!ref.changeKey) throw new Error("Answering an invitation needs the change key the person saw");
+  const tag = RESPONSE_TAG[response];
+  return envelope(
+    `<m:CreateItem MessageDisposition="SendAndSaveCopy"><m:Items><t:${tag}>` +
+      (note ? `<t:Body BodyType="Text">${xml(note)}</t:Body>` : "") +
+      itemId(ref, "t:ReferenceItemId") +
+      `</t:${tag}></m:Items></m:CreateItem>`,
+  );
+}
+
+/** EWS time without a zone, read in the UTC zone the request names. */
+const utcClock = (iso: string) => new Date(Date.parse(iso)).toISOString().slice(0, 19);
+const UTC_RULE = "<t:Bias>0</t:Bias><t:Time>00:00:00</t:Time><t:DayOrder>1</t:DayOrder><t:Month>1</t:Month><t:DayOfWeek>Sunday</t:DayOfWeek>";
+
+/**
+ * Free/busy of other people, as Outlook's Scheduling Assistant sees it: busy
+ * stretches only (the FreeBusy view), no subjects or places. Times in UTC.
+ */
+export function getUserAvailability(options: { emails: readonly string[]; start: string; end: string }): string {
+  return envelope(
+    `<m:GetUserAvailabilityRequest>` +
+      `<t:TimeZone><t:Bias>0</t:Bias><t:StandardTime>${UTC_RULE}</t:StandardTime><t:DaylightTime>${UTC_RULE}</t:DaylightTime></t:TimeZone>` +
+      `<m:MailboxDataArray>${options.emails
+        .map((email) => `<t:MailboxData><t:Email><t:Address>${xml(email)}</t:Address></t:Email><t:AttendeeType>Required</t:AttendeeType><t:ExcludeConflicts>false</t:ExcludeConflicts></t:MailboxData>`)
+        .join("")}</m:MailboxDataArray>` +
+      `<t:FreeBusyViewOptions><t:TimeWindow><t:StartTime>${utcClock(options.start)}</t:StartTime><t:EndTime>${utcClock(options.end)}</t:EndTime></t:TimeWindow>` +
+      `<t:MergedFreeBusyIntervalInMinutes>15</t:MergedFreeBusyIntervalInMinutes><t:RequestedView>FreeBusy</t:RequestedView></t:FreeBusyViewOptions>` +
+      `</m:GetUserAvailabilityRequest>`,
   );
 }

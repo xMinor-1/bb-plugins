@@ -1,8 +1,13 @@
 // The calendar for a week, Monday to Sunday, in the browser's time zone:
 // every occurrence of a recurring meeting on its own day, moved ones marked,
-// cancelled ones struck through. Read only — meetings are made in Outlook.
+// cancelled ones struck through. From here the person creates a meeting,
+// changes or cancels one they organize and answers invitations: each becomes a
+// proposal card above the week, confirmed in a system window like a send.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CalendarEvent } from "../../contract";
+import { MeetingCard } from "./MeetingCard";
+import { MeetingForm, type FormMode } from "./MeetingForm";
+import { meetingTexts } from "./meeting-messages";
 import { Button } from "@/components/ui/button";
 import { defineMessages, intlLocale, pluralRu, useLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -32,7 +37,6 @@ const texts = defineMessages(
     organizer: "Organizer",
     invited: "Invited",
     more: "This week has more events than shown here. Outlook shows them all.",
-    readOnly: "Read only: meetings are created and changed in Outlook.",
     events: (n: number) => `${n} ${n === 1 ? "event" : "events"}`,
   },
   {
@@ -56,7 +60,6 @@ const texts = defineMessages(
     organizer: "Организатор",
     invited: "Приглашены",
     more: "На этой неделе событий больше, чем показано. Все они есть в Outlook.",
-    readOnly: "Только просмотр: встречи создаются и меняются в Outlook.",
     events: (n) => `${n} ${pluralRu(n, ["событие", "события", "событий"])}`,
   },
 );
@@ -66,6 +69,9 @@ const texts = defineMessages(
  * the panel's width depends on bb's sidebar, which a media query cannot see.
  * A column is at least 7.5rem; gap-2 makes the six gaps 3rem.
  */
+/** Buttons inside a day column, which may be 7.5rem narrow: a long Russian label wraps instead of spilling out. */
+const WRAP = "h-auto min-h-8 max-w-full whitespace-normal break-words py-1 text-left text-xs";
+
 const WEEK_COLUMNS = "repeat(auto-fill, minmax(max(7.5rem, calc((100% - 3rem) / 7)), 1fr))";
 
 /** Monday 00:00 of the week holding `date`, in the browser's time zone. */
@@ -108,7 +114,11 @@ export function eventsOfDay(events: readonly CalendarEvent[], day: Date): Calend
 
 export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc; hostId: string; now?: () => Date }) {
   const t = useMessages(texts);
+  const m = useMessages(meetingTexts);
   const lang = useLang();
+  const [form, setForm] = useState<FormMode | null>(null);
+  /** Proposals made here, newest first, each with its own card until the page is left. */
+  const [pending, setPending] = useState<string[]>([]);
   const explain = useExplain();
   const [start, setStart] = useState(() => weekStart(now()));
   const [events, setEvents] = useState<CalendarEvent[] | null>(null);
@@ -187,9 +197,32 @@ export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc
           <Button size="sm" variant="ghost" onClick={() => load()}>
             {t.refresh}
           </Button>
+          <Button size="sm" onClick={() => setForm({ action: "create", day: today !== null ? new Date(today) : start })}>
+            {m.newMeeting}
+          </Button>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">{t.readOnly}</p>
+      <p className="text-xs text-muted-foreground">{m.hint}</p>
+
+      {pending.length ? (
+        <section className="space-y-2" aria-label={m.pending}>
+          {pending.map((id) => (
+            <MeetingCard key={id} rpc={rpc} target={{ hostId }} id={id} onDone={() => load()} />
+          ))}
+        </section>
+      ) : null}
+      {form ? (
+        <MeetingForm
+          rpc={rpc}
+          hostId={hostId}
+          mode={form}
+          onClose={() => setForm(null)}
+          onProposed={(proposal) => {
+            setForm(null);
+            setPending((list) => [proposal.id, ...list.filter((id) => id !== proposal.id)]);
+          }}
+        />
+      ) : null}
 
       {error ? <Notice tone="error">{explain(error)}</Notice> : null}
       {events === null && !error ? <Notice tone="info">{t.loading}</Notice> : null}
@@ -238,6 +271,27 @@ export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc
                               <div>
                                 <dt className="text-muted-foreground">{t.invited}</dt>
                                 <dd className="break-words">{event.attendees}</dd>
+                              </div>
+                            ) : null}
+                            {event.myResponse === "organizer" ? <p className="text-muted-foreground">{m.yourMeeting}</p> : null}
+                            {!event.cancelled ? (
+                              <div className="flex flex-wrap gap-1 pt-1">
+                                {event.myResponse === "organizer" ? (
+                                  <>
+                                    {event.allDay ? null : (
+                                      <Button size="sm" variant="outline" className={WRAP} onClick={() => setForm({ action: "update", event })}>
+                                        {m.editMeeting}
+                                      </Button>
+                                    )}
+                                    <Button size="sm" variant="ghost" className={WRAP} onClick={() => setForm({ action: "cancel", event })}>
+                                      {m.cancelMeeting}
+                                    </Button>
+                                  </>
+                                ) : event.myResponse !== "unknown" ? (
+                                  <Button size="sm" variant="outline" className={WRAP} onClick={() => setForm({ action: "respond", event })}>
+                                    {m.respond}
+                                  </Button>
+                                ) : null}
                               </div>
                             ) : null}
                           </dl>

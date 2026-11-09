@@ -19,8 +19,11 @@ with agents that help answer mail but never send it on their own.
   before you send.
 - **Calendar** behind the Mail / Calendar switch: your week from Monday, every occurrence of a
   recurring meeting on its day, moved and cancelled ones marked, your
-  response on each. Agents answer "what do I have tomorrow" and "when am I
-  free on Thursday". Read only: meetings are made in Outlook. Plugins you list
+  response on each. Agents answer "what do I have tomorrow", "when am I
+  free on Thursday" and "find an hour with Ivanov and Petrova next week" (from
+  their free/busy). Create a meeting, change or cancel yours and answer
+  invitations from the week; agents propose the same as a card in the thread,
+  and nothing changes until you confirm it in a system window. Plugins you list
   in a setting can show your meetings too (times, subjects and places only).
   Events you marked private reach agents and plugins as their time only.
 
@@ -32,6 +35,10 @@ the address book, read the calendar and save drafts. There is no agent tool that
 window on your computer that lists every recipient, Bcc included, and the
 text, and it names the exact version you were shown; if an agent or Outlook
 changed the draft meanwhile, nothing goes out and you see the new version.
+Meetings work the same way: the window shows the time, what changes and
+everyone who gets an invitation, update, cancellation or answer, and a
+recurring meeting is changed as one occurrence or the series only when you
+choose which.
 The window is a second step outside bb, not a guarantee: on Windows and X11
 other programs running as you can press buttons, so read it before you send.
 
