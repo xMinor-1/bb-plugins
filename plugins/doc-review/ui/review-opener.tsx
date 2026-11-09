@@ -44,6 +44,7 @@ import {
 import { CommentEditor } from "./comment-editor";
 import { CommentList, type CommentActions } from "./comment-list";
 import { HtmlDoc } from "./html-doc";
+import { htmlFileLink } from "./html-links";
 import { MarkdownDoc, type MarkdownDocument, type Point } from "./markdown-doc";
 import { documentRoot } from "./md-blocks";
 import { PagesDoc, type PageMode } from "./pages-doc";
@@ -90,6 +91,10 @@ const messages = defineMessages(
     toThisChat: "To this chat",
     toThisChatHint: "The agent here gets them as the next message",
     toThisChatOff: "Open the file from a chat to use this",
+    toThisChatQueued: "To this chat, when the agent is done",
+    toThisChatQueuedHint: "Waits until the agent finishes its current work",
+    toThisChatNow: "To this chat, right now",
+    toThisChatNowHint: "Joins the work the agent is doing now",
     toNewChat: "To a new chat",
     toNewChatHint: "Same project and model, fresh context",
     drawingWithoutPicture: "The drawing is saved without a picture of the page.",
@@ -134,6 +139,8 @@ const messages = defineMessages(
     closeComments: "Close comments",
     backToReview: "Back to review",
     couldNotOpen: (reason: string) => `Doc Review could not open this file: ${reason}`,
+    linkOutside: "This link points outside the document's folder, so Doc Review does not open it.",
+    linkNotOpened: "bb could not open this file in its preview.",
   },
   {
     tools: (tool) => ({ pen: "Перо", line: "Линия", arrow: "Стрелка", rect: "Рамка" })[tool],
@@ -153,6 +160,10 @@ const messages = defineMessages(
     toThisChat: "В этот тред",
     toThisChatHint: "Агент получит их следующим сообщением",
     toThisChatOff: "Откройте файл из треда, чтобы отправить сюда",
+    toThisChatQueued: "В этот тред, когда агент закончит",
+    toThisChatQueuedHint: "Подождёт, пока агент доделает текущую работу",
+    toThisChatNow: "В этот тред, прямо сейчас",
+    toThisChatNowHint: "Добавится к работе, которую агент делает сейчас",
     toNewChat: "В новый тред",
     toNewChatHint: "Тот же проект и модель, чистый контекст",
     drawingWithoutPicture: "Рисунок сохранён без снимка страницы.",
@@ -197,6 +208,8 @@ const messages = defineMessages(
     closeComments: "Закрыть комментарии",
     backToReview: "Назад к ревью",
     couldNotOpen: (reason) => `Doc Review не смог открыть файл: ${reason}`,
+    linkOutside: "Ссылка ведёт за пределы папки документа, Doc Review её не открывает.",
+    linkNotOpened: "bb не смог открыть этот файл в просмотре.",
   },
 );
 
@@ -320,6 +333,9 @@ function useDocLinks(doc: ReviewDoc) {
   return links;
 }
 
+/** `thread` does what Enter does in bb; `queue` and `steer` say it outright. */
+type SendTarget = "thread" | "queue" | "steer" | "new";
+
 function SendMenu({
   count,
   canSendHere,
@@ -331,7 +347,7 @@ function SendMenu({
   canSendHere: boolean;
   busy: boolean;
   compact: boolean;
-  onSend: (target: "thread" | "new") => void;
+  onSend: (target: SendTarget) => void;
 }) {
   const t = useMessages(messages);
   const [open, setOpen] = useState(false);
@@ -379,7 +395,7 @@ function SendMenu({
         <Icon name="ChevronDown" className="size-3.5" />
       </Button>
       {open ? (
-        <div className="absolute right-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg">
+        <div className="absolute right-0 top-full z-50 mt-1 w-64 overflow-hidden rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg">
           <button
             type="button"
             disabled={!canSendHere}
@@ -394,6 +410,27 @@ function SendMenu({
               {canSendHere ? t.toThisChatHint : t.toThisChatOff}
             </span>
           </button>
+          {canSendHere
+            ? (
+                [
+                  ["queue", t.toThisChatQueued, t.toThisChatQueuedHint],
+                  ["steer", t.toThisChatNow, t.toThisChatNowHint],
+                ] as const
+              ).map(([target, label, hint]) => (
+                <button
+                  key={target}
+                  type="button"
+                  className="flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left hover:bg-accent"
+                  onClick={() => {
+                    setOpen(false);
+                    onSend(target);
+                  }}
+                >
+                  <span>{label}</span>
+                  <span className="text-xs text-muted-foreground">{hint}</span>
+                </button>
+              ))
+            : null}
           <button
             type="button"
             className="flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left hover:bg-accent"
@@ -461,6 +498,45 @@ export function Workspace({
   const linkDocument = useMemo(
     () => linkDocumentFor(doc, source, path, threadId),
     [doc.absPath, source.kind, source.environmentId, source.threadId, path, threadId], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  // A relative link on an HTML page opens in bb's file preview. The page's
+  // own scripts can post the same message, so the path stays inside the
+  // document's folder and a burst of them opens one preview, not a stream.
+  const lastFileLink = useRef(0);
+  const openFileLink = useCallback(
+    (href: unknown) => {
+      const link = htmlFileLink(href, doc.absPath);
+      if (!link) return;
+      const now = Date.now();
+      if (now - lastFileLink.current < 800) return;
+      lastFileLink.current = now;
+      const words = messagesNow(messages);
+      if (link.kind === "outside") {
+        toast.error(words.linkOutside);
+        return;
+      }
+      const rootPath = linkDocument?.rootPath ?? null;
+      const prefix = rootPath === "/" ? "/" : `${rootPath ?? ""}/`;
+      const relative = rootPath !== null && link.path.startsWith(prefix) ? link.path.slice(prefix.length) : null;
+      const shared = linkDocument?.target;
+      const target =
+        relative !== null && shared?.kind === "workspace"
+          ? { kind: "workspace" as const, environmentId: shared.environmentId, path: relative }
+          : relative !== null && shared?.kind === "thread-storage"
+            ? { kind: "thread-storage" as const, threadId: shared.threadId, path: relative }
+            : doc.previewHostId
+              ? { kind: "host" as const, hostId: doc.previewHostId, path: link.path }
+              : null;
+      // Older bb builds have no file preview to open.
+      const opened =
+        target !== null &&
+        typeof navigate.experimental_openFilePreview === "function" &&
+        navigate.experimental_openFilePreview({ target, location: link.location });
+      if (!opened) {
+        toast.error(words.linkNotOpened);
+      }
+    },
+    [doc.absPath, doc.previewHostId, linkDocument, navigate],
   );
   const instanceId = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -620,14 +696,15 @@ export function Workspace({
     },
   };
 
-  const send = async (target: "thread" | "new") => {
+  const send = async (target: SendTarget) => {
     if (drafts.length === 0 || sending) return;
     setSending(true);
     const sent = drafts.length;
     try {
-      if (target === "thread") {
+      if (target !== "new") {
         if (!threadId) throw new Error(messagesNow(messages).openFromChat);
-        await rpc.call("comments.send", { docId: doc.id, target: { kind: "thread", threadId } });
+        const mode = target === "queue" ? "queue-if-active" : target === "steer" ? "steer-if-active" : "auto";
+        await rpc.call("comments.send", { docId: doc.id, target: { kind: "thread", threadId, mode } });
         toast.success(messagesNow(messages).sentHere(sent));
       } else {
         try {
@@ -780,6 +857,7 @@ export function Workspace({
       onRequestComment={requestPlaceComment}
       onSelectComment={selectFromDoc}
       onDetached={onDetached}
+      onOpenFile={openFileLink}
     />
   ) : content.kind === "md" ? (
     <MarkdownDoc

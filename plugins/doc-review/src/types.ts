@@ -213,6 +213,12 @@ export interface ReviewDoc {
   absPath: string;
   /** Null when the file lives on the bb server's own machine. */
   hostId: string | null;
+  /**
+   * The enrolled host the file lives on, the bb server's own machine
+   * included: where bb's file preview opens files next to it. Null for a
+   * live site, or when the server's machine is not enrolled.
+   */
+  previewHostId: string | null;
   version: string;
 }
 
