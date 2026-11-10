@@ -19,6 +19,7 @@
 .brb-root *, .brb-root *::before, .brb-root *::after { box-sizing: border-box; }
 .brb-root [hidden] { display: none !important; }
 .brb-page { margin: 0 auto; width: 100%; max-width: 48rem; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.brb-open { align-items: flex-start; }
 .brb-title { margin: 0; font-size: 18px; font-weight: 600; }
 .brb-muted { color: var(--brb-muted); font-size: 13px; }
 .brb-field { display: flex; flex-direction: column; gap: 6px; }

@@ -296,6 +296,19 @@ describe("sending", () => {
   });
 });
 
+describe("open mode through the server", () => {
+  it("hands the page only the form address and sends nothing", async () => {
+    const { handlers } = loadServer({ sendMode: "open", formUrl: FORM, submitUrl: "https://forms.example.test/api/submit" });
+    expect(await handlers.config!(null)).toEqual({ label: DEFAULT_LABEL, formUrl: FORM, canSend: false, canAttach: false, combine: false, picturesStay: false, problem: null, mode: "open", key: null, keyHelp: "", keyProblem: null });
+    expect(await handlers.send!({ subject: "x", description: "", client: "", images: [] })).toEqual({ ok: false, error: "Sending from bb is off: the report is made in the form in the browser." });
+  });
+
+  it("without a form address names the problem", async () => {
+    const { handlers } = loadServer({ sendMode: "open" });
+    expect(await handlers.config!(null)).toMatchObject({ mode: "open", formUrl: "", problem: "There is no form yet: the plugin settings have no form address." });
+  });
+});
+
 describe("REST mode through the server", () => {
   const REST = {
     sendMode: "rest",

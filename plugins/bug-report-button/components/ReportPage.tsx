@@ -1,9 +1,10 @@
 // The report page: subject, description and pictures from a drop, a paste or a file picker; sends through the server.
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
-import { useRpc } from "@get-bb/plugin-sdk/app";
+import { useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../server";
 import { combineImages } from "../src/combine";
 import { DEFAULT_LABEL } from "../src/config";
+import { openInOwnBrowser, shouldAutoOpen } from "../src/open";
 import {
   IMAGE_TYPES,
   MAX_DESCRIPTION_LENGTH,
@@ -27,7 +28,7 @@ type PageConfig = {
   combine: boolean;
   picturesStay: boolean;
   problem: string | null;
-  mode: "form" | "rest";
+  mode: "form" | "rest" | "open";
   key: KeyStatus | null;
   keyHelp: string;
   keyProblem: string | null;
@@ -140,6 +141,31 @@ function ApiKey({ status, help, problem, disabled, onChange }: { status: KeyStat
       </div>
       <span className="brb-muted">{help ? `${help} ` : ""}The key stays in this computer's key store and goes only to the tracker.</span>
       {failure ? <p className="brb-error" role="alert">{failure}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * The "open" mode: the bug only opens the form in the person's browser. bb has no sidebar item that is a link, so the
+ * page opens the form as it mounts and keeps one button for another go, or for when the browser refused a new tab.
+ */
+function OpenForm({ config }: { config: PageConfig }) {
+  const navigate = useBbNavigate();
+  const url = config.formUrl;
+  useEffect(() => {
+    if (url && shouldAutoOpen()) openInOwnBrowser(url, (link) => navigate.openUrl(link));
+  }, [url, navigate]);
+  return (
+    <div className="brb-root">
+      <div className="brb-page brb-open" data-testid="brb-open">
+        {url ? (
+          <button type="button" className="brb-button brb-primary" onClick={() => openInOwnBrowser(url, (link) => navigate.openUrl(link))}>
+            Open the form
+          </button>
+        ) : (
+          <p className="brb-error" role="alert">{config.problem ?? "There is no form yet: the plugin settings have no form address."}</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -293,6 +319,8 @@ export function ReportPage() {
 
   if (loadError) return <div className="brb-root"><div className="brb-page"><p className="brb-error" role="alert">The page could not load its settings: {loadError}</p></div></div>;
   if (!config) return <div className="brb-root"><div className="brb-page"><p className="brb-muted">Loading…</p></div></div>;
+
+  if (config.mode === "open") return <OpenForm config={config} />;
 
   if (!config.canSend) {
     return (
