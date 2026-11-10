@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-fleet-kit",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "type": "module",
   "engines": {
     "bb": ">=0.48",
@@ -10,7 +10,7 @@
     "name": "Fleet Kit",
     "description": "Keeps this bb in line with a build manifest: installs, updates and removes plugins, holds bb settings, and configures OpenCode models with keys kept in the OS credential store.",
     "branding": {
-      "icon": "PackageReceive"
+      "icon": "Target"
     },
     "server": "./server.ts",
     "app": "./app.tsx",
