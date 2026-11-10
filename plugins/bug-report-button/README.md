@@ -18,12 +18,26 @@ person's own API key. Until sending is set up, the page links to the form in the
 | Setting | Meaning |
 | --- | --- |
 | `formUrl` | The form in a browser. The page links to it, and only links to it while `submitUrl` is empty |
+| `sendMode` | `form` (default) posts to `submitUrl`; `open` only opens `formUrl` in the browser; `rest`, see below |
 | `label` | A heading on the page, for example in the people's own language. Empty shows nothing extra |
 | `submitUrl` | Where the plugin posts the report as `multipart/form-data`. Empty turns sending off |
 | `submitFields` | JSON object: form field name → text with `{subject}`, `{description}` and `{context}`. Empty: `{"subject":"{subject}","description":"{description}"}` |
 | `fileField` | Form field name for the pictures (default `file`). Empty sends no pictures and hides them on the page |
 | `fileMode` | `combine` (default) joins several pictures into one, for a form that takes a single file; `separate` sends each as its own file under the same field name |
 | `recordUrl` | Address of a record with `{key}`, for a form that answers with a key such as `ABC-12` but no link |
+
+### Open mode
+
+With `sendMode` = `open` the bug only opens the form (`formUrl`) in the person's own browser, where they are signed in,
+attach files and see the record the form creates. bb has no sidebar item that is a plain link, so the click opens the
+plugin page and the page opens the form at once: in the desktop app through its "open in the external browser" bridge
+(not bb's built-in browser, which has no session in the tracker), in the web app as a new tab. The page itself holds
+one **Open the form** button and nothing else, for another go or for a browser that refused the new tab.
+
+```sh
+bb plugin config bug-report-button set sendMode open
+bb plugin config bug-report-button set formUrl "https://forms.example.com/bugs/new"
+```
 
 ### REST mode
 

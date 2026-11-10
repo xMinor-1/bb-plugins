@@ -52,8 +52,8 @@ export const rpcContract = defineRpcContract({
       /** Pictures can be picked but do not go with the report: the page keeps them and points to the form. */
       picturesStay: z.boolean(),
       problem: z.string().nullable(),
-      /** "form": multipart to a form address; "rest": JSON to a tracker's API with the person's key. */
-      mode: z.enum(["form", "rest"]),
+      /** "form": multipart to a form address; "rest": JSON to a tracker's API with the person's key; "open": the bug only opens the form in the browser. */
+      mode: z.enum(["form", "rest", "open"]),
       /** REST: the person's key on their machine, null when it could not be checked. */
       key: keyStatusSchema.nullable(),
       keyHelp: z.string(),
@@ -135,8 +135,8 @@ export default function bugReportButton(bb: BbPluginApi) {
     sendMode: {
       type: "string",
       label: "Send mode",
-      description: '"form": multipart/form-data to the submit address. "rest": JSON to a tracker\'s API with the person\'s own API key, kept in their OS key store.',
-      experimental_schema: z.enum(["form", "rest"]),
+      description: '"form": multipart/form-data to the submit address. "rest": JSON to a tracker\'s API with the person\'s own API key, kept in their OS key store. "open": the sidebar bug only opens the form (Form address) in the browser, with no fields on the page.',
+      experimental_schema: z.enum(["form", "rest", "open"]),
       default: "form",
     },
     apiBaseUrl: {
@@ -224,6 +224,21 @@ export default function bugReportButton(bb: BbPluginApi) {
     config: async () => {
       const values = await settings.get();
       const { url, label } = readConfig(values);
+      if (values.sendMode === "open") {
+        return {
+          label,
+          formUrl: url,
+          canSend: false,
+          canAttach: false,
+          combine: false,
+          picturesStay: false,
+          problem: url ? null : "There is no form yet: the plugin settings have no form address.",
+          mode: "open" as const,
+          key: null,
+          keyHelp: "",
+          keyProblem: null,
+        };
+      }
       if (values.sendMode === "rest") {
         const rest = readRestConfig(values);
         const canSend = !("error" in rest);
@@ -277,6 +292,7 @@ export default function bugReportButton(bb: BbPluginApi) {
     },
     send: async ({ subject, description, client, images }) => {
       const values = await settings.get();
+      if (values.sendMode === "open") return { ok: false as const, error: "Sending from bb is off: the report is made in the form in the browser." };
       const context = [`Bug Report Button ${VERSION}`.trim(), `${platform()} ${release()} ${arch()}`, client.trim()].filter(Boolean).join("\n");
       if (values.sendMode === "rest") {
         const rest = readRestConfig(values);

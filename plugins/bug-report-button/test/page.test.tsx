@@ -3,12 +3,13 @@ import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReportPage } from "../components/ReportPage";
+import { openInOwnBrowser, REOPEN_AFTER_MS, resetAutoOpen, shouldAutoOpen } from "../src/open";
 import type { rpcContract } from "../server";
 
 type KeyStatus = { hasKey: boolean; source: "own" | "shared" | null; keyStore: "keychain" | "credential-manager" | "file" | null };
 type Config = {
   label: string; formUrl: string; canSend: boolean; canAttach: boolean; combine: boolean; picturesStay: boolean; problem: string | null;
-  mode: "form" | "rest"; key: KeyStatus | null; keyHelp: string; keyProblem: string | null;
+  mode: "form" | "rest" | "open"; key: KeyStatus | null; keyHelp: string; keyProblem: string | null;
 };
 type SendInput = { subject: string; description: string; client: string; images: Array<{ name: string; type: string; base64: string }> };
 
@@ -229,5 +230,74 @@ describe("plugin app", () => {
     expect(app.navPanels.map((panel) => [panel.id, panel.path, panel.title, panel.icon])).toEqual([["report", "report", "Bug report", "bug-report-button.bug"]]);
     expect(app.contentScripts ?? []).toHaveLength(0);
     expect(app.appOverlays).toHaveLength(0);
+  });
+});
+
+describe("open mode: the bug only opens the form", () => {
+  const OPEN: Config = { ...READY, canSend: false, canAttach: false, mode: "open" };
+  beforeEach(() => resetAutoOpen());
+  afterEach(() => {
+    delete (window as { bbDesktop?: unknown }).bbDesktop;
+  });
+
+  it("opens the form in the person's browser through the desktop app, once per mount, and shows only the button", async () => {
+    const opened: string[] = [];
+    (window as { bbDesktop?: unknown }).bbDesktop = { openExternalUrl: (url: string) => void opened.push(url) };
+    const { slot } = render(OPEN);
+    const button = await screen.findByRole("button", { name: "Open the form" });
+    expect(opened).toEqual([FORM]);
+    expect(slot.inspection.navigateCalls).toEqual([]);
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByText(/Drop pictures/)).toBeNull();
+    expect(screen.queryByTestId("brb-key")).toBeNull();
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+
+    fireEvent.click(button);
+    expect(opened).toEqual([FORM, FORM]);
+  });
+
+  it("in the web app opens through bb's own openUrl", async () => {
+    const { slot } = render(OPEN);
+    await screen.findByRole("button", { name: "Open the form" });
+    await waitFor(() => expect(slot.inspection.navigateCalls).toEqual([{ method: "openUrl", url: FORM }]));
+  });
+
+  it("a second mount right after the first opens nothing more", async () => {
+    const opened: string[] = [];
+    (window as { bbDesktop?: unknown }).bbDesktop = { openExternalUrl: (url: string) => void opened.push(url) };
+    render(OPEN);
+    await screen.findByRole("button", { name: "Open the form" });
+    cleanup();
+    render(OPEN);
+    await screen.findByRole("button", { name: "Open the form" });
+    expect(opened).toEqual([FORM]);
+  });
+
+  it("without a form address says so and opens nothing", async () => {
+    const opened: string[] = [];
+    (window as { bbDesktop?: unknown }).bbDesktop = { openExternalUrl: (url: string) => void opened.push(url) };
+    render({ ...OPEN, formUrl: "", problem: "There is no form yet: the plugin settings have no form address." });
+    expect((await screen.findByRole("alert")).textContent).toMatch(/no form address/);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(opened).toEqual([]);
+  });
+});
+
+describe("opening in the person's browser", () => {
+  it("refuses anything but http(s) and falls back to openUrl when the desktop bridge throws", () => {
+    const calls: string[] = [];
+    const openUrl = (url: string) => (calls.push(url), true);
+    expect(openInOwnBrowser("javascript:alert(1)", openUrl, { bbDesktop: { openExternalUrl: () => calls.push("desktop") } })).toBe(false);
+    expect(openInOwnBrowser(FORM, openUrl, { bbDesktop: { openExternalUrl: () => { throw new Error("gone"); } } })).toBe(true);
+    expect(calls).toEqual([FORM]);
+  });
+
+  it("opens again after the guard window", () => {
+    resetAutoOpen();
+    expect(shouldAutoOpen(1000)).toBe(true);
+    expect(shouldAutoOpen(1000 + REOPEN_AFTER_MS - 1)).toBe(false);
+    expect(shouldAutoOpen(1000 + REOPEN_AFTER_MS)).toBe(true);
   });
 });
