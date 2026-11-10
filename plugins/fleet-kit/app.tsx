@@ -506,7 +506,7 @@ export default definePluginApp((app) => {
   app.slots.navPanel({
     id: "fleet-kit",
     title: "Fleet Kit",
-    icon: "PackageReceive",
+    icon: "Target",
     path: PANEL_PATH,
     component: FleetKitPanel,
     experimental_useBadge: useSetupBadge,
