@@ -10,6 +10,7 @@ import type { MeetingInput } from "../contract";
 import type { ConfirmOutcome, MeetingSummary, SendSummary } from "../src/host/confirm";
 import { openFileSecretStore } from "../src/host/secret-store";
 import { MailService } from "../src/host/service";
+import { eventId } from "../src/host/calendar";
 
 const STUB = process.env.EWS_STUB_URL;
 if (!STUB) throw new Error("Set EWS_STUB_URL (test/stub/run.sh prints it)");
@@ -312,5 +313,71 @@ describe("finding a time with other people", () => {
     const asked = (await state()).availability[0]!;
     expect(asked).toEqual({ emails: ["bob@example.test", "carol@example.test", "ghost@nowhere.test"], start: "2026-11-09T21:00:00Z", end: "2026-11-10T21:00:00Z" });
     expect(await writes()).toEqual([]);
+  });
+});
+
+describe("other people's calendars, read only", () => {
+  it("shows a calendar its owner shared, without ids, and nothing in it can be proposed", async () => {
+    const { text, isError } = await service.tool({ tool: "otherEvents", mailbox: "Bob Builder <bob@example.test>", from: "2026-11-11" });
+    expect(isError).toBe(false);
+    expect(text).toContain("Calendar of bob@example.test from Wed 2026-11-11 00:00 to Thu 2026-11-12 00:00 (times UTC+3): 3 events.");
+    expect(text).toContain("- 10:00–12:00 Site visit — Building 3 (2 invited; they organize it)");
+    expect(text).toContain("- 13:00–14:00 (private, busy)");
+    expect(text).not.toContain("Dentist");
+    expect(text).toContain("- 15:00–16:00 Budget review (organizer Кэрол Тестова; 2 invited; they accepted)");
+    expect(text).not.toMatch(/\[e[a-z0-9]{12}\]/);
+    const shared = (await fetch(`${STUB}/__state`).then((r) => r.json())) as { sharedViews: string[]; shared: Record<string, string[]> };
+    expect(shared.sharedViews).toEqual(["bob@example.test"]);
+    // Their events are not the user's: no proposal can name one, even by the id it would have.
+    for (const itemId of shared.shared["bob@example.test"]!) {
+      const out = await service.tool({ tool: "meeting", threadId: THREAD, proposal: { action: "cancel", event: eventId(itemId) } });
+      expect(out.isError).toBe(true);
+      expect(out.text).toMatch(/Unknown event/);
+    }
+    expect(await writes()).toEqual([]);
+  });
+
+  it("says a calendar not shared with the user shows only free/busy, and an unknown address has no mailbox", async () => {
+    const carol = await service.tool({ tool: "otherEvents", mailbox: "carol@example.test" });
+    expect(carol).toMatchObject({ isError: true });
+    expect(carol.text).toContain("The calendar of carol@example.test is not shared with the user, so only their free/busy is visible: use calendar_availability");
+    const ghost = await service.tool({ tool: "otherEvents", mailbox: "ghost@nowhere.test" });
+    expect(ghost).toMatchObject({ isError: true });
+    expect(ghost.text).toContain("Exchange has no mailbox for ghost@nowhere.test");
+    expect(await writes()).toEqual([]);
+  });
+
+  it("gives other people's free/busy and their common free time, without the user's calendar", async () => {
+    const { text, isError } = await service.tool({ tool: "availability", people: ["bob@example.test", "Кэрол <carol@example.test>"], from: "2026-11-10" });
+    expect(isError).toBe(false);
+    expect(text).toContain("bob@example.test:\n  Tue 2026-11-10\n  - 10:00–12:00 busy\n  - 14:00–15:00 tentative");
+    expect(text).toContain("carol@example.test:\n  Tue 2026-11-10\n  - 12:00–13:00 away");
+    expect(text).toContain("Tue 2026-11-10: 09:00–10:00, 13:00–14:00, 15:00–18:00");
+    const after = (await fetch(`${STUB}/__state`).then((r) => r.json())) as { calendarViews: unknown[]; availability: unknown[] };
+    expect(after.availability).toEqual([{ emails: ["bob@example.test", "carol@example.test"], start: "2026-11-09T21:00:00Z", end: "2026-11-10T21:00:00Z" }]);
+    expect(after.calendarViews).toEqual([]);
+    expect(await writes()).toEqual([]);
+  });
+});
+
+describe("the time zone a call names", () => {
+  it("shows times and reads local ones in it, whatever the computer's zone", async () => {
+    const data = await mkdtemp(join(dir, "zone-"));
+    const zoned = new MailService({ dataDir: data, secrets: openFileSecretStore(join(data, "secrets")), allowLocalHttp: true, now: () => Date.UTC(2026, 9, 31, 9, 0) });
+    try {
+      await zoned.saveConnection({ url: EWS, auth: "password", user: "STUB\\alice", password: PASSWORD });
+      const ekb = await zoned.tool({ tool: "events", from: "2026-11-10" }, undefined, "Asia/Yekaterinburg");
+      expect(ekb.text).toContain("(times Asia/Yekaterinburg, UTC+5)");
+      expect(ekb.text).toMatch(/\] 12:00–12:15 Daily stand-up/);
+      const msk = await zoned.tool({ tool: "events", from: "2026-11-10" }, undefined, "Europe/Moscow");
+      expect(msk.text).toContain("(times Europe/Moscow, UTC+3)");
+      expect(msk.text).toMatch(/\] 10:00–10:15 Daily stand-up/);
+      // "14:00" an agent writes is Moscow's 14:00.
+      const out = await zoned.tool({ tool: "meeting", threadId: THREAD, proposal: { action: "create", subject: "Zoned", start: "2026-11-10T14:00", end: "2026-11-10T15:00" } }, undefined, "Europe/Moscow");
+      expect(out.text).toContain("Tue 2026-11-10 14:00–15:00 (Europe/Moscow, UTC+3)");
+      expect((await zoned.meeting(out.meetingId!, THREAD))!.after).toMatchObject({ start: "2026-11-10T11:00:00.000Z", end: "2026-11-10T12:00:00.000Z" });
+    } finally {
+      zoned.close();
+    }
   });
 });

@@ -9,7 +9,10 @@ calendar (recurring meetings already expanded, as Exchange does). Meetings:
 GetItem of a calendar item and of a series' master (RecurringMasterItemId),
 CreateItem of a CalendarItem, UpdateItem of one with NeverOverwrite,
 CancelCalendarItem, AcceptItem / TentativelyAcceptItem / DeclineItem, DeleteItem
-of an appointment, and GetUserAvailability (FreeBusy view). Mail about meetings
+of an appointment, and GetUserAvailability (FreeBusy view). Other people's
+calendars: a CalendarView of another mailbox's calendar folder — Bob shared
+his, everyone else in the directory gets ErrorAccessDenied, an unknown address
+ErrorNonExistentMailbox; each read is recorded as "sharedViews". Mail about meetings
 is recorded in /__state as "meetingMail". Line breaks go out as &#xD; like Exchange's. Sign-in is real NTLMv2 (checked against a known password)
 or Basic; Negotiate is offered but cannot succeed, like a server that has no
 Kerberos ticket for the caller. The mailbox is synthetic.
@@ -218,7 +221,8 @@ def seed() -> None:
     STATE.clear()
     STATE_MASTERS.clear()
     STATE.update({"items": items, "sent": [], "requests": [], "downloads": [], "lookups": [], "calendar": calendar_seed(), "masters": STATE_MASTERS,
-                  "calendarViews": [], "meetingMail": [], "availability": [], "signIns": 0, "refused": 0})
+                  "calendarViews": [], "sharedViews": [], "meetingMail": [], "availability": [], "signIns": 0, "refused": 0,
+                  "shared": shared_seed()})
 
 
 def attachment(name, size):
@@ -340,6 +344,19 @@ def calendar_seed():
 
 
 STATE_MASTERS: dict = {}
+
+
+def shared_seed():
+    """Bob's calendar, which he shared with the user: his own copies, with ids of his mailbox."""
+    def event(subject, start, end, *, response="Organizer", show="Busy", sensitivity="Normal", location="", to="", organizer=None):
+        return {"id": new_id(), "key": new_key(), "subject": subject, "start": start, "end": end, "organizer": organizer or {"name": "Bob Builder", "email": "bob@example.test"},
+                "response": response, "show": show, "kind": "Single", "allDay": False, "location": location, "cancelled": False, "meeting": True,
+                "sensitivity": sensitivity, "to": to, "cc": "", "required": [], "optional": [], "rooms": [], "master": None, "body": ""}
+    return {"bob@example.test": [
+        event("Site visit", utc(11, 7), utc(11, 9), location="Building 3", to="Bob Builder; Denis Orlov"),
+        event("Dentist", utc(11, 10), utc(11, 11), sensitivity="Private", location="Clinic"),
+        event("Budget review", utc(11, 12), utc(11, 13), response="Accept", organizer=CAROL, to="Bob Builder; Alice Example"),
+    ]}
 
 # Busy times others have, in UTC: GetUserAvailability answers with these only.
 FREE_BUSY = {
@@ -544,6 +561,15 @@ def respond_or_cancel(op_el, new, kind) -> bytes:
     return ok(op, "<m:Items/>")
 
 
+def time_zone_fault() -> bytes:
+    return envelope(
+        '<s:Fault><faultcode xmlns:a="http://schemas.microsoft.com/exchange/services/2006/types">a:ErrorTimeZone</faultcode>'
+        "<faultstring xml:lang=\"en-US\">The specified time zone isn't valid.</faultstring><detail>"
+        '<e:ResponseCode xmlns:e="http://schemas.microsoft.com/exchange/services/2006/errors">ErrorTimeZone</e:ResponseCode>'
+        "<e:Message xmlns:e=\"http://schemas.microsoft.com/exchange/services/2006/errors\">The specified time zone isn't valid.</e:Message></detail></s:Fault>"
+    )
+
+
 def availability(op_el) -> bytes:
     window = op_el.find("t:FreeBusyViewOptions/t:TimeWindow", NS)
     if op_el.find("t:TimeZone", NS) is None or window is None:
@@ -551,6 +577,11 @@ def availability(op_el) -> bytes:
     if op_el.findtext("t:FreeBusyViewOptions/t:RequestedView", namespaces=NS) != "FreeBusy":
         raise SchemaError("only the FreeBusy view: other people's subjects stay with them")
     check_order(op_el, ["TimeZone", "MailboxDataArray", "FreeBusyViewOptions", "SuggestionsViewOptions"], "GetUserAvailabilityRequest")
+    # Like Exchange: a zone whose standard and daylight time begin on the same date is refused, as a SOAP fault.
+    zone = op_el.find("t:TimeZone", NS)
+    rule = lambda tag: tuple(zone.findtext(f"t:{tag}/t:{part}", namespaces=NS) for part in ("Time", "DayOrder", "Month", "DayOfWeek"))
+    if None in rule("StandardTime") or None in rule("DaylightTime") or rule("StandardTime") == rule("DaylightTime"):
+        return time_zone_fault()
     start = parse_utc(window.findtext(T + "StartTime") + "Z")
     end = parse_utc(window.findtext(T + "EndTime") + "Z")
     emails = [data.findtext("t:Email/t:Address", namespaces=NS) for data in op_el.findall("m:MailboxDataArray/t:MailboxData", NS)]
@@ -567,6 +598,20 @@ def availability(op_el) -> bytes:
         answers.append('<m:FreeBusyResponse><m:ResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode></m:ResponseMessage>'
                        f"<m:FreeBusyView><t:FreeBusyViewType>FreeBusy</t:FreeBusyViewType><t:CalendarEventArray>{events}</t:CalendarEventArray></m:FreeBusyView></m:FreeBusyResponse>")
     return envelope(f"<m:GetUserAvailabilityResponse><m:FreeBusyResponseArray>{''.join(answers)}</m:FreeBusyResponseArray></m:GetUserAvailabilityResponse>")
+
+
+def shared_view(op_el, view, owner: str) -> bytes:
+    """Another person's calendar: only if they shared it with the user."""
+    STATE["sharedViews"].append(owner)
+    if owner not in STATE["shared"]:
+        if any(p["email"] == owner for p in DIRECTORY) or owner in FREE_BUSY:
+            return error("FindItem", "ErrorAccessDenied", "Access is denied. Check credentials and try again.")
+        return error("FindItem", "ErrorNonExistentMailbox", "The SMTP address has no mailbox associated with it.")
+    start = datetime.datetime.fromisoformat(view.get("StartDate").replace("Z", "+00:00"))
+    end = datetime.datetime.fromisoformat(view.get("EndDate").replace("Z", "+00:00"))
+    at = lambda text: datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    found = sorted((e for e in STATE["shared"][owner] if at(e["start"]) < end and at(e["end"]) > start), key=lambda e: e["start"])
+    return ok("FindItem", f'<m:RootFolder TotalItemsInView="{len(found)}" IncludesLastItemInRange="true"><t:Items>{"".join(calendar_xml(e) for e in found)}</t:Items></m:RootFolder>')
 
 
 def calendar_view(op_el, view) -> bytes:
@@ -727,6 +772,9 @@ def handle_soap(raw: bytes) -> bytes:
         calendar = op_el.find("m:CalendarView", NS)
         if (folder == "calendar") != (calendar is not None):
             raise SchemaError("the calendar folder is read with a CalendarView, and only it")
+        owner = op_el.findtext("m:ParentFolderIds/t:DistinguishedFolderId/t:Mailbox/t:EmailAddress", namespaces=NS)
+        if calendar is not None and owner and owner != SELF["email"]:
+            return shared_view(op_el, calendar, owner)
         if calendar is not None:
             return calendar_view(op_el, calendar)
         if folder not in FOLDERS:
@@ -962,7 +1010,7 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 drafts = [{"id": i["id"], "subject": i["subject"], "to": i["to"], "body": i["body"], "attachments": [a["name"] for a in i["attachments"]]}
                           for i in STATE["items"].values() if i["folder"] == "drafts"]
-                body = json.dumps({"sent": STATE["sent"], "drafts": drafts, "requests": STATE["requests"], "downloads": STATE["downloads"], "lookups": STATE["lookups"], "calendarViews": STATE["calendarViews"],
+                body = json.dumps({"sent": STATE["sent"], "drafts": drafts, "requests": STATE["requests"], "downloads": STATE["downloads"], "lookups": STATE["lookups"], "calendarViews": STATE["calendarViews"], "sharedViews": STATE["sharedViews"], "shared": {owner: [e["id"] for e in events] for owner, events in STATE["shared"].items()},
                                    "meetingMail": STATE["meetingMail"], "availability": STATE["availability"],
                                    "calendar": [{k: e[k] for k in ("id", "subject", "start", "end", "location", "cancelled", "response", "kind", "body")} | {"attendees": everyone(e)} for e in STATE["calendar"]],
                                    "masters": [{k: e[k] for k in ("id", "subject", "start", "end")} for e in STATE_MASTERS.values()],

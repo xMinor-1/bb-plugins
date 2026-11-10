@@ -1,4 +1,5 @@
-// The calendar for a week, Monday to Sunday, in the browser's time zone:
+// The calendar for a week, Monday to Sunday, in the plugin's time zone (Moscow
+// unless the settings name another; src/app/time-zone.tsx):
 // every occurrence of a recurring meeting on its own day, moved ones marked,
 // cancelled ones struck through. From here the person creates a meeting,
 // changes or cancels one they organize and answers invitations: each becomes a
@@ -11,6 +12,8 @@ import { meetingTexts } from "./meeting-messages";
 import { Button } from "@/components/ui/button";
 import { defineMessages, intlLocale, pluralRu, useLang, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { fromWallTime, wallTime } from "../shared/zone";
+import { addDays, intlZone, startOfDay, useTimeZone, zoneText } from "./time-zone";
 import { Notice, errorText } from "./ui";
 import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
@@ -38,6 +41,7 @@ const texts = defineMessages(
     invited: "Invited",
     more: "This week has more events than shown here. Outlook shows them all.",
     events: (n: number) => `${n} ${n === 1 ? "event" : "events"}`,
+    zone: (zone: string) => `Times: ${zone}`,
   },
   {
     previous: "Предыдущая неделя",
@@ -61,6 +65,7 @@ const texts = defineMessages(
     invited: "Приглашены",
     more: "На этой неделе событий больше, чем показано. Все они есть в Outlook.",
     events: (n) => `${n} ${pluralRu(n, ["событие", "события", "событий"])}`,
+    zone: (zone) => `Время: ${zone}`,
   },
 );
 
@@ -74,42 +79,37 @@ const WRAP = "h-auto min-h-8 max-w-full whitespace-normal break-words py-1 text-
 
 const WEEK_COLUMNS = "repeat(auto-fill, minmax(max(7.5rem, calc((100% - 3rem) / 7)), 1fr))";
 
-/** Monday 00:00 of the week holding `date`, in the browser's time zone. */
-export function weekStart(date: Date): Date {
-  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const fromMonday = (start.getDay() + 6) % 7;
-  start.setDate(start.getDate() - fromMonday);
-  return start;
+/** Monday 00:00 of the week holding `date`, in the zone (null: the browser's). */
+export function weekStart(date: Date, zone: string | null = null): Date {
+  const t = wallTime(date.getTime(), zone);
+  return new Date(fromWallTime(t.year, t.month, t.day - ((t.weekday + 6) % 7), 0, 0, zone));
 }
 
-const addDays = (date: Date, days: number) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
-
 /**
- * The local midnight nearest to a moment. An all-day event runs from midnight
- * to midnight of the mailbox's time zone; in a browser a few hours east or west
- * of it, that midnight is the nearest one to the event's start.
+ * The midnight nearest to a moment, in the zone. An all-day event runs from
+ * midnight to midnight of the mailbox's time zone; shown in a zone a few hours
+ * east or west of it, that midnight is the nearest one to the event's start.
  */
-function nearestMidnight(ms: number): Date {
-  const at = new Date(ms);
-  const before = new Date(at.getFullYear(), at.getMonth(), at.getDate());
-  const after = addDays(before, 1);
+function nearestMidnight(ms: number, zone: string | null): Date {
+  const before = startOfDay(ms, zone);
+  const after = addDays(before, 1, zone);
   return ms - before.getTime() <= after.getTime() - ms ? before : after;
 }
 
 /** Whether an event belongs on a day: all-day ones on the dates they were made for, the rest wherever they take time. */
-function onDay(event: CalendarEvent, day: Date): boolean {
+function onDay(event: CalendarEvent, day: Date, zone: string | null): boolean {
   const start = Date.parse(event.start);
   const end = Date.parse(event.end);
-  if (!event.allDay) return start < addDays(day, 1).getTime() && end > day.getTime();
-  const first = nearestMidnight(start);
+  if (!event.allDay) return start < addDays(day, 1, zone).getTime() && end > day.getTime();
+  const first = nearestMidnight(start, zone);
   // A day may be 23 or 25 hours long when the clocks change.
   const days = Math.max(1, Math.round((end - start) / (24 * 60 * 60_000)));
-  return day.getTime() >= first.getTime() && day.getTime() < addDays(first, days).getTime();
+  return day.getTime() >= first.getTime() && day.getTime() < addDays(first, days, zone).getTime();
 }
 
 /** The events of a day, all-day ones first, then by start. */
-export function eventsOfDay(events: readonly CalendarEvent[], day: Date): CalendarEvent[] {
-  return events.filter((event) => onDay(event, day)).sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.localeCompare(b.start));
+export function eventsOfDay(events: readonly CalendarEvent[], day: Date, zone: string | null = null): CalendarEvent[] {
+  return events.filter((event) => onDay(event, day, zone)).sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.localeCompare(b.start));
 }
 
 export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc; hostId: string; now?: () => Date }) {
@@ -120,7 +120,8 @@ export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc
   /** Proposals made here, newest first, each with its own card until the page is left. */
   const [pending, setPending] = useState<string[]>([]);
   const explain = useExplain();
-  const [start, setStart] = useState(() => weekStart(now()));
+  const zone = useTimeZone();
+  const [start, setStart] = useState(() => weekStart(now(), zone));
   const [events, setEvents] = useState<CalendarEvent[] | null>(null);
   const [more, setMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,7 +134,7 @@ export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc
     setEvents(null);
     setMore(false);
     setError(null);
-    rpc.call("calendar", { hostId, start: start.toISOString(), end: addDays(start, 7).toISOString() }).then(
+    rpc.call("calendar", { hostId, start: start.toISOString(), end: addDays(start, 7, zone).toISOString() }).then(
       (result) => {
         if (request !== latest.current) return;
         setEvents(result.events);
@@ -143,7 +144,7 @@ export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc
         if (request === latest.current) setError(errorText(cause));
       },
     );
-  }, [rpc, hostId, start]);
+  }, [rpc, hostId, start, zone]);
 
   useEffect(() => {
     load();
@@ -152,11 +153,12 @@ export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc
   }, [load]);
 
   const locale = intlLocale(lang);
-  const range = new Intl.DateTimeFormat(locale, { day: "numeric", month: "long", year: "numeric" });
-  const dayName = new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short" });
-  const time = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" });
-  const today = weekStart(now()).getTime() === start.getTime() ? new Date(now().getFullYear(), now().getMonth(), now().getDate()).getTime() : null;
-  const days = Array.from({ length: 7 }, (_, n) => addDays(start, n));
+  const timeZone = intlZone(zone);
+  const range = new Intl.DateTimeFormat(locale, { day: "numeric", month: "long", year: "numeric", timeZone });
+  const dayName = new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short", timeZone });
+  const time = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", timeZone });
+  const today = weekStart(now(), zone).getTime() === start.getTime() ? startOfDay(now().getTime(), zone).getTime() : null;
+  const days = Array.from({ length: 7 }, (_, n) => addDays(start, n, zone));
 
   const when = (event: CalendarEvent, day: Date) => {
     if (event.allDay) return t.allDay;
@@ -164,8 +166,9 @@ export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc
     const to = Date.parse(event.end);
     // A meeting that runs over midnight shows where it starts and ends on each day.
     const shownFrom = Math.max(from, day.getTime());
-    const shownTo = Math.min(to, addDays(day, 1).getTime());
-    return `${time.format(shownFrom)}–${shownTo === addDays(day, 1).getTime() ? "24:00" : time.format(shownTo)}`;
+    const midnight = addDays(day, 1, zone).getTime();
+    const shownTo = Math.min(to, midnight);
+    return `${time.format(shownFrom)}–${shownTo === midnight ? "24:00" : time.format(shownTo)}`;
   };
 
   const badges = (event: CalendarEvent) =>
@@ -181,17 +184,18 @@ export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-medium">
-          {range.formatRange(start, addDays(start, 6))}
+          {range.formatRange(start, addDays(start, 6, zone))}
           {events ? <span className="ml-2 font-normal text-muted-foreground">{t.events(events.length)}</span> : null}
+          <span className="ml-2 text-xs font-normal text-muted-foreground">{t.zone(zoneText(zone, start.getTime()))}</span>
         </h2>
         <div className="flex flex-wrap gap-1">
-          <Button size="sm" variant="ghost" aria-label={t.previous} onClick={() => setStart((week) => addDays(week, -7))}>
+          <Button size="sm" variant="ghost" aria-label={t.previous} onClick={() => setStart((week) => addDays(week, -7, zone))}>
             ‹
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setStart(weekStart(now()))}>
+          <Button size="sm" variant="ghost" onClick={() => setStart(weekStart(now(), zone))}>
             {t.today}
           </Button>
-          <Button size="sm" variant="ghost" aria-label={t.next} onClick={() => setStart((week) => addDays(week, 7))}>
+          <Button size="sm" variant="ghost" aria-label={t.next} onClick={() => setStart((week) => addDays(week, 7, zone))}>
             ›
           </Button>
           <Button size="sm" variant="ghost" onClick={() => load()}>
@@ -231,7 +235,7 @@ export function CalendarWeek({ rpc, hostId, now = () => new Date() }: { rpc: Rpc
       {events ? (
         <ol className="grid gap-2" style={{ gridTemplateColumns: WEEK_COLUMNS }}>
           {days.map((day) => {
-            const list = eventsOfDay(events, day);
+            const list = eventsOfDay(events, day, zone);
             const isToday = today === day.getTime();
             return (
               <li key={day.getTime()} className={cn("min-w-0 rounded-lg border border-border p-2", isToday && "border-foreground/40 bg-muted/30")} aria-current={isToday ? "date" : undefined}>

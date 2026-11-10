@@ -15,12 +15,15 @@ export function formatAddress(address: MailAddress | null): string {
 
 const two = (n: number) => String(n).padStart(2, "0");
 
-/** "2026-10-31 13:02 UTC+3" in this machine's time zone. */
-export function formatTime(iso: string | null, offsetMinutes?: number): string {
+/** Minutes east of UTC: fixed, or looked up at the moment (a named zone); omitted, this machine's zone. */
+export type OffsetMinutes = number | ((ms: number) => number);
+
+/** "2026-10-31 13:02 UTC+3" in the plugin's time zone. */
+export function formatTime(iso: string | null, offsetMinutes?: OffsetMinutes): string {
   if (!iso) return "(no date)";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  const offset = offsetMinutes ?? -date.getTimezoneOffset();
+  const offset = typeof offsetMinutes === "function" ? offsetMinutes(date.getTime()) : (offsetMinutes ?? -date.getTimezoneOffset());
   const local = new Date(date.getTime() + offset * 60_000);
   const sign = offset >= 0 ? "+" : "-";
   const abs = Math.abs(offset);
@@ -28,14 +31,14 @@ export function formatTime(iso: string | null, offsetMinutes?: number): string {
   return `${local.getUTCFullYear()}-${two(local.getUTCMonth() + 1)}-${two(local.getUTCDate())} ${two(local.getUTCHours())}:${two(local.getUTCMinutes())} UTC${sign}${zone}`;
 }
 
-function summaryLine(message: MessageSummary, offsetMinutes?: number): string {
+function summaryLine(message: MessageSummary, offsetMinutes?: OffsetMinutes): string {
   const flags = [message.isRead ? null : "unread", message.hasAttachments ? "attachments" : null, message.kind !== "Message" ? message.kind : null].filter(Boolean);
   const head = `[${message.ref}] ${formatTime(message.received, offsetMinutes)} | ${formatAddress(message.from)} | ${message.subject || "(no subject)"}${flags.length ? ` | ${flags.join(", ")}` : ""}`;
   const preview = message.preview ? `\n    ${message.preview.slice(0, 200)}` : "";
   return head + preview;
 }
 
-export function formatList(title: string, messages: readonly MessageSummary[], more: boolean, offsetMinutes?: number): string {
+export function formatList(title: string, messages: readonly MessageSummary[], more: boolean, offsetMinutes?: OffsetMinutes): string {
   if (messages.length === 0) return `${title}: no messages.`;
   const lines = messages.map((m) => summaryLine(m, offsetMinutes));
   return `${title} (${messages.length}${more ? ", more available" : ""}, newest first). Read one with mail_read and its [ref].\n\n${lines.join("\n")}`;
@@ -48,7 +51,7 @@ function size(bytes: number | null): string {
   return ` (${(bytes / 1048576).toFixed(1)} MB)`;
 }
 
-export function formatMessage(message: MailMessage, maxChars: number, offsetMinutes?: number): string {
+export function formatMessage(message: MailMessage, maxChars: number, offsetMinutes?: OffsetMinutes): string {
   const body = readableText(message.body);
   // Pictures inside an HTML message's text (signature logos and the like) are not listed.
   const files = message.attachments.filter((a) => !(a.inline && message.bodyFormat === "html"));
@@ -95,7 +98,7 @@ export function formatAttachment(ref: string, index: number, name: string, text:
   );
 }
 
-export function formatConversation(ref: string, messages: readonly MessageSummary[], offsetMinutes?: number): string {
+export function formatConversation(ref: string, messages: readonly MessageSummary[], offsetMinutes?: OffsetMinutes): string {
   if (messages.length <= 1) return `Message ${ref} is the only one of its conversation in Inbox and Sent Items.`;
   const lines = messages.map((m) => `${m.ref === ref ? "* " : "  "}${summaryLine(m, offsetMinutes)}`);
   return `Conversation of ${ref}: ${messages.length} messages in Inbox and Sent Items, oldest first (* marks ${ref}). Read one with mail_read.\n\n${lines.join("\n")}`;

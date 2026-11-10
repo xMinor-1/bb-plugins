@@ -15,6 +15,8 @@ import { meetingTexts } from "./meeting-messages";
 import { Notice, errorText } from "./ui";
 import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
+import { wallTime } from "../shared/zone";
+import { TimeZoneContext, intlZone, useTimeZone, zoneText } from "./time-zone";
 
 type Texts = (typeof meetingTexts)["en"];
 export type MeetingTarget = { hostId: string } | { threadId: string };
@@ -28,20 +30,24 @@ function notDone(t: Texts, result: Exclude<MeetingResult, { status: "done" }>): 
   return { cancelled: t.cancelled, timeout: t.timeout, unavailable: t.unavailable, busy: t.busy }[result.reason];
 }
 
-/** "Tue, 10 Nov, 14:00–15:00" in the browser's time zone. */
+/** "Tue, 10 Nov, 14:00–15:00 (Europe/Moscow, UTC+3)" in the plugin's time zone. */
 export function useSpan() {
   const lang = useLang();
+  const zone = useTimeZone();
   const locale = intlLocale(lang);
   return useCallback(
     (fields: Pick<MeetingFields, "start" | "end">) => {
       const start = new Date(fields.start);
       const end = new Date(fields.end);
-      const day = new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
-      const time = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" });
-      const sameDay = start.toDateString() === end.toDateString();
-      return `${day.format(start)}, ${time.format(start)}–${sameDay ? "" : `${day.format(end)}, `}${time.format(end)}`;
+      const timeZone = intlZone(zone);
+      const day = new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone });
+      const time = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", timeZone });
+      const a = wallTime(start.getTime(), zone);
+      const b = wallTime(end.getTime(), zone);
+      const sameDay = a.year === b.year && a.month === b.month && a.day === b.day;
+      return `${day.format(start)}, ${time.format(start)}–${sameDay ? "" : `${day.format(end)}, `}${time.format(end)} (${zoneText(zone, start.getTime())})`;
     },
-    [locale],
+    [locale, zone],
   );
 }
 
@@ -116,6 +122,9 @@ export function MeetingCard({ rpc, target, id, onDone }: { rpc: Rpc; target: Mee
   const lang = useLang();
   const explain = useExplain();
   const [proposal, setProposal] = useState<MeetingProposal | null | undefined>(undefined);
+  /** The page's zone until the server names the plugin's: a card in a thread has no page around it. */
+  const pageZone = useTimeZone();
+  const [zone, setZone] = useState<string | null>(pageZone);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
   const [confirming, setConfirming] = useState<null | "confirm" | "discard">(null);
@@ -156,6 +165,7 @@ export function MeetingCard({ rpc, target, id, onDone }: { rpc: Rpc; target: Mee
     rpc.call("meeting", { ...target, id }).then(
       (result) => {
         setError(null);
+        setZone(result.timeZone ?? null);
         take(result.proposal);
       },
       (cause) => setError(errorText(cause)),
@@ -220,55 +230,57 @@ export function MeetingCard({ rpc, target, id, onDone }: { rpc: Rpc; target: Mee
   const hasText = proposal.action === "create" || proposal.action === "update";
 
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-card p-4 text-sm" data-meeting-proposal={proposal.id}>
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-medium">
-          {t.kind(proposal.action)} — {t.notDone}
-        </p>
-        <p className="text-xs text-muted-foreground">{proposal.source === "agent" ? t.byAgent : t.byYou}</p>
-      </div>
-      <MeetingSummary proposal={proposal} />
-      {hasText ? (
-        <div>
-          <button type="button" className="text-xs text-muted-foreground underline underline-offset-2" onClick={() => setShowText((v) => !v)}>
-            {t.text}: {proposal.body === null ? t.textKept : proposal.body ? (showText ? "▾" : "▸") : t.noText}
-          </button>
-          {showText && proposal.body ? <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3">{proposal.body}</div> : null}
+    <TimeZoneContext.Provider value={zone}>
+      <div className="space-y-3 rounded-lg border border-border bg-card p-4 text-sm" data-meeting-proposal={proposal.id}>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="font-medium">
+            {t.kind(proposal.action)} — {t.notDone}
+          </p>
+          <p className="text-xs text-muted-foreground">{proposal.source === "agent" ? t.byAgent : t.byYou}</p>
         </div>
-      ) : null}
-      {outcome ? <Notice tone={outcome.tone}>{explain(outcome.text(t))}</Notice> : null}
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={() => open("confirm")} disabled={busy}>
-          {t.confirm}
-        </Button>
-        <Button variant="ghost" onClick={() => open("discard")} disabled={busy}>
-          {t.discard}
-        </Button>
-      </div>
-
-      <ConfirmDialog
-        open={confirming === "confirm"}
-        title={t.confirmTitle(proposal.action)}
-        description={t.confirmDescription}
-        confirmLabel={t.continue}
-        busyLabel={t.confirmInWindow}
-        busy={busy}
-        destructive={proposal.action === "cancel"}
-        onConfirm={() => void confirm()}
-        onCancel={close}
-      >
         <MeetingSummary proposal={proposal} />
-      </ConfirmDialog>
-      <ConfirmDialog
-        open={confirming === "discard"}
-        title={t.discardTitle}
-        description={t.discardDescription}
-        confirmLabel={t.discard}
-        busyLabel={t.discarding}
-        busy={busy}
-        onConfirm={() => void discard()}
-        onCancel={close}
-      />
-    </div>
+        {hasText ? (
+          <div>
+            <button type="button" className="text-xs text-muted-foreground underline underline-offset-2" onClick={() => setShowText((v) => !v)}>
+              {t.text}: {proposal.body === null ? t.textKept : proposal.body ? (showText ? "▾" : "▸") : t.noText}
+            </button>
+            {showText && proposal.body ? <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3">{proposal.body}</div> : null}
+          </div>
+        ) : null}
+        {outcome ? <Notice tone={outcome.tone}>{explain(outcome.text(t))}</Notice> : null}
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => open("confirm")} disabled={busy}>
+            {t.confirm}
+          </Button>
+          <Button variant="ghost" onClick={() => open("discard")} disabled={busy}>
+            {t.discard}
+          </Button>
+        </div>
+
+        <ConfirmDialog
+          open={confirming === "confirm"}
+          title={t.confirmTitle(proposal.action)}
+          description={t.confirmDescription}
+          confirmLabel={t.continue}
+          busyLabel={t.confirmInWindow}
+          busy={busy}
+          destructive={proposal.action === "cancel"}
+          onConfirm={() => void confirm()}
+          onCancel={close}
+        >
+          <MeetingSummary proposal={proposal} />
+        </ConfirmDialog>
+        <ConfirmDialog
+          open={confirming === "discard"}
+          title={t.discardTitle}
+          description={t.discardDescription}
+          confirmLabel={t.discard}
+          busyLabel={t.discarding}
+          busy={busy}
+          onConfirm={() => void discard()}
+          onCancel={close}
+        />
+      </div>
+    </TimeZoneContext.Provider>
   );
 }

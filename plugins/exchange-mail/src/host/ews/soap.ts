@@ -1,7 +1,8 @@
 // EWS SOAP requests. Only the operations the plugin needs: list and search a
 // folder, read a message and its conversation, download an attachment, save a
 // draft (new, reply, reply all, forward), send a saved draft, delete a draft,
-// read folder counters, look people up in the address book, read the calendar,
+// read folder counters, look people up in the address book, read the calendar
+// (the user's own, or another person's they were given, read only),
 // and — once the person confirmed — create, change, cancel and answer meetings.
 //
 // Every request is plain ASCII: characters outside it become XML character
@@ -259,14 +260,18 @@ const CALENDAR_FIELDS = [
 /**
  * The calendar between two moments (ISO, UTC), as Outlook's calendar shows it:
  * a CalendarView expands recurring meetings into their occurrences, moved and
- * cancelled ones included. Read only.
+ * cancelled ones included. Read only. With `mailbox`, another person's
+ * calendar, which Exchange gives only when its owner shared it with the user.
  */
-export function calendarView(options: { start: string; end: string; max: number }): string {
+export function calendarView(options: { start: string; end: string; max: number; mailbox?: string }): string {
+  const folder = options.mailbox
+    ? `<t:DistinguishedFolderId Id="calendar"><t:Mailbox><t:EmailAddress>${xml(options.mailbox)}</t:EmailAddress></t:Mailbox></t:DistinguishedFolderId>`
+    : folderId("calendar");
   return envelope(
     `<m:FindItem Traversal="Shallow">` +
       `<m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties>${CALENDAR_FIELDS.map(field).join("")}</t:AdditionalProperties></m:ItemShape>` +
       `<m:CalendarView MaxEntriesReturned="${options.max}" StartDate="${xml(options.start)}" EndDate="${xml(options.end)}"/>` +
-      `<m:ParentFolderIds>${folderId("calendar")}</m:ParentFolderIds>` +
+      `<m:ParentFolderIds>${folder}</m:ParentFolderIds>` +
       `</m:FindItem>`,
   );
 }
@@ -412,7 +417,14 @@ export function respondToMeeting(ref: ItemRef, response: MeetingResponse, note: 
 
 /** EWS time without a zone, read in the UTC zone the request names. */
 const utcClock = (iso: string) => new Date(Date.parse(iso)).toISOString().slice(0, 19);
-const UTC_RULE = "<t:Bias>0</t:Bias><t:Time>00:00:00</t:Time><t:DayOrder>1</t:DayOrder><t:Month>1</t:Month><t:DayOfWeek>Sunday</t:DayOfWeek>";
+/**
+ * UTC as EWS describes a zone: no offset, and no change of the clocks, since
+ * both rules add nothing. The two rules must fall on different dates —
+ * Exchange refuses a zone whose standard and daylight time start on the same
+ * day with "The specified time zone isn't valid" (0.6.0 sent 1 January twice).
+ */
+const UTC_STANDARD = "<t:Bias>0</t:Bias><t:Time>02:00:00</t:Time><t:DayOrder>5</t:DayOrder><t:Month>10</t:Month><t:DayOfWeek>Sunday</t:DayOfWeek>";
+const UTC_DAYLIGHT = "<t:Bias>0</t:Bias><t:Time>02:00:00</t:Time><t:DayOrder>5</t:DayOrder><t:Month>3</t:Month><t:DayOfWeek>Sunday</t:DayOfWeek>";
 
 /**
  * Free/busy of other people, as Outlook's Scheduling Assistant sees it: busy
@@ -421,7 +433,7 @@ const UTC_RULE = "<t:Bias>0</t:Bias><t:Time>00:00:00</t:Time><t:DayOrder>1</t:Da
 export function getUserAvailability(options: { emails: readonly string[]; start: string; end: string }): string {
   return envelope(
     `<m:GetUserAvailabilityRequest>` +
-      `<t:TimeZone><t:Bias>0</t:Bias><t:StandardTime>${UTC_RULE}</t:StandardTime><t:DaylightTime>${UTC_RULE}</t:DaylightTime></t:TimeZone>` +
+      `<t:TimeZone><t:Bias>0</t:Bias><t:StandardTime>${UTC_STANDARD}</t:StandardTime><t:DaylightTime>${UTC_DAYLIGHT}</t:DaylightTime></t:TimeZone>` +
       `<m:MailboxDataArray>${options.emails
         .map((email) => `<t:MailboxData><t:Email><t:Address>${xml(email)}</t:Address></t:Email><t:AttendeeType>Required</t:AttendeeType><t:ExcludeConflicts>false</t:ExcludeConflicts></t:MailboxData>`)
         .join("")}</m:MailboxDataArray>` +

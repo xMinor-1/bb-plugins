@@ -7,6 +7,7 @@
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { CALENDAR_ATTENDEES_MAX, CALENDAR_TEXT_MAX } from "./src/shared/limits";
+import { isTimeZone } from "./src/shared/zone";
 
 export const FOLDERS = ["inbox", "sent", "drafts", "deleted"] as const;
 export const folderSchema = z.enum(FOLDERS);
@@ -403,6 +404,21 @@ export const toolInputSchema = z.discriminatedUnion("tool", [
       weekends: z.boolean().optional(),
     })
     .strict(),
+  /** Other people's free/busy: when each is busy and when all of them are free. The user's own calendar is not part of it. */
+  z
+    .object({
+      tool: z.literal("availability"),
+      people: z.array(z.string().min(3).max(320)).min(1).max(20),
+      from: whenSchema.optional(),
+      to: whenSchema.optional(),
+      minutes: z.number().int().min(5).max(600).optional(),
+      dayStart: clockSchema.optional(),
+      dayEnd: clockSchema.optional(),
+      weekends: z.boolean().optional(),
+    })
+    .strict(),
+  /** Another person's calendar, read only, when its owner shared it with the user. */
+  z.object({ tool: z.literal("otherEvents"), mailbox: z.string().min(3).max(320), from: whenSchema.optional(), to: whenSchema.optional() }).strict(),
   z
     .object({
       tool: z.literal("draft"),
@@ -420,6 +436,9 @@ export const toolInputSchema = z.discriminatedUnion("tool", [
     .strict(),
 ]);
 export type ToolInput = z.infer<typeof toolInputSchema>;
+
+/** An IANA zone, such as Europe/Moscow: the plugin's setting. Omitted means the zone of the machine with the mailbox. */
+export const timeZoneSchema = z.string().min(1).max(64).refine(isTimeZone, "an IANA time zone, such as Europe/Moscow");
 
 export const toolOutputSchema = z
   .object({
@@ -479,8 +498,12 @@ export const hostContract = defineRpcContract({
   send: { input: draftRef.extend({ revision: z.string().min(1).max(512), lang: langSchema.optional() }).strict(), output: sendResultSchema },
   meeting: { input: draftRef, output: meetingProposalSchema.nullable(), experimental_retryable: true },
   meetingDetails: { input: z.object({ eventId: eventRefSchema }).strict(), output: meetingDetailsSchema, experimental_retryable: true },
-  proposeMeeting: { input: z.object({ proposal: meetingInputSchema, source: z.enum(["agent", "person"]), threadId: z.string().max(200).nullable() }).strict(), output: meetingProposalSchema },
+  proposeMeeting: {
+    input: z.object({ proposal: meetingInputSchema, source: z.enum(["agent", "person"]), threadId: z.string().max(200).nullable(), timeZone: timeZoneSchema.optional() }).strict(),
+    output: meetingProposalSchema,
+  },
   discardMeeting: { input: draftRef, output: z.object({ ok: z.boolean() }).strict() },
-  confirmMeeting: { input: draftRef.extend({ revision: z.string().min(1).max(512), lang: langSchema.optional() }).strict(), output: meetingResultSchema },
-  tool: { input: toolInputSchema, output: toolOutputSchema },
+  confirmMeeting: { input: draftRef.extend({ revision: z.string().min(1).max(512), lang: langSchema.optional(), timeZone: timeZoneSchema.optional() }).strict(), output: meetingResultSchema },
+  /** `timeZone`: the zone the answer's times are in and local times are read in. */
+  tool: { input: z.object({ call: toolInputSchema, timeZone: timeZoneSchema.optional() }).strict(), output: toolOutputSchema },
 });

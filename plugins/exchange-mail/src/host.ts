@@ -55,11 +55,11 @@ export default experimental_defineHostEntry({
     send: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).send(input.id, input.revision, ctx.signal, { threadId: input.threadId, lang: input.lang })),
     meeting: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).meeting(input.id, input.threadId)),
     meetingDetails: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).meetingDetails(input.eventId, ctx.signal)),
-    proposeMeeting: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).proposeMeeting(input.proposal, input.source, input.threadId, ctx.signal)),
+    proposeMeeting: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).proposeMeeting(input.proposal, input.source, input.threadId, ctx.signal, input.timeZone)),
     discardMeeting: (input, ctx) => forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).discardMeeting(input.id, input.threadId)),
     confirmMeeting: (input, ctx) =>
-      forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).confirmMeeting(input.id, input.revision, ctx.signal, { threadId: input.threadId, lang: input.lang })),
-    tool: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).tool(input, ctx.signal),
+      forThePanel(serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).confirmMeeting(input.id, input.revision, ctx.signal, { threadId: input.threadId, lang: input.lang, timeZone: input.timeZone })),
+    tool: (input, ctx) => serviceFor(ctx.experimental_paths.dataDir, ctx.lifecycle.signal).tool(input.call, ctx.signal, input.timeZone),
   },
   dispose: async () => {
     service?.close();
