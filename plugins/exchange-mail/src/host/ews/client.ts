@@ -117,7 +117,7 @@ export class EwsClient {
     return parseResolveNames(await this.call(soap.resolveNames(query), signal));
   }
 
-  async calendar(options: { start: string; end: string; max: number }, signal?: AbortSignal) {
+  async calendar(options: { start: string; end: string; max: number; mailbox?: string }, signal?: AbortSignal) {
     return parseCalendarView(await this.call(soap.calendarView(options), signal));
   }
 

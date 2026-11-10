@@ -380,8 +380,8 @@ describe("calendar tools", () => {
     expect(JSON.stringify(await s.tool("calendar_events", { from: "2026-11-03" }, "th_ok"))).toContain("CALENDAR DATA");
     await s.tool("calendar_free_time", { from: "2026-11-03", to: "2026-11-05", min_minutes: 45, day_start: "10:00", day_end: "17:00", weekends: true }, "th_ok");
     expect(s.hostCalls).toEqual([
-      { method: "tool", input: { tool: "events", from: "2026-11-03" }, hostId: "host_mac" },
-      { method: "tool", input: { tool: "freeTime", from: "2026-11-03", to: "2026-11-05", minMinutes: 45, dayStart: "10:00", dayEnd: "17:00", weekends: true }, hostId: "host_mac" },
+      { method: "tool", input: { call: { tool: "events", from: "2026-11-03" }, timeZone: "Europe/Moscow" }, hostId: "host_mac" },
+      { method: "tool", input: { call: { tool: "freeTime", from: "2026-11-03", to: "2026-11-05", minMinutes: 45, dayStart: "10:00", dayEnd: "17:00", weekends: true }, timeZone: "Europe/Moscow" }, hostId: "host_mac" },
     ]);
   });
 

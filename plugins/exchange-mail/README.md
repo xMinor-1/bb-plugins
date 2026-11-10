@@ -16,10 +16,15 @@ confirm in a system window on your computer.
 - **Calendar**, behind the Mail / Calendar switch at the top of the same page:
   your week from Monday, recurring meetings shown on every
   day they happen, moved and cancelled ones marked. Agents can ask what is on
-  a day, when you are free and when you and others are all free. Create a
+  a day, when you are free and when you and others are all free, when
+  colleagues are busy, and what is in a colleague's calendar they shared with
+  you — read only. Create a
   meeting, change or cancel yours, answer invitations — from the week or as an
   agent's proposal in the thread; nothing changes until you confirm it in a
   system window.
+- **Time zone**: the calendar is shown and meetings are made in Moscow time
+  (Europe/Moscow, UTC+3) by default, not the computer's zone; the `timeZone`
+  setting changes it. Agents get every time with its zone.
 - Mail stays in Exchange. bb keeps no copy; drafts live in your Drafts folder,
   so you also see them in Outlook.
 
@@ -136,7 +141,9 @@ the system window, and both list every recipient.
   calendar. The navPanel id is `mail`; there is no separate calendar panel any
   more, so the old `/plugins/exchange-mail/calendar` address is gone.
 - The calendar shows a
-  week, Monday to Sunday, in your browser's time zone. Every occurrence of a
+  week, Monday to Sunday, in the plugin's time zone (Europe/Moscow unless the
+  `timeZone` setting names another; `system` uses the browser's), named above
+  the week; the meeting form reads the times you type in the same zone. Every occurrence of a
   recurring meeting is on its own day (EWS `CalendarView` expands the series),
   and each card says what you need to know: *recurring*, *recurring, moved*
   for an occurrence that was moved or changed, *cancelled* (struck through),
@@ -146,7 +153,9 @@ the system window, and both list every recipient.
 - `calendar_events` gives agents the meetings of a period — "what do I have
   tomorrow": time, subject, place, organizer, how many are invited (not who),
   your response, and whether it was cancelled or moved. Dates are read and
-  written in the time zone of the machine with the mailbox.
+  written in the plugin's time zone, and every answer names it:
+  `(times Europe/Moscow, UTC+3)`. A time an agent writes without a zone
+  (`2026-11-12T14:00`) is that zone's; ISO with an offset is taken as is.
 - **Private events** (marked private in Outlook) reach agents and other
   plugins as their time and free/busy only: no subject, place or people. The
   page shows them to you in full.
@@ -159,6 +168,25 @@ the system window, and both list every recipient.
   (`GetUserAvailability`, the *FreeBusy* view — busy times only, never their
   subjects), in working hours, at least as long as the meeting. Someone
   Exchange has no free/busy for is named in the answer.
+
+### Other people's calendars: read only
+
+- `calendar_availability` answers "when are Ivanov and Petrova free on
+  Thursday": each person's busy stretches (busy, tentative, away — from
+  `GetUserAvailability`, the *FreeBusy* view, never subjects) and the working
+  hours when all of them are free. Your own calendar is not part of it; for a
+  time that suits you too, agents use `calendar_find_time`.
+- `calendar_other_events` answers "what is in Ivanov's calendar tomorrow":
+  their meetings — time, subject, place, organizer, their response; private
+  ones as time only — read with a `CalendarView` of their mailbox's calendar
+  folder (`DistinguishedFolderId` with `Mailbox`). Exchange gives it only when
+  the owner shared the calendar with you (Outlook → calendar permissions); if
+  not, the agent is told the calendar is not shared and only free/busy is
+  visible.
+- Nothing writes to another person's calendar. Their events get no id, the
+  propose tools only know events of your own calendar, and the requests for
+  someone else's calendar are `FindItem` and `GetUserAvailability` only.
+- Agents find the address first with `mail_find_person`, as for mail.
 - The calendar is guarded like mail: only allowed models get the tools, and a
   thread that read it is marked the same way.
 - One request reads 500 events and 62 days at most (31 for free
@@ -342,6 +370,8 @@ carefully:
 | `calendar_events` | meetings of a period, recurring ones expanded: time, subject, place, organizer, number invited, response, cancelled or moved; private ones as time only |
 | `calendar_free_time` | free stretches of working hours in a period, from the user's own calendar |
 | `calendar_find_time` | times the user and other people are all free, from Exchange free/busy |
+| `calendar_availability` | when other people are busy in a period and when all of them are free; the user's calendar is not included |
+| `calendar_other_events` | another person's calendar for a period, read only, when they shared it with the user |
 | `calendar_propose_meeting` | propose a new meeting; nothing is created until the user confirms the card |
 | `calendar_propose_change` | propose a change to a meeting the user organizes |
 | `calendar_propose_cancel` | propose cancelling a meeting the user organizes |
@@ -354,6 +384,7 @@ All can be set ahead of time by whoever prepares bb for a team:
 | Key | Meaning |
 | --- | --- |
 | `ewsUrl` | Exchange Web Services address suggested on the Connect screen |
+| `timeZone` | the zone the calendar is shown and meetings are made in: an IANA name, `Europe/Moscow` by default; `system` uses the computer's zone |
 | `allowedModels` | the allow-list above |
 | `calendarPlugins` | plugin ids that may read the calendar (see above); empty: none |
 | `accountPlugins` | plugin ids, comma-separated, that may pass on the login and password you typed in them (see *Sign-in from another plugin*); empty: none |

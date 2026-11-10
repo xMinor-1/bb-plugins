@@ -24,7 +24,7 @@ async function setup() {
     experimental_callHostRpc: async ({ method, input, hostId }) => {
       hostCalls.push({ method, input, hostId });
       if (method === "tool") {
-        const tool = (input as { tool: string }).tool;
+        const tool = (input as { call: { tool: string } }).call.tool;
         return { text: "PROPOSED", isError: false, draftId: null, ...(tool === "meeting" ? { meetingId: "p_000000000001" } : {}) };
       }
       if (method === "confirmMeeting") return { status: "done", at: 1 };
@@ -82,7 +82,7 @@ describe("the meeting tools", () => {
     await s.tool("calendar_propose_response", { event: "e000000000002", response: "tentative", note: "Maybe" }, "th_ok");
     await s.tool("calendar_find_time", { attendees: ["bob@example.test"], from: "2026-11-10", minutes: 60 }, "th_ok");
     expect(s.hostCalls.map((c) => c.method)).toEqual(["tool", "tool", "tool", "tool", "tool"]);
-    expect(s.hostCalls.map((c) => c.input)).toEqual([
+    expect(s.hostCalls.map((c) => (c.input as { call: unknown }).call)).toEqual([
       { tool: "meeting", threadId: "th_ok", proposal: { action: "create", subject: "Plan", start: "2026-11-10T10:00", end: "2026-11-10T11:00", required: ["bob@example.test"], rooms: ["room7@example.test"] } },
       { tool: "meeting", threadId: "th_ok", proposal: { action: "update", event: "e000000000001", scope: "series", start: "2026-11-12T16:00", add: ["dave@example.test"], remove: ["carol@example.test"] } },
       { tool: "meeting", threadId: "th_ok", proposal: { action: "cancel", event: "e000000000001", note: "Sorry" } },

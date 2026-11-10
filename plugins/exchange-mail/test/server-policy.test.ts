@@ -32,7 +32,7 @@ async function setup(allowedModels = "acp-opencode corp/*") {
     } as never,
     experimental_callHostRpc: async ({ method, input, hostId }) => {
       hostCalls.push({ method, input, hostId });
-      if (method === "tool") return { text: "MAIL DATA", isError: false, draftId: (input as { tool: string }).tool === "draft" ? "d_000000000001" : null };
+      if (method === "tool") return { text: "MAIL DATA", isError: false, draftId: (input as { call: { tool: string } }).call.tool === "draft" ? "d_000000000001" : null };
       if (method === "send") return { status: "sent", at: 1 };
       if (method === "list") return { messages: [], total: 0, more: false, unread: 0 };
       if (method === "draft") return null;
@@ -95,13 +95,13 @@ describe("tool calls", () => {
     expect(await s.dispatch("th_ok", ALLOWED)).toEqual({ action: "proceed" });
     const result = await s.tool("mail_list", { unread_only: true }, "th_ok");
     expect(text(result)).toContain("MAIL DATA");
-    expect(s.hostCalls).toEqual([{ method: "tool", input: { tool: "list", unreadOnly: true }, hostId: "host_mac" }]);
+    expect(s.hostCalls).toEqual([{ method: "tool", input: { call: { tool: "list", unreadOnly: true }, timeZone: "Europe/Moscow" }, hostId: "host_mac" }]);
   });
 
   it("passes the thread to drafts so a draft stays tied to it", async () => {
     await s.dispatch("th_ok", ALLOWED);
     await s.tool("mail_draft", { reply_to: "m0123456789", body: "Hello" }, "th_ok");
-    expect(s.hostCalls[0]).toMatchObject({ method: "tool", input: { tool: "draft", threadId: "th_ok", replyTo: "m0123456789", body: "Hello" } });
+    expect(s.hostCalls[0]).toMatchObject({ method: "tool", input: { call: { tool: "draft", threadId: "th_ok", replyTo: "m0123456789", body: "Hello" }, timeZone: "Europe/Moscow" } });
   });
 
   it("refuses when the thread switched to a model outside the list", async () => {

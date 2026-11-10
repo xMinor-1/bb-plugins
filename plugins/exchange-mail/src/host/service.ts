@@ -28,11 +28,12 @@ import type {
   ToolOutput,
 } from "../../contract.js";
 import { ATTACHMENT_MAX_BYTES, CALENDAR_MAX_DAYS, CALENDAR_MAX_EVENTS, FREE_TIME_MAX_DAYS } from "../shared/limits.js";
-import { blocksTime, checkPeriod, eventId, fixedOffset, formatCommonTime, formatEvents, formatFreeTime, freeSlots, freeStretches, minutesOf, parseWhen, rangeOf, sameLocalDay, spanText, systemOffset, toEvent, type Offset } from "./calendar.js";
+import { blocksTime, busyKind, checkPeriod, eventId, fixedOffset, formatAvailability, formatCommonTime, formatEvents, formatFreeTime, freeSlots, freeStretches, minutesOf, parseWhen, rangeOf, sameLocalDay, spanText, toEvent, zoneOffset, type Offset, type PersonBusy } from "./calendar.js";
 import { everyone, formatProposal, missingFrom, proposalView, revisionOf, sameList, uniqueAddresses, type ProposalEntry } from "./meetings.js";
 import type { MeetingChanges } from "./ews/soap.js";
 import { normalizeText } from "../shared/mail-text.js";
 import { isAddress } from "../shared/recipients.js";
+import { isTimeZone } from "../shared/zone.js";
 import { oneAtATime, systemConfirmer, type MeetingSummary, type SendConfirmer, type SendSummary } from "./confirm.js";
 import { curlTransport, type HttpAuth, type Transport } from "./curl.js";
 import { EwsClient, normalizeEwsUrl } from "./ews/client.js";
@@ -98,7 +99,7 @@ export interface MailServiceOptions {
   readonly transport?: Transport;
   readonly secrets?: SecretStore;
   readonly platform?: NodeJS.Platform;
-  /** For tests: minutes east of UTC used in agent answers. */
+  /** For tests: minutes east of UTC used in agent answers, whatever zone a call names. */
   readonly utcOffsetMinutes?: number;
   /** The system window that confirms each send. Tests pass a stand-in. */
   readonly confirm?: SendConfirmer;
@@ -476,9 +477,13 @@ export class MailService {
 
   // ------------------------------------------------------------------ calendar
 
-  /** This machine's time zone, or the fixed offset tests give. */
-  private zone(): Offset {
-    return this.offset === undefined ? systemOffset : fixedOffset(this.offset);
+  /**
+   * The zone a call names (the plugin's setting, Europe/Moscow by default),
+   * this machine's when it names none, or the fixed offset tests give.
+   */
+  private zone(timeZone?: string): Offset {
+    if (this.offset !== undefined) return fixedOffset(this.offset);
+    return zoneOffset(timeZone && isTimeZone(timeZone) ? timeZone : null);
   }
 
   /** Events between two ISO moments, recurring meetings expanded, for the panel and other plugins. */
@@ -489,11 +494,15 @@ export class MailService {
     return this.readCalendar(from, to, signal);
   }
 
-  private async readCalendar(from: number, to: number, signal?: AbortSignal): Promise<CalendarOutput> {
+  /**
+   * Events of the user's calendar, or with `mailbox` of another person's, read
+   * only: their ids are not remembered, so no proposal can name them.
+   */
+  private async readCalendar(from: number, to: number, signal?: AbortSignal, mailbox?: string): Promise<CalendarOutput> {
     const client = await this.client();
-    const { events, last } = await client.calendar({ start: new Date(from).toISOString(), end: new Date(to).toISOString(), max: CALENDAR_MAX_EVENTS }, signal);
-    // The ids the panel and agents name events by, for proposals.
-    for (const event of events) await this.remember(event.item.id, eventId(event.item.id));
+    const { events, last } = await client.calendar({ start: new Date(from).toISOString(), end: new Date(to).toISOString(), max: CALENDAR_MAX_EVENTS, mailbox }, signal);
+    // The ids the panel and agents name events by, for proposals: the user's own calendar only.
+    if (!mailbox) for (const event of events) await this.remember(event.item.id, eventId(event.item.id));
     return {
       // A CalendarView gives occurrences, never the recurring master itself; anything else that slips in is left out.
       events: events
@@ -776,8 +785,8 @@ export class MailService {
    * to Exchange: the item is only read, to know what it is now and at which
    * change key.
    */
-  async proposeMeeting(input: MeetingInput, source: "agent" | "person", threadId: string | null, signal?: AbortSignal): Promise<MeetingProposal> {
-    const zone = this.zone();
+  async proposeMeeting(input: MeetingInput, source: "agent" | "person", threadId: string | null, signal?: AbortSignal, timeZone?: string): Promise<MeetingProposal> {
+    const zone = this.zone(timeZone);
     const entries = await this.readMeetings();
     const previous = input.replaces ? entries.find((p) => p.id === input.replaces) : undefined;
     if (input.replaces && !previous) throw new UserError(`There is no proposal ${input.replaces} any more; make a new one instead.`);
@@ -920,7 +929,7 @@ export class MailService {
    *   4. the write names that change key, so Exchange refuses a meeting that
    *      changed while the window was open.
    */
-  async confirmMeeting(id: string, revision: string, signal?: AbortSignal, options: { threadId?: string; lang?: Lang } = {}): Promise<MeetingResult> {
+  async confirmMeeting(id: string, revision: string, signal?: AbortSignal, options: { threadId?: string; lang?: Lang; timeZone?: string } = {}): Promise<MeetingResult> {
     // One confirmation per proposal at a time: two cards confirming the same new meeting must not create it twice.
     if (this.confirmingMeetings.has(id)) return { status: "cancelled", reason: "busy", message: NOT_CONFIRMED.busy };
     this.confirmingMeetings.add(id);
@@ -931,7 +940,7 @@ export class MailService {
     }
   }
 
-  private async confirmMeetingOnce(id: string, revision: string, signal: AbortSignal | undefined, options: { threadId?: string; lang?: Lang }): Promise<MeetingResult> {
+  private async confirmMeetingOnce(id: string, revision: string, signal: AbortSignal | undefined, options: { threadId?: string; lang?: Lang; timeZone?: string }): Promise<MeetingResult> {
     const entry = (await this.readMeetings()).find((p) => p.id === id);
     if (!entry || (options.threadId !== undefined && entry.threadId !== options.threadId)) {
       return { status: "gone", message: "This proposal is no longer waiting: it was confirmed, discarded or replaced." };
@@ -956,7 +965,7 @@ export class MailService {
       throw error;
     }
 
-    const outcome = await this.confirmer.confirm(this.meetingSummary(entry, connection?.auth === "password" ? connection.user : null, options.lang ?? "en"), signal, options.lang ?? "en");
+    const outcome = await this.confirmer.confirm(this.meetingSummary(entry, connection?.auth === "password" ? connection.user : null, options.lang ?? "en", this.zone(options.timeZone)), signal, options.lang ?? "en");
     if (!outcome.ok) return { status: "cancelled", reason: outcome.reason, message: NOT_CONFIRMED[outcome.reason] };
 
     // The proposal is taken off the list before anything is written, and only if it is still the version the window showed:
@@ -1002,8 +1011,7 @@ export class MailService {
     return { status: "done", at: this.now() };
   }
 
-  private meetingSummary(entry: ProposalEntry, mailbox: string | null, lang: Lang): MeetingSummary {
-    const zone = this.zone();
+  private meetingSummary(entry: ProposalEntry, mailbox: string | null, lang: Lang, zone: Offset): MeetingSummary {
     const fields = (entry.after ?? entry.before)!;
     const span = (f: MeetingFields) => spanText(Date.parse(f.start), Date.parse(f.end), zone, lang);
     const before: { subject?: string; when?: string; location?: string | null } = {};
@@ -1035,8 +1043,7 @@ export class MailService {
   }
 
   /** Times everyone is free: the user's own calendar and the others' free/busy from Exchange. */
-  private async findTime(input: Extract<ToolInput, { tool: "findTime" }>, signal?: AbortSignal): Promise<string> {
-    const zone = this.zone();
+  private async findTime(input: Extract<ToolInput, { tool: "findTime" }>, zone: Offset, signal?: AbortSignal): Promise<string> {
     const range = rangeOf(input, this.now(), zone, { fromNow: true, maxDays: FREE_TIME_MAX_DAYS });
     const options = {
       dayStart: minutesOf(input.dayStart ?? "09:00"),
@@ -1061,16 +1068,69 @@ export class MailService {
     return formatCommonTime(freeStretches(busy, range, options), range, options, people, own.more);
   }
 
+  /** Other people's free/busy, each on their own and the times all of them are free; the user's calendar is left out. */
+  private async availability(input: Extract<ToolInput, { tool: "availability" }>, zone: Offset, signal?: AbortSignal): Promise<string> {
+    const range = rangeOf(input, this.now(), zone, { maxDays: FREE_TIME_MAX_DAYS });
+    const options = {
+      dayStart: minutesOf(input.dayStart ?? "09:00"),
+      dayEnd: minutesOf(input.dayEnd ?? "18:00"),
+      minMinutes: input.minutes ?? 30,
+      weekends: input.weekends ?? false,
+      offset: zone,
+    };
+    if (options.dayEnd <= options.dayStart) throw new UserError("day_end must come after day_start.");
+    const emails = uniqueAddresses(input.people.map(parseRecipient).map(toAddress)).map((a) => a.email);
+    const client = await this.client();
+    const answers = await client.availability({ emails, start: new Date(range.start).toISOString(), end: new Date(range.end).toISOString() }, signal);
+    const people: PersonBusy[] = emails.map((email, n) => {
+      const answer = answers[n]!;
+      if (!answer.ok) return { email, known: false, why: answer.message, busy: [] };
+      const busy = answer.busy.flatMap((block) => {
+        const kind = busyKind(block.type);
+        const start = Date.parse(block.start);
+        const end = Date.parse(block.end);
+        return kind && end > start ? [{ start, end, kind }] : [];
+      });
+      return { email, known: true, why: null, busy };
+    });
+    const together = people.flatMap((person) => person.busy);
+    return formatAvailability(freeStretches(together, range, options), range, options, people);
+  }
+
+  /** Another person's calendar, when they shared it with the user; read only. */
+  private async otherEvents(input: Extract<ToolInput, { tool: "otherEvents" }>, zone: Offset, signal?: AbortSignal): Promise<string> {
+    const { email } = parseRecipient(input.mailbox);
+    const range = rangeOf(input, this.now(), zone, { maxDays: CALENDAR_MAX_DAYS });
+    let read: CalendarOutput;
+    try {
+      read = await this.readCalendar(range.start, range.end, signal, email);
+    } catch (error) {
+      if (error instanceof EwsError && NOT_SHARED.has(error.code)) {
+        throw new UserError(
+          `The calendar of ${email} is not shared with the user, so only their free/busy is visible: use calendar_availability for when they are busy. ` +
+            "To see their meetings, they can share their calendar in Outlook.",
+        );
+      }
+      if (error instanceof EwsError && NO_MAILBOX.has(error.code)) {
+        throw new UserError(`Exchange has no mailbox for ${email}. Check the address with mail_find_person.`);
+      }
+      throw error;
+    }
+    return formatEvents(read.events, range, read.more, zone, { kind: "other", email });
+  }
+
   // --------------------------------------------------------------- agent tools
 
-  async tool(input: ToolInput, signal?: AbortSignal): Promise<ToolOutput> {
+  /** `timeZone`: the zone agents read and write times in (the plugin's setting); omitted, this machine's. */
+  async tool(input: ToolInput, signal?: AbortSignal, timeZone?: string): Promise<ToolOutput> {
+    const zone = this.zone(timeZone);
     try {
       switch (input.tool) {
         case "list": {
           const folder = input.folder ?? "inbox";
           const result = await this.list({ folder, unreadOnly: input.unreadOnly, limit: input.limit ?? 20, offset: input.offset }, signal);
           const title = `${FOLDER_TITLE[folder]}${input.unreadOnly ? ", unread only" : ""}${result.unread !== null ? ` (${result.unread} unread in total)` : ""}`;
-          return { text: formatList(title, result.messages, result.more, this.offset), isError: false, draftId: null };
+          return { text: formatList(title, result.messages, result.more, zone), isError: false, draftId: null };
         }
         case "search": {
           const limit = input.limit ?? 20;
@@ -1082,11 +1142,11 @@ export class MailService {
             .slice(0, limit);
           const more = results.some((r) => r.more) || results.reduce((n, r) => n + r.messages.length, 0) > limit;
           const where = folders.map((f) => FOLDER_TITLE[f]).join(" and ");
-          return { text: formatList(`Search "${input.query}" in ${where}`, messages, more, this.offset), isError: false, draftId: null };
+          return { text: formatList(`Search "${input.query}" in ${where}`, messages, more, zone), isError: false, draftId: null };
         }
         case "read": {
           const message = await this.read(input.ref, false, signal);
-          return { text: formatMessage(message, input.maxChars ?? 20_000, this.offset), isError: false, draftId: null };
+          return { text: formatMessage(message, input.maxChars ?? 20_000, zone), isError: false, draftId: null };
         }
         case "attachment": {
           const file = await this.fileAttachment(input.ref, input.index, signal);
@@ -1095,20 +1155,18 @@ export class MailService {
         }
         case "conversation": {
           const { messages } = await this.conversation(input.ref, signal);
-          return { text: formatConversation(input.ref, messages, this.offset), isError: false, draftId: null };
+          return { text: formatConversation(input.ref, messages, zone), isError: false, draftId: null };
         }
         case "people": {
           const found = await this.findPeople(input.query, signal);
           return { text: formatPeople(input.query, found), isError: false, draftId: null, people: found.people, more: found.more };
         }
         case "events": {
-          const zone = this.zone();
           const range = rangeOf(input, this.now(), zone, { maxDays: CALENDAR_MAX_DAYS });
           const { events, more } = await this.readCalendar(range.start, range.end, signal);
           return { text: formatEvents(events, range, more, zone), isError: false, draftId: null };
         }
         case "freeTime": {
-          const zone = this.zone();
           const range = rangeOf(input, this.now(), zone, { fromNow: true, maxDays: FREE_TIME_MAX_DAYS });
           const options = {
             dayStart: minutesOf(input.dayStart ?? "09:00"),
@@ -1122,10 +1180,14 @@ export class MailService {
           return { text: formatFreeTime(freeSlots(events, range, options), range, options, more), isError: false, draftId: null };
         }
         case "findTime":
-          return { text: await this.findTime(input, signal), isError: false, draftId: null };
+          return { text: await this.findTime(input, zone, signal), isError: false, draftId: null };
+        case "availability":
+          return { text: await this.availability(input, zone, signal), isError: false, draftId: null };
+        case "otherEvents":
+          return { text: await this.otherEvents(input, zone, signal), isError: false, draftId: null };
         case "meeting": {
-          const proposal = await this.proposeMeeting(input.proposal, "agent", input.threadId, signal);
-          return { text: formatProposal(proposal, this.zone(), Boolean(input.proposal.replaces)), isError: false, draftId: null, meetingId: proposal.id };
+          const proposal = await this.proposeMeeting(input.proposal, "agent", input.threadId, signal, timeZone);
+          return { text: formatProposal(proposal, zone, Boolean(input.proposal.replaces)), isError: false, draftId: null, meetingId: proposal.id };
         }
         case "draft": {
           let kind: Draft["kind"] = input.forward ? "forward" : input.replyTo ? (input.replyAll ? "replyAll" : "reply") : "new";
@@ -1156,6 +1218,11 @@ export class MailService {
     }
   }
 }
+
+/** What Exchange answers for a calendar its owner did not share with the user. */
+const NOT_SHARED = new Set(["ErrorAccessDenied", "ErrorFolderNotFound", "ErrorItemNotFound", "ErrorNoPublicFolderReplicaAvailable", "ErrorDelegateNoUser"]);
+/** What it answers for an address without a mailbox. */
+const NO_MAILBOX = new Set(["ErrorNonExistentMailbox", "ErrorMailRecipientNotFound", "ErrorInvalidSmtpAddress", "ErrorMissingEmailAddress"]);
 
 /** Why nothing changed, for agents and logs; the panel says it in its own words. */
 const NOT_CONFIRMED: Record<"cancelled" | "timeout" | "unavailable" | "busy", string> = {

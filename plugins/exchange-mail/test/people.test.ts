@@ -131,7 +131,7 @@ describe("mail_find_person", () => {
     const result = await s.find("Orlov");
     expect(result.content[0]!.text).toBe("One match: Denis Orlov");
     expect(s.harness.pendingInteractions).toHaveLength(0);
-    expect(s.hostCalls.map(({ method, input }) => ({ method, input }))).toEqual([{ method: "tool", input: { tool: "people", query: "Orlov" } }]);
+    expect(s.hostCalls.map(({ method, input }) => ({ method, input }))).toEqual([{ method: "tool", input: { call: { tool: "people", query: "Orlov" } } }]);
   });
 
   it("lets the person choose among several, and gives the agent only the one chosen", async () => {

@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { messages } from "../messages";
 import { AgentsSection } from "./AgentsSection";
 import { CalendarWeek } from "./CalendarWeek";
+import { TimeZoneContext } from "./time-zone";
 import { ConnectionSection } from "./ConnectionSection";
 import { DraftCard } from "./DraftCard";
 import { Mailbox } from "./Mailbox";
@@ -89,13 +90,16 @@ function MailScreen({ view, onView }: { view: View; onView: (view: View) => void
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [suggestedUrl, setSuggestedUrl] = useState("");
+  /** The plugin's time zone for the calendar; null: the browser's. */
+  const [timeZone, setTimeZone] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("inbox");
 
   useEffect(() => {
     rpc.call("machines").then(
-      ({ machines: list, lastUsed, suggestedUrl: url }) => {
+      ({ machines: list, lastUsed, suggestedUrl: url, timeZone: zone }) => {
         setMachines(list);
         setSuggestedUrl(url);
+        setTimeZone(zone);
         const connected = list.filter((machine) => machine.connected);
         const remembered = connected.find((machine) => machine.id === lastUsed);
         setHostId((remembered ?? connected[0] ?? null)?.id ?? null);
@@ -168,7 +172,11 @@ function MailScreen({ view, onView }: { view: View; onView: (view: View) => void
           <>
             {current === "inbox" || current === "sent" ? <Mailbox key={`${hostId}:${current}`} rpc={rpc} hostId={hostId} folder={current} /> : null}
             {current === "waiting" ? <Waiting rpc={rpc} hostId={hostId} /> : null}
-            {current === "calendar" ? <CalendarWeek key={hostId} rpc={rpc} hostId={hostId} /> : null}
+            {current === "calendar" ? (
+              <TimeZoneContext.Provider value={timeZone}>
+                <CalendarWeek key={`${hostId}:${timeZone ?? ""}`} rpc={rpc} hostId={hostId} />
+              </TimeZoneContext.Provider>
+            ) : null}
             {current === "settings" ? (
               <div className={cn("max-w-3xl space-y-4")}>
                 {!ready ? (

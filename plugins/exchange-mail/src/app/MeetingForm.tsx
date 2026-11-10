@@ -15,18 +15,31 @@ import { RecipientsInput } from "./RecipientsInput";
 import { Notice, errorText } from "./ui";
 import { useExplain } from "./errors";
 import type { Rpc } from "./rpc";
+import { fromWallTime, wallTime } from "../shared/zone";
+import { atTime, useTimeZone, zoneText } from "./time-zone";
 
 export type FormMode = { action: "create"; day: Date } | { action: "update" | "cancel" | "respond"; event: CalendarEvent };
 
 const two = (n: number) => String(n).padStart(2, "0");
-/** yyyy-mm-dd and hh:mm of a moment in the browser's time zone, for date and time inputs. */
-export const dateInput = (d: Date) => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
-export const timeInput = (d: Date) => `${two(d.getHours())}:${two(d.getMinutes())}`;
-/** A local date and time from the inputs, as ISO with the browser's zone: the host reads it exactly. */
-export function zonedIso(date: string, time: string): string | null {
-  const local = new Date(`${date}T${time}:00`);
-  if (Number.isNaN(local.getTime())) return null;
-  return local.toISOString();
+/** yyyy-mm-dd and hh:mm of a moment in the zone (null: the browser's), for date and time inputs. */
+export const dateInput = (d: Date, zone: string | null = null) => {
+  const t = wallTime(d.getTime(), zone);
+  return `${t.year}-${two(t.month)}-${two(t.day)}`;
+};
+export const timeInput = (d: Date, zone: string | null = null) => {
+  const t = wallTime(d.getTime(), zone);
+  return `${two(t.hour)}:${two(t.minute)}`;
+};
+/** A date and time from the inputs, read in the zone, as ISO in UTC: the host reads it exactly. */
+export function zonedIso(date: string, time: string, zone: string | null = null): string | null {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const t = /^(\d{2}):(\d{2})$/.exec(time);
+  if (!d || !t) return null;
+  const [year, month, day, hour, minute] = [Number(d[1]), Number(d[2]), Number(d[3]), Number(t[1]), Number(t[2])];
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null;
+  const check = new Date(Date.UTC(year, month - 1, day));
+  if (check.getUTCMonth() !== month - 1) return null;
+  return new Date(fromWallTime(year, month, day, hour, minute, zone)).toISOString();
 }
 
 /** RPC input must be JSON: fields left undefined are dropped. */
@@ -41,15 +54,16 @@ export function MeetingForm({ rpc, hostId, mode, onClose, onProposed }: { rpc: R
   const event = mode.action === "create" ? null : mode.event;
   const recurring = event ? event.kind !== "single" : false;
 
-  const first = mode.action === "create" ? new Date(mode.day.getFullYear(), mode.day.getMonth(), mode.day.getDate(), 10, 0) : new Date(mode.event.start);
+  const zone = useTimeZone();
+  const first = mode.action === "create" ? atTime(mode.day, 10, 0, zone) : new Date(mode.event.start);
   const last = mode.action === "create" ? new Date(first.getTime() + 60 * 60_000) : new Date(mode.event.end);
   const [details, setDetails] = useState<MeetingDetails | null>(null);
   const [subject, setSubject] = useState(event?.subject ?? "");
-  const [date, setDate] = useState(dateInput(first));
-  const [start, setStart] = useState(timeInput(first));
-  const [end, setEnd] = useState(timeInput(last));
+  const [date, setDate] = useState(dateInput(first, zone));
+  const [start, setStart] = useState(timeInput(first, zone));
+  const [end, setEnd] = useState(timeInput(last, zone));
   // A meeting may run past midnight: its end keeps its own date.
-  const [endDate, setEndDate] = useState(dateInput(last));
+  const [endDate, setEndDate] = useState(dateInput(last, zone));
   const [required, setRequired] = useState("");
   const [optional, setOptional] = useState("");
   const [location, setLocation] = useState(event?.location ?? "");
@@ -84,8 +98,8 @@ export function MeetingForm({ rpc, hostId, mode, onClose, onProposed }: { rpc: R
   const submit = async () => {
     setError(null);
     let proposal: MeetingInput;
-    const from = zonedIso(date, start);
-    const to = zonedIso(endDate, end);
+    const from = zonedIso(date, start, zone);
+    const to = zonedIso(endDate, end, zone);
     if (action === "create" || action === "update") {
       if (!subject.trim()) return setError(t.needSubject);
       if (!from || !to || Date.parse(to) <= Date.parse(from)) return setError(t.endBeforeStart);
@@ -190,6 +204,7 @@ export function MeetingForm({ rpc, hostId, mode, onClose, onProposed }: { rpc: R
                   <Input type="time" value={end} onChange={(e) => setEnd(e.target.value)} />
                 </label>
               </div>
+              <p className="text-xs text-muted-foreground">{t.timesIn(zoneText(zone, Date.parse(zonedIso(date, start, zone) ?? "") || Date.now()))}</p>
               {endDate !== date ? (
                 <label className="block space-y-1">
                   <span className="text-muted-foreground">{t.endDate}</span>
