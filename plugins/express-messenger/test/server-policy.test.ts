@@ -117,7 +117,7 @@ describe("agent configuration", () => {
   it("offers the tools and the skill only to allowed models", async () => {
     const { configure } = await setup();
     const allowed = text(await configure("acp-opencode", "corp/large"));
-    for (const name of ["messenger_find", "messenger_read", "messenger_send", "messenger_watch_add", "express-messenger"]) expect(allowed).toContain(name);
+    for (const name of ["messenger_find", "messenger_read", "messenger_send", "messenger_reply", "messenger_watch_add", "express-messenger"]) expect(allowed).toContain(name);
     for (const [provider, model] of [["acp-opencode", "opencode/free-model"], ["claude-code", "claude-opus-5-5"], ["codex", "gpt-5"]] as const) {
       const denied = text(await configure(provider, model));
       expect(denied, `${provider} ${model}`).not.toContain("messenger");

@@ -77,6 +77,18 @@ export const toolCallSchema = z.discriminatedUnion("tool", [
       lang: langSchema.optional(),
     })
     .strict(),
+  z
+    .object({
+      tool: z.literal("reply"),
+      chat: z.string().min(1).max(200),
+      /** A piece of the text of the message whose thread gets the answer. */
+      message: z.string().min(1).max(200),
+      text: z.string().min(1).max(MAX_SEND_CHARS),
+      /** A member of the chat to mention: an email address or a name. */
+      mention: z.string().min(1).max(200).optional(),
+      lang: langSchema.optional(),
+    })
+    .strict(),
 ]);
 export type ToolCall = z.infer<typeof toolCallSchema>;
 

@@ -22,6 +22,23 @@ describe("confirmationText", () => {
     expect(ru.send).toBe("Отправить");
   });
 
+  it("names the message of the thread and the person mentioned, in one line each", () => {
+    const rlo = String.fromCodePoint(0x202e);
+    const group = { chat: "Release team", kind: "group" as const, members: 12, person: null };
+    const thread = { from: "Dmitry Ivanov", at: null, preview: `When the release${rlo}\nreaches dev, tag me` };
+    const mention = { name: "Alexander Volkov", position: "Analyst", department: "Logistics", email: "a.volkov@example.com" };
+    const { title, message } = confirmationText({ ...group, text: "Done", thread, mention });
+    expect(title).toBe("Express Messenger: answer in this thread?");
+    expect(message).toContain("In the thread under the message (Dmitry Ivanov):");
+    expect(message).toContain("«When the release reaches dev, tag me»");
+    expect(message).not.toContain(rlo);
+    expect(message).toContain("Mentions (they get a notification): Alexander Volkov, Analyst, Logistics");
+    expect(message).toContain("a.volkov@example.com");
+    const ru = confirmationText({ ...group, text: "Готово", thread, mention }, "ru");
+    expect(ru.title).toBe("Express Messenger: ответить в этом треде?");
+    expect(ru.message).toContain("Упоминание (человеку придёт уведомление): Alexander Volkov");
+  });
+
   it("keeps a chat's name from changing how the window reads", () => {
     const rlo = String.fromCodePoint(0x202e);
     const { message } = confirmationText({ ...recipient, chat: `Team${rlo}\nAccountant`, person: null, text: "Hello" });
