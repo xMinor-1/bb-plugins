@@ -462,7 +462,7 @@ one click on a row goes there.
 
 A bookmark is a name and an absolute path. The name starts as the folder's own
 and **Rename this bookmark…** changes it — the folder on disk is untouched, so
-`~/Work/3. projects/x5transport` can be called *X5* without renaming anything.
+`~/code/acme-website` can be called *Site* without renaming anything.
 
 Fifty is the ceiling. The star still answers past it and says what to do
 instead of going grey.
