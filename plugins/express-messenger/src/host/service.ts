@@ -55,6 +55,8 @@ export interface ServiceOptions {
   readonly signInGraceMs?: number;
   /** Tests only: the sign-in "window" without a window, on a machine without a desktop. */
   readonly signInHeadless?: boolean;
+  /** Steps of an answer in a thread, as counts and yes/no without any text: for a check on a real client. */
+  readonly diagnose?: (line: string) => void;
 }
 
 const READY_TIMEOUT_MS = 90_000;
@@ -98,6 +100,7 @@ interface Found {
 type Opened = { opened: boolean; why?: "row" | "field"; how?: string; composers: number; loaded: number; settled: boolean };
 type ThreadState = { composer: boolean; mine: number; same: number; inParent: number; lastMentionsPerson: boolean | null; field: string; inline: boolean; sendButton: string };
 type FieldMention = { composer: boolean; mention: boolean; listOpen: boolean; endsWithSpace: boolean };
+type MentionItem = { people: number; by: "id" | "name"; point: { x: number; y: number } | null; added: number; fieldHasAt: boolean; focused: boolean };
 
 /** Host-only options of a tool call; agents cannot pass them. */
 export interface ToolOptions {
@@ -638,17 +641,35 @@ export class MessengerService {
     }
   }
 
-  /** Clears the thread's field the way a person does: select all, delete. Answers whether it is empty now. */
-  private async clearTarget(page: Page, state: () => Promise<ThreadState>): Promise<boolean> {
+  /**
+   * Clears a field the way a person does: select all, delete. The client's editor keeps its own copy
+   * of the text: a field emptied by the page alone shows nothing, while the client still holds the
+   * text and keeps it as a draft (seen on the real client). Answers whether the field is empty now.
+   */
+  private async clearByKeys(page: Page, selector: string, empty: () => Promise<boolean>): Promise<boolean> {
     for (let i = 0; i < 3; i++) {
-      await page.click(TARGET_SELECTOR);
+      // No such field any more: the keys would go to whatever has the focus, perhaps another draft.
+      if (!(await page.click(selector))) return false;
       await page.pressKey("a", "KeyA", 65, process.platform === "darwin" ? 4 : 2, ["selectAll"]);
       await page.pressKey("Backspace", "Backspace", 8);
       await sleep(500);
-      const now = await state();
-      if (!now.composer || (!now.field && !now.inline)) return true;
+      if (await empty()) return true;
     }
     return false;
+  }
+
+  /** The thread's marked field. */
+  private clearTarget(page: Page, state: () => Promise<ThreadState>): Promise<boolean> {
+    return this.clearByKeys(page, TARGET_SELECTOR, async () => {
+      const now = await state();
+      return !now.composer || (!now.field && !now.inline);
+    });
+  }
+
+  /** The chat's field; the page's own way only when the keys did not empty it. */
+  private async clearComposer(page: Page, state: () => Promise<SendState>): Promise<boolean> {
+    if (await this.clearByKeys(page, COMPOSER_SELECTOR(), async () => (await state()).empty)) return true;
+    return page.evaluate<boolean>(CLEAR_FIELD, 10_000).catch(() => false);
   }
 
   /**
@@ -673,6 +694,7 @@ export class MessengerService {
       if (!opened.opened) {
         throw new Error(opened.why === "row" ? `Not sent: the client did not show the message in ${name}, so its thread could not be opened.` : "Not sent: the client did not open the message field of that thread.");
       }
+      this.options.diagnose?.(`thread: opened ${opened.opened ? `by ${opened.how}` : "no"}, fields on the page ${opened.composers}, messages loaded ${opened.loaded}, history settled ${opened.settled ? "yes" : "no"}`);
       if (!opened.settled) throw new Error("Not sent: the history of the thread kept loading, so an earlier answer of yours there could be missed.");
       const state = () => page.evaluate<ThreadState>(THREAD_STATE(target.threadId, chat.id, body, person?.huid ?? null));
       const before = await state();
@@ -693,14 +715,20 @@ export class MessengerService {
         if (person) {
           const parts = String(person.name ?? "").split(/[\s,]+/).filter((word) => word.length >= 2);
           let point: { x: number; y: number } | null = null;
-          for (const query of [...new Set([parts[0], parts[parts.length - 1]].filter((word): word is string => !!word))]) {
+          const queries = [...new Set([parts[0], parts[parts.length - 1]].filter((word): word is string => !!word))];
+          for (const [n, query] of queries.entries()) {
             await page.evaluate(MARK_PAGE);
             await page.insertText(`@${query}`);
-            await sleep(1500);
-            const item = await page.evaluate<{ people: number; point: { x: number; y: number } | null }>(
-              MENTION_ITEM(person.huid, people.map((p) => p.huid), person.name, people.map((p) => p.name).filter((n): n is string => !!n)),
+            // The client draws its list a moment after the typing.
+            let item: MentionItem | null = null;
+            for (let i = 0; i < 8 && !item?.point; i++) {
+              await sleep(i ? 500 : 1000);
+              item = await page.evaluate<MentionItem>(MENTION_ITEM(person.huid, people.map((p) => p.huid), person.name, people.map((p) => p.name).filter((name): name is string => !!name)));
+            }
+            this.options.diagnose?.(
+              `"@" list, word ${n + 1} of ${queries.length}: people ${item!.people} (by ${item!.by}), the person ${item!.point ? "found" : "not found"}; new elements ${item!.added}, "@" in the field ${item!.fieldHasAt ? "yes" : "no"}, focus in the field ${item!.focused ? "yes" : "no"}`,
             );
-            if (item.point) {
+            if (item?.point) {
               point = item.point;
               break;
             }
@@ -778,7 +806,7 @@ export class MessengerService {
       await sleep(700);
       if (!(await state()).exact) throw new Error("Not sent: the message field does not hold exactly the confirmed text.");
       if (rehearse) {
-        if (!(await page.evaluate<boolean>(CLEAR_FIELD, 10_000))) throw new Error("Rehearsed, but the message field could not be cleared, so the text may still be there.");
+        if (!(await this.clearComposer(page, state))) throw new Error("Rehearsed, but the message field could not be cleared, so the text may still be there.");
         return;
       }
       // The send key from the client's settings first, then the others; each only while the field holds the text.
@@ -799,7 +827,7 @@ export class MessengerService {
       }
       throw new Error("Not sent: no send key worked.");
     } catch (error) {
-      const cleared = await page.evaluate<boolean>(CLEAR_FIELD, 10_000).catch(() => false);
+      const cleared = await this.clearComposer(page, state).catch(() => false);
       if (cleared) throw error;
       throw new Error(`${error instanceof Error ? error.message : String(error)} The message field could not be cleared, so the text may still be there.`);
     }

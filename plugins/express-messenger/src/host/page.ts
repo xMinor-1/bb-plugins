@@ -661,14 +661,16 @@ export const MENTION_ITEM = (huid: string, huids: readonly string[], name: strin
     if (!prev || el.contains(prev)) byHuid.set(hs[0], el);
   }
   const point = (el) => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; };
+  // For a diagnosis: counts and yes/no only, no text.
+  const signs = { added: added.length, fieldHasAt: !!target && target.textContent.includes('@'), focused: !!target && (document.activeElement === target || target.contains(document.activeElement)) };
   if (byHuid.size) {
     const el = byHuid.get(a.huid);
-    return { people: byHuid.size, point: el ? point(el) : null };
+    return { people: byHuid.size, by: 'id', point: el ? point(el) : null, ...signs };
   }
   const want = words(a.name);
   const leaves = added.filter((e) => !e.children.length && want && words(e.textContent) === want);
   const people = new Set(added.filter((e) => !e.children.length && a.names.some((n) => words(n) && words(e.textContent) === words(n))).map((e) => words(e.textContent)));
-  return { people: people.size, point: leaves.length === 1 ? point(leaves[0]) : null };`}
+  return { people: people.size, by: 'name', point: leaves.length === 1 ? point(leaves[0]) : null, ...signs };`}
 })()`;
 
 /**
