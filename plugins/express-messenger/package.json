@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-express-messenger",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "bb": ">=0.48",
@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Express Messenger",
-    "description": "Agents find, read and send messages in the eXpress messenger through its web client, and watch rules start a digest thread when a chat gets unread messages.",
+    "description": "Agents find, read and send messages in the eXpress messenger through its web client, answer in threads with a mention, and watch rules start a digest thread when a chat gets unread messages.",
     "branding": {
       "icon": "MessageSquare"
     },

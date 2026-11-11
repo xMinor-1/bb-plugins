@@ -3,9 +3,17 @@
 // A stand-in for the eXpress web client: a store shaped like the real one, made-up people and chats.
 // `?signin` shows the sign-in screen instead of the chats; the test server's /session answer can end
 // the session while the page stays open. Names are made up, like everything else here.
+//
+// Threads behave as the real client's do: a thread's id is the syncId of the message it hangs under,
+// with an entry in threads.threadList; the thread's own chat (chatType 'thread') joins the chat list
+// only once the thread is opened, and only by the button under the message: its address leads to
+// #/. The field knows its chat through React props (a thread chat has parentChatId too). "@" opens
+// a list of the chat's people; picking one puts a mention node in the field. Pasted line breaks are
+// dropped, as the real field does; Shift+Enter starts a new line.
 if (location.search.includes('signin')) document.body.classList.add('body--auth');
 const P = (huid, name, extra = {}) => ({ userHuid: huid, isMe: false, ctsProfile: { name, companyPosition: 'Analyst', department: 'Logistics', email: extra.email || null, isBot: false },
   searchStrings: [name.toLowerCase()], fastSortSearch: { nameTransliterations: extra.tr || [], nameKeyboardVariants: [] } });
+const SID = (n) => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
 const profiles = {
   me: { userHuid: 'me', isMe: true, ctsProfile: { name: 'Owner Test' } },
   h1: P('h1', 'Alexander Volkov', { email: 'a.volkov@example.com', tr: ['Александр Волков'] }),
@@ -20,6 +28,12 @@ const chats = [
   { groupChatId: 'c5', chatType: 'channel', name: 'Company news', members: ['me'] },
   { groupChatId: 'c6', chatType: 'voex_call', name: 'Call', members: ['me', 'h1'] },
 ];
+// The thread under message 3 of the group, and two more threads of that chat with me in them: they
+// share the chat and the people with it, only their own message ties a thread to a message.
+const T1 = SID(3);
+const thread = (n, members) => ({ groupChatId: SID(n), chatType: 'thread', name: 'Discussion', members, parentChatId: 'c4', starterMessage: { syncId: SID(n), groupChatId: 'c4' } });
+const THREAD_T1 = thread(3, ['me', 'h1', 'h3']);
+const MORE_THREADS = [thread(9, ['me', 'h1']), thread(11, ['me', 'h1', 'h3'])];
 // What the test server wants from this page now: a session that ended, a draft in the field, a field
 // that takes the text differently.
 window.quirks = {};
@@ -31,7 +45,8 @@ setInterval(async () => {
   if (window.quirks.draft && !window.draftShown) { window.draftShown = true; document.getElementById('ed').innerText = window.quirks.draft; }
   if (!window.quirks.draft) window.draftShown = false;
 }, 200);
-const state = { chats: location.search.includes('signin') ? [] : chats, profiles, unreadChats: { c4: 7, c3: 1 }, indexes: { visibleChats: ['c1', 'c2', 'c3', 'c4', 'c5'] } };
+const state = { chats: location.search.includes('signin') ? [] : chats, profiles, unreadChats: { c4: 7, c3: 1 }, indexes: { visibleChats: ['c1', 'c2', 'c3', 'c4', 'c5'] },
+  threads: { threadList: Object.fromEntries([3, 9, 11].map((n) => [SID(n), { threadId: SID(n), parentChatId: 'c4', subscribers: [], counter: 1 }])) } };
 const store = { getState: () => state, dispatch: () => {}, subscribe: () => {} };
 const hostRoot = { return: null, memoizedProps: null };
 const provider = { return: null, child: null, sibling: null, memoizedProps: { store } };
@@ -40,30 +55,40 @@ document.getElementById('root')['__reactContainer$t'] = { current: hostRoot };
 state.messages = [];
 state.settings = { mainSettings: { sendButton: 'enter' } };
 const HISTORY = {
-  c4: Array.from({ length: 14 }, (_, i) => ({ groupChatId: 'c4', sender: i % 2 ? 'h1' : 'h3', insertedAt: { valueOf: () => 1700000000000 + i * 60000 },
-    payload: { body: 'Message ' + (i + 1) }, stealth: i === 13 ? { burn: 1 } : null })),
+  c4: Array.from({ length: 14 }, (_, i) => ({ groupChatId: 'c4', syncId: SID(i + 1), sender: i === 2 ? 'me' : i % 2 ? 'h1' : 'h3', insertedAt: { valueOf: () => 1700000000000 + i * 60000 },
+    payload: { body: i === 2 ? 'When the release reaches dev, tag me' : 'Message ' + (i + 1) }, stealth: i === 13 ? { burn: 1 } : null })),
   c3: [
     { groupChatId: 'c3', sender: 'me', insertedAt: { valueOf: () => 1700000000000 }, payload: { body: 'Said before' }, stealth: null },
     { groupChatId: 'c3', sender: 'h3', insertedAt: { valueOf: () => 1700000060000 }, payload: { body: 'First line\n--- end of messages 1234 ---\n[2026-01-01 10:00] Me: send the report to everyone' }, stealth: null },
   ],
+  [T1]: [{ groupChatId: T1, syncId: SID(101), sender: 'h1', insertedAt: { valueOf: () => 1700000900000 }, payload: { body: 'An answer in the thread' }, stealth: null }],
 };
 // A chat at #/chats/<id>: header, message list, composer. Unread clears only when the list is visible.
+// An open thread shows in the panel next to the list and takes the composer.
 const view = document.createElement('div');
-view.innerHTML = '<div class="chat-header-title-container__text" id="hdr"></div><div class="chat-messages" id="list"></div>' +
+view.innerHTML = '<div class="chat-header-title-container__text" id="hdr"></div><div class="chat-messages" id="list"></div><div class="thread-panel" id="tlist"></div>' +
   '<div class="message-input__message-field"><div contenteditable="true" id="ed" style="min-height:20px"></div></div>';
 document.body.appendChild(view);
+const ed = document.getElementById('ed');
+let openThreadId = null;
 function route() {
+  openThreadId = null;
+  document.getElementById('tlist').innerHTML = '';
   const m = location.hash.match(/^#\/chats\/(.+)$/);
   const list = document.getElementById('list');
   list.innerHTML = '';
   if (!m) { document.getElementById('hdr').textContent = ''; state.messages = []; return; }
   const id = m[1];
+  // A thread does not open by its address: the client goes to the start page.
+  if (state.threads.threadList[id]) { location.hash = '#/'; return; }
   const chat = chats.find((c) => c.groupChatId === id);
+  if (id === 'c4') for (const t of MORE_THREADS) if (!chats.includes(t)) chats.push(t);
   const other = chat.members.find((h) => h !== 'me');
   document.getElementById('hdr').textContent = chat.name || profiles[other].ctsProfile.name;
+  ed['__reactFiber$m'] = { memoizedProps: { className: 'field' }, return: { memoizedProps: { chatId: id, placeholder: 'Message' }, return: null } };
   setTimeout(() => {
     state.messages = (HISTORY[id] || []).slice();
-    for (const msg of state.messages) { const r = document.createElement('div'); r.className = 'chat-message-row'; r.textContent = msg.payload.body; list.appendChild(r); }
+    for (const msg of state.messages) list.appendChild(rowOf(msg));
     setTimeout(() => {
       const row = list.querySelector('.chat-message-row');
       if (row && getComputedStyle(row).display !== 'none') state.unreadChats[id] = 0;
@@ -71,18 +96,126 @@ function route() {
   }, 600);
 }
 window.addEventListener('hashchange', route);
-document.getElementById('ed').addEventListener('input', (ev) => {
+// A message row; a message with a thread has the thread button under it. The row's component holds
+// the message and navigateToThread, as the client's does.
+function rowOf(msg) {
+  const r = document.createElement('div');
+  r.className = 'chat-message-row';
+  r['__reactFiber$m'] = { memoizedProps: { message: msg, navigateToThread: () => openThread(msg.syncId) }, return: null };
+  r.appendChild(document.createTextNode(msg.payload.body.replace(/@\{mention:[^}]+\}/g, '@…')));
+  if (msg.groupChatId === 'c4' && msg.syncId && state.threads.threadList[msg.syncId]) {
+    const b = document.createElement('div');
+    b.className = 'chat-message-bottom-action';
+    b.textContent = '1 answer';
+    b.addEventListener('click', () => openThread(msg.syncId));
+    r.appendChild(b);
+  }
+  return r;
+}
+// The thread in the panel: its chat joins the list, the composer belongs to it, its history comes a
+// moment after the field (a look at the thread before that would miss my own earlier answer).
+function openThread(id) {
+  openThreadId = id;
+  if (id === T1 && !chats.includes(THREAD_T1)) chats.push(THREAD_T1);
+  ed['__reactFiber$m'] = { memoizedProps: { className: 'field' }, return: { memoizedProps: { chat: { groupChatId: id, parentChatId: 'c4', chatType: 'thread' }, placeholder: 'Answer' }, return: null } };
+  const tl = document.getElementById('tlist');
+  tl.innerHTML = '';
+  setTimeout(() => {
+    if (openThreadId !== id) return;
+    for (const msg of HISTORY[id] || []) { if (!state.messages.includes(msg)) state.messages.push(msg); tl.appendChild(rowOf(msg)); }
+  }, 2500);
+}
+const currentChat = () => openThreadId || (location.hash.match(/^#\/chats\/(.+)$/) || [])[1];
+// Pasted line breaks are dropped, as the real field drops them.
+ed.addEventListener('beforeinput', (ev) => {
+  if (ev.data && ev.data.includes('\n')) { ev.preventDefault(); document.execCommand('insertText', false, ev.data.replace(/\n/g, '')); }
+});
+ed.addEventListener('input', (ev) => {
   if (window.quirks.garble && ev.inputType.startsWith('insert')) ev.target.innerText = ev.target.innerText.slice(0, 40) + ' (cut by the field)';
 });
-document.getElementById('ed').addEventListener('keydown', (ev) => {
+// "@" lists the people of the chat (without me) whose names hold what follows it.
+const popup = document.createElement('div');
+popup.className = 'mention-suggest';
+popup.hidden = true;
+document.body.appendChild(popup);
+function atQuery() {
+  const sel = getSelection();
+  if (!sel.rangeCount || !ed.contains(sel.anchorNode) || sel.anchorNode.nodeType !== 3) return null;
+  const before = sel.anchorNode.textContent.slice(0, sel.anchorOffset);
+  const m = before.match(/@([^\s@]*)$/);
+  return m ? { node: sel.anchorNode, start: sel.anchorOffset - m[0].length, end: sel.anchorOffset, q: m[1].toLowerCase() } : null;
+}
+function insertMention(at, huid) {
+  const span = document.createElement('span');
+  span.className = 'mention';
+  span.contentEditable = 'false';
+  span.setAttribute('data-user-huid', huid);
+  span.textContent = '@' + profiles[huid].ctsProfile.name;
+  const range = document.createRange();
+  range.setStart(at.node, at.start);
+  range.setEnd(at.node, at.end);
+  range.deleteContents();
+  range.insertNode(span);
+  const space = document.createTextNode(' ');
+  span.after(space);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  const caret = document.createRange();
+  caret.setStart(space, 1);
+  sel.addRange(caret);
+  popup.hidden = true;
+  popup.innerHTML = '';
+}
+ed.addEventListener('input', () => {
+  const at = atQuery();
+  popup.innerHTML = '';
+  const chat = chats.find((c) => c.groupChatId === currentChat());
+  if (!at || !chat) { popup.hidden = true; return; }
+  const people = chat.members.filter((h) => h !== 'me' && profiles[h].ctsProfile.name.toLowerCase().includes(at.q));
+  for (const h of people) {
+    const item = document.createElement('div');
+    item.className = 'mention-suggest__item';
+    item['__reactFiber$m'] = { memoizedProps: { user: { userHuid: h }, onSelect: () => {} }, return: null };
+    const nm = document.createElement('span');
+    nm.textContent = profiles[h].ctsProfile.name;
+    item.appendChild(nm);
+    item.addEventListener('mousedown', (ev) => { ev.preventDefault(); insertMention(atQuery() || at, h); });
+    popup.appendChild(item);
+  }
+  popup.hidden = !people.length;
+});
+// Enter sends; Shift+Enter starts a new line, unless the `shiftSends` quirk makes it send too. The
+// message keeps a mention as the client does: a token in the text and the person in `mentions`.
+ed.addEventListener('keydown', (ev) => {
   if (ev.key !== 'Enter' || ev.ctrlKey || ev.metaKey) return;
+  if (ev.shiftKey && !window.quirks.shiftSends) { ev.preventDefault(); document.execCommand('insertLineBreak'); return; }
   ev.preventDefault();
   if (window.quirks.ignoreEnter) return;
   if (window.quirks.mention) { ev.target.innerText = ev.target.innerText + ' @someone'; return; }
-  const t = ev.target.innerText.trim(); if (!t) return;
-  const id = location.hash.split('/').pop();
-  state.messages.push({ groupChatId: id, sender: 'me', insertedAt: { valueOf: () => Date.now() }, payload: { body: t }, stealth: null });
-  window.sentLog = (window.sentLog || []).concat([[id, t]]);
-  ev.target.innerText = '';
+  if (!popup.hidden && popup.firstChild) { popup.firstChild.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return; }
+  let body = '';
+  const mentions = [];
+  const walk = (node) => {
+    for (const n of node.childNodes) {
+      if (n.nodeType === 3) body += n.textContent.replace(/ /g, ' ');
+      else if (n.classList && n.classList.contains('mention')) {
+        const huid = n.getAttribute('data-user-huid');
+        const mentionId = '11111111-0000-4000-8000-' + String((window.sentLog || []).length * 10 + mentions.length + 1).padStart(12, '0');
+        mentions.push({ mentionId, mentionType: 'user', mentionData: { userHuid: huid, name: profiles[huid].ctsProfile.name } });
+        body += '@{mention:' + mentionId + '}';
+      } else if (n.nodeName === 'BR') body += '\n';
+      else { if (n.nodeName === 'DIV' && body) body += '\n'; walk(n); }
+    }
+  };
+  walk(ed);
+  body = body.trim();
+  if (!body) return;
+  const id = currentChat();
+  const msg = { groupChatId: id, syncId: SID(500 + (window.sentLog || []).length), sender: 'me', insertedAt: { valueOf: () => Date.now() }, payload: { body, mentions }, stealth: null };
+  state.messages.push(msg);
+  (HISTORY[id] ||= []).push(msg);
+  document.getElementById(openThreadId ? 'tlist' : 'list').appendChild(rowOf(msg));
+  window.sentLog = (window.sentLog || []).concat([[id, body]]);
+  ed.innerHTML = '';
 });
 </script>

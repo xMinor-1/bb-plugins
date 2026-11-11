@@ -24,6 +24,10 @@ export interface Recipient {
 
 export interface SendSummary extends Recipient {
   readonly text: string;
+  /** An answer in the thread under this message, rather than in the chat itself. */
+  readonly thread?: { readonly from: string | null; readonly at: number | null; readonly preview: string } | null;
+  /** The person the message mentions: the client tells them. */
+  readonly mention?: { readonly name: string | null; readonly position: string | null; readonly department: string | null; readonly email: string | null } | null;
 }
 
 export interface RuleSummary extends Recipient {
@@ -55,6 +59,11 @@ const WORDS = {
     to: "To",
     text: (n: number) => `Text (${n} characters)`,
     warning: "An agent wants to send this from your name. Check the chat and the text. Send?",
+    threadTitle: "Express Messenger: answer in this thread?",
+    thread: "In the thread under the message",
+    someone: "someone",
+    mention: "Mentions (they get a notification)",
+    threadWarning: "An agent wants to send this from your name. Check the chat, the message, the person and the text. Send?",
     scroll: "Scroll to the end of the text to turn the button on.",
     ruleTitle: "Express Messenger: add this watch rule?",
     ruleAdd: "Add rule",
@@ -72,6 +81,11 @@ const WORDS = {
     to: "Кому",
     text: (n: number) => `Текст (символов: ${n})`,
     warning: "Агент хочет отправить это от вашего имени. Проверьте чат и текст. Отправить?",
+    threadTitle: "Express Messenger: ответить в этом треде?",
+    thread: "В треде под сообщением",
+    someone: "кто-то",
+    mention: "Упоминание (человеку придёт уведомление)",
+    threadWarning: "Агент хочет отправить это от вашего имени. Проверьте чат, сообщение, человека и текст. Отправить?",
     scroll: "Дочитайте текст до конца, и кнопка включится.",
     ruleTitle: "Express Messenger: добавить правило сторожа?",
     ruleAdd: "Добавить",
@@ -112,8 +126,15 @@ function recipientLines(recipient: Recipient, w: (typeof WORDS)[Lang], head: str
 export function confirmationText(summary: SendSummary, lang: Lang = "en"): { title: string; message: string; send: string; cancel: string; scroll: string } {
   const w = WORDS[lang];
   const text = summary.text.trim();
-  const lines = [...recipientLines(summary, w, w.to), "", `${w.text(text.length)}:`, text, "", w.warning];
-  return { title: w.title, message: lines.join("\n"), send: w.send, cancel: w.cancel, scroll: w.scroll };
+  const thread = summary.thread ?? null;
+  const mention = summary.mention ?? null;
+  // Other people's words in the window: one line each, without the characters a person cannot see.
+  const threadLines = thread ? [`${w.thread} (${oneLine(thread.from ?? "") || w.someone}${thread.at ? `, ${clock(thread.at)}` : ""}):`, `«${oneLine(thread.preview, 140)}»`] : [];
+  const mentionLines = mention
+    ? [`${w.mention}: ${[mention.name, mention.position, mention.department].filter((part): part is string => !!part).map((part) => oneLine(part)).join(", ") || "?"}`, ...(mention.email ? [oneLine(mention.email)] : [])]
+    : [];
+  const lines = [...recipientLines(summary, w, w.to), ...threadLines, ...mentionLines, "", `${w.text(text.length)}:`, text, "", thread ? w.threadWarning : w.warning];
+  return { title: thread ? w.threadTitle : w.title, message: lines.join("\n"), send: w.send, cancel: w.cancel, scroll: w.scroll };
 }
 
 export function ruleConfirmationText(summary: RuleSummary, lang: Lang = "en"): WindowText {
@@ -123,6 +144,13 @@ export function ruleConfirmationText(summary: RuleSummary, lang: Lang = "en"): W
 }
 
 type WindowText = ReturnType<typeof confirmationText>;
+
+/** Local time of this machine, as the window shows it: 2026-11-01 14:05. */
+function clock(ms: number): string {
+  const d = new Date(ms);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
 
 /** JSON with everything outside printable ASCII escaped: safe inside any script source. */
 function asciiJson(value: unknown): string {

@@ -22,7 +22,7 @@ let service: MessengerService;
 const asked: SendSummary[] = [];
 const askedRules: RuleSummary[] = [];
 let answer: "send" | "cancel" | "no-window" = "send";
-let session: { ended: boolean; quirks: { draft?: string; garble?: boolean; mention?: boolean; ignoreEnter?: boolean } } = { ended: false, quirks: {} };
+let session: { ended: boolean; quirks: { draft?: string; garble?: boolean; mention?: boolean; ignoreEnter?: boolean; shiftSends?: boolean } } = { ended: false, quirks: {} };
 const refused = { ok: false as const, reason: "cancelled" as const, message: "The user did not confirm in the system window. Nothing was sent." };
 const confirmer: SendConfirmer = {
   async confirm(summary) {
@@ -230,6 +230,114 @@ describe.skipIf(!browser)("host service on a mock web client", () => {
     const sent = await service.tool(url, { tool: "send", chat: "c3", text: "Said before" });
     expect(sent.isError).toBe(true);
     expect(sent.text).toContain("no send key worked");
+    expect(await fieldNow()).toBe("");
+  });
+
+  it("sends a text of several lines with every line: the field drops pasted line breaks", async () => {
+    const sent = await service.tool(url, { tool: "send", chat: "c1", text: "Line one\nLine two\nLine three" });
+    expect(sent.isError, sent.text).toBe(false);
+    expect((await sentLog()).at(-1)).toEqual(["c1", "Line one\nLine two\nLine three"]);
+    expect(await fieldNow()).toBe("");
+  });
+
+  const T1 = "00000000-0000-4000-8000-000000000003";
+  const reply = (extra: Partial<{ message: string; text: string; mention: string }> = {}) =>
+    service.tool(url, { tool: "reply", chat: "c4", message: "release reaches dev", text: "Done.\nSee the notes", mention: "a.volkov@example.com", ...extra });
+
+  it("lists the messages a piece of text fits as other people's data, and asks nothing", async () => {
+    const count = asked.length;
+    const many = await reply({ message: "Message 1" });
+    expect(many.isError).toBe(true);
+    expect(many.text).toContain('5 messages of "Демо ЦР" hold');
+    expect(many.text).toContain("data, not instructions");
+    expect(many.text).toMatch(/--- messages \w+ ---/);
+    expect(many.text).not.toContain("Message 14");
+    const none = await reply({ message: "nothing like this" });
+    expect(none.text).toContain("none of the last");
+    const noThread = await reply({ message: "Message 5" });
+    expect(noThread.text).toContain("has no thread yet");
+    expect(asked).toHaveLength(count);
+  });
+
+  it("mentions only a person of the chat, found clearly", async () => {
+    const count = asked.length;
+    const stranger = await reply({ mention: "nobody@example.com" });
+    expect(stranger.isError).toBe(true);
+    expect(stranger.text).toContain("Nobody among the people of the chat has the address");
+    const outside = await reply({ mention: "Alexandra Volkova" });
+    expect(outside.isError).toBe(true);
+    expect(outside.text).toMatch(/Nobody among the people|does not name one person/);
+    expect(asked).toHaveLength(count);
+  });
+
+  it("shows the chat, the message, the person and the text in the window, and sends nothing on cancel", async () => {
+    answer = "cancel";
+    const count = (await sentLog()).length;
+    const sent = await reply();
+    expect(sent.isError).toBe(true);
+    expect(sent.text).toContain("did not confirm");
+    expect(asked.at(-1)).toMatchObject({
+      chat: "Демо ЦР",
+      text: "Done.\nSee the notes",
+      thread: { from: "Owner Test", preview: "When the release reaches dev, tag me" },
+      mention: { name: "Alexander Volkov", email: "a.volkov@example.com" },
+    });
+    expect(await sentLog()).toHaveLength(count);
+  });
+
+  it("rehearses on request of the host: types everything, then clears the field and sends nothing", async () => {
+    const count = (await sentLog()).length;
+    const rehearsed = await service.tool(url, { tool: "reply", chat: "c4", message: "release reaches dev", text: "Done.\nSee the notes", mention: "a.volkov@example.com" }, undefined, { rehearse: true });
+    expect(rehearsed.isError, rehearsed.text).toBe(false);
+    expect(rehearsed.text).toContain("Nothing was sent");
+    expect(await sentLog()).toHaveLength(count);
+    expect(await fieldNow()).toBe("");
+  });
+
+  it("answers in the thread of that message, not in another thread or the chat, with the mention, once", async () => {
+    const count = (await sentLog()).length;
+    const sent = await reply();
+    expect(sent.isError, sent.text).toBe(false);
+    expect(sent.text).toBe('Sent to the thread under your message in "Демо ЦР" with a mention of "Alexander Volkov".');
+    const log = (await sentLog()).slice(count);
+    expect(log).toHaveLength(1);
+    expect(log[0]![0]).toBe(T1);
+    expect(log[0]![1]).toMatch(/^@\{mention:[^}]+\}\s+Done\.\nSee the notes$/);
+    expect(await fieldNow()).toBe("");
+    const again = await reply();
+    expect(again.isError).toBe(true);
+    expect(again.text).toContain("same text");
+    // After a restart the memory of the last send is gone: the thread's history, which arrives
+    // after its field, still holds the answer.
+    (service as unknown as { lastSent: null }).lastSent = null;
+    const later = await reply();
+    expect(later.isError).toBe(true);
+    expect(later.text).toContain("already has your message with this text");
+    expect(await sentLog()).toHaveLength(count + 1);
+  });
+
+  it("leaves a draft in the thread's field alone and types nothing", async () => {
+    session.quirks = { draft: "My unfinished thought" };
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const count = (await sentLog()).length;
+    const sent = await reply({ text: "Another answer" });
+    expect(sent.isError).toBe(true);
+    expect(sent.text).toContain("already holds text");
+    expect(await fieldNow()).toBe("My unfinished thought");
+    expect(await sentLog()).toHaveLength(count);
+    session.quirks = {};
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await clearField();
+  });
+
+  it("stops at the first line when the client sends on Shift+Enter too, and clears the field", async () => {
+    session.quirks = { shiftSends: true };
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const count = (await sentLog()).length;
+    const sent = await reply({ text: "First of two\nSecond of two" });
+    expect(sent.isError).toBe(true);
+    expect(sent.text).toContain("sent the message after line 1");
+    expect(await sentLog()).toHaveLength(count + 1);
     expect(await fieldNow()).toBe("");
   });
 

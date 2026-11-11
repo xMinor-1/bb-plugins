@@ -278,12 +278,26 @@ export class Page {
     return true;
   }
 
+  /** Clicks a point of the page, as a person's mouse does. */
+  async clickAt(x: number, y: number): Promise<void> {
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+      await this.connection.send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 }, this.sessionId);
+    }
+  }
+
   /** Types text into the focused field as one input, the way a paste does. */
   insertText(text: string): Promise<unknown> {
     return this.connection.send("Input.insertText", { text }, this.sessionId);
   }
 
-  /** Presses Enter; `modifiers`: 2 Ctrl, 4 Cmd. */
+  /** Presses a key without text, such as Backspace; `commands` are editing commands, such as selectAll. */
+  async pressKey(key: string, code: string, keyCode: number, modifiers = 0, commands?: string[]): Promise<void> {
+    const base = { key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, modifiers };
+    await this.connection.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base, ...(commands ? { commands } : {}) }, this.sessionId);
+    await this.connection.send("Input.dispatchKeyEvent", { type: "keyUp", ...base }, this.sessionId);
+  }
+
+  /** Presses Enter; `modifiers`: 2 Ctrl, 4 Cmd, 8 Shift. */
   async pressEnter(modifiers = 0): Promise<void> {
     const base = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, modifiers };
     await this.connection.send(

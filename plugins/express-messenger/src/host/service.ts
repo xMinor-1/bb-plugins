@@ -6,12 +6,32 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Chat, Lang, Matches, RuleDraft, Snapshot, Status, ToolCall, ToolOutput } from "../../contract.js";
 import { tagged, type PanelCode } from "../shared/errors.js";
-import { lookKey, score } from "../shared/match.js";
+import { findBest, lookKey, score } from "../shared/match.js";
 import { dataBlock, indentedLines, oneLine, quoted, UNTRUSTED_NOTE } from "../shared/untrusted.js";
 import { BrowserError, findBrowser, Page, sleep, unreachableError } from "./browser.js";
 import { oneAtATime, systemConfirmer, windowRefusal, type SendConfirmer } from "./confirm.js";
 import { counts, loadDirectory, merge, saveDirectory, search, toChat, type Directory, type RawChat } from "./directory.js";
-import { CLEAR_FIELD, COMPOSER_SELECTOR, DIRECTORY, LOAD_PROFILES, OPEN_CHAT, REACHABLE, READ_CHAT, READY, SEND_STATE, WATCH_SNAPSHOT } from "./page.js";
+import {
+  CLEAR_FIELD,
+  COMPOSER_SELECTOR,
+  DIRECTORY,
+  FIELD_MENTION,
+  FIND_MESSAGE,
+  FOCUS_TARGET,
+  LEAVE_THREAD,
+  LOAD_PROFILES,
+  MARK_PAGE,
+  MENTION_ITEM,
+  OPEN_CHAT,
+  OPEN_THREAD,
+  REACHABLE,
+  READ_CHAT,
+  READY,
+  SEND_STATE,
+  TARGET_SELECTOR,
+  THREAD_STATE,
+  WATCH_SNAPSHOT,
+} from "./page.js";
 
 /** A failure the panel and agents should read as "sign in first". */
 export class SignInNeeded extends Error {
@@ -35,6 +55,8 @@ export interface ServiceOptions {
   readonly signInGraceMs?: number;
   /** Tests only: the sign-in "window" without a window, on a machine without a desktop. */
   readonly signInHeadless?: boolean;
+  /** Steps of an answer in a thread, as counts and yes/no without any text: for a check on a real client. */
+  readonly diagnose?: (line: string) => void;
 }
 
 const READY_TIMEOUT_MS = 90_000;
@@ -52,7 +74,39 @@ const WATCH_PAUSE_MINUTES = [1, 2, 5, 10, 15];
 const WINDOW_CODES: Record<"cancelled" | "timeout" | "unavailable" | "busy", PanelCode> = { cancelled: "not-confirmed", timeout: "window-timeout", unavailable: "window-unavailable", busy: "window-busy" };
 
 type Ready = { auth: boolean; unreachable: boolean; store: boolean; chats: number };
-type SendState = { mine: number; empty: boolean; exact: boolean; sendButton: string };
+type SendState = { mine: number; own: number; empty: boolean; exact: boolean; sendButton: string };
+
+/** A person of a chat, as FIND_MESSAGE returns them. */
+interface ChatPerson {
+  huid: string;
+  name: string | null;
+  position: string | null;
+  department: string | null;
+  email: string | null;
+  aliases: string[];
+}
+
+/** What FIND_MESSAGE found: the messages that hold the piece of text (the last ten), the chat's people. */
+interface Found {
+  auth: boolean;
+  missing: boolean;
+  loaded: number;
+  opens: number;
+  total: number;
+  hits: { syncId: string | null; at: number | null; from: string | null; mine: boolean; preview: string; threads: string[] }[];
+  people: ChatPerson[];
+}
+
+type Opened = { opened: boolean; why?: "row" | "field"; how?: string; composers: number; loaded: number; settled: boolean };
+type ThreadState = { composer: boolean; mine: number; same: number; inParent: number; lastMentionsPerson: boolean | null; field: string; inline: boolean; sendButton: string };
+type FieldMention = { composer: boolean; mention: boolean; listOpen: boolean; endsWithSpace: boolean };
+type MentionItem = { people: number; by: "id" | "name"; point: { x: number; y: number } | null; added: number; fieldHasAt: boolean; focused: boolean };
+
+/** Host-only options of a tool call; agents cannot pass them. */
+export interface ToolOptions {
+  /** Types and checks everything, then clears the field instead of pressing the send key: a check on a real client that sends nothing. */
+  readonly rehearse?: boolean;
+}
 
 export class MessengerService {
   private page: Page | null = null;
@@ -388,7 +442,7 @@ export class MessengerService {
 
   // ---------- Agent tools ----------
 
-  async tool(url: string, call: ToolCall, signal?: AbortSignal): Promise<ToolOutput> {
+  async tool(url: string, call: ToolCall, signal?: AbortSignal, options: ToolOptions = {}): Promise<ToolOutput> {
     try {
       switch (call.tool) {
         case "find":
@@ -398,7 +452,9 @@ export class MessengerService {
         case "read":
           return await this.toolRead(url, call.chat, call.last ?? 10);
         case "send":
-          return await this.toolSend(url, call.chat, call.text, call.lang, signal);
+          return await this.toolSend(url, call.chat, call.text, call.lang, signal, options.rehearse ?? false);
+        case "reply":
+          return await this.toolReply(url, call, signal, options.rehearse ?? false);
       }
     } catch (error) {
       return { text: error instanceof Error ? error.message : String(error), isError: true, chat: null };
@@ -479,7 +535,7 @@ export class MessengerService {
     return { text: [UNTRUSTED_NOTE, `${head} The last ${result.messages.length} messages:`, dataBlock("messages", lines.join("\n")), ...tail].filter(Boolean).join("\n"), isError: false, chat: brief };
   }
 
-  private async toolSend(url: string, query: string, text: string, lang: Lang | undefined, signal?: AbortSignal): Promise<ToolOutput> {
+  private async toolSend(url: string, query: string, text: string, lang: Lang | undefined, signal?: AbortSignal, rehearse = false): Promise<ToolOutput> {
     const resolved = await this.remember(this.resolve(url, query, true));
     if (!("chat" in resolved)) return { text: `Not sent. ${resolved.text}`, isError: true, chat: null };
     const chat = toChat(resolved.chat);
@@ -495,9 +551,237 @@ export class MessengerService {
     }
     const answer = await this.confirmer.confirm({ chat: chat.name, kind: chat.kind, members: chat.members, person: chat.person, text: body }, signal, lang);
     if (!answer.ok) return { text: answer.message, isError: true, chat: brief };
-    await this.remember(this.exclusive(() => this.typeAndSend(url, chat, body)));
+    await this.remember(this.exclusive(() => this.typeAndSend(url, chat, body, rehearse)));
+    if (rehearse) return { text: `Rehearsed for ${name}: the field took the text exactly and was cleared. Nothing was sent.`, isError: false, chat: brief };
     this.lastSent = { chatId: chat.id, text: body, at: Date.now() };
     return { text: `Sent to ${name} (${chat.kind}).`, isError: false, chat: brief };
+  }
+
+  /**
+   * An answer in the thread under a message: the message is found by a piece of its text, the
+   * person to mention among the people of the chat, and only one of each counts. The window shows
+   * the chat, the message, the person and the text before anything is typed.
+   */
+  private async toolReply(url: string, call: Extract<ToolCall, { tool: "reply" }>, signal?: AbortSignal, rehearse = false): Promise<ToolOutput> {
+    const resolved = await this.remember(this.resolve(url, call.chat, true));
+    if (!("chat" in resolved)) return { text: `Not sent. ${resolved.text}`, isError: true, chat: null };
+    const chat = toChat(resolved.chat);
+    const brief = { id: chat.id, name: chat.name, kind: chat.kind };
+    const name = quoted(chat.name);
+    const body = call.text.replace(/\r\n?/g, "\n").trim();
+    if (!body) return { text: "Not sent: the text is empty.", isError: true, chat: brief };
+    const refusal = windowRefusal(body);
+    if (refusal) return { text: `Not sent. ${refusal}`, isError: true, chat: brief };
+    const found = await this.remember(
+      this.exclusive(async () => {
+        const result = await (await this.ready(url)).evaluate<Found>(FIND_MESSAGE(chat.id, call.message), 150_000);
+        if (result.auth) await this.sessionEnded(url);
+        return result;
+      }),
+    );
+    if (found.missing) return { text: tagged("not-in-directory", `Not sent: the client does not have ${name} now. Update the directory and try again.`), isError: true, chat: brief };
+    if (found.total !== 1) {
+      if (!found.total) {
+        return { text: `Not sent: none of the last ${found.loaded} messages of ${name} holds ${quoted(call.message)}. Pass a piece of the message as it is written there, or ask the user.`, isError: true, chat: brief };
+      }
+      const lines = found.hits.map((hit) => `[${clock(hit.at)}] ${hit.mine ? "Me" : oneLine(hit.from ?? "Someone")}: ${oneLine(hit.preview, 140)}${hit.threads.length ? "" : "  (no thread)"}`);
+      return {
+        text: [UNTRUSTED_NOTE, `Not sent: ${found.total} messages of ${name} hold ${quoted(call.message)}. Ask the user which one, then pass a longer piece of its text:`, dataBlock("messages", lines.join("\n"))].join("\n"),
+        isError: true,
+        chat: brief,
+      };
+    }
+    const hit = found.hits[0]!;
+    if (!hit.syncId || hit.threads.length !== 1) {
+      const why = hit.threads.length
+        ? "the client ties several threads to this message, so it is not clear which one gets the answer."
+        : "this message has no thread yet, and a thread cannot be started here. Answer in the chat with messenger_send, or ask the user to start the thread in the client.";
+      return { text: `Not sent: ${why}`, isError: true, chat: brief };
+    }
+    const threadId = hit.threads[0]!;
+    let person: ChatPerson | null = null;
+    if (call.mention) {
+      const picked = pickPerson(call.mention, found.people);
+      if ("text" in picked) return { text: `Not sent. ${picked.text}`, isError: true, chat: brief };
+      person = picked.person;
+    }
+    const recent = this.lastSent;
+    if (recent && recent.chatId === threadId && recent.text === body && Date.now() - recent.at < DUPLICATE_WINDOW_MS) {
+      return { text: `Not sent: the same text went to this thread ${Math.round((Date.now() - recent.at) / 1000)} s ago.`, isError: true, chat: brief };
+    }
+    const mention = person ? { name: person.name, position: person.position, department: person.department, email: person.email } : null;
+    const answer = await this.confirmer.confirm(
+      { chat: chat.name, kind: chat.kind, members: chat.members, person: chat.person, text: body, thread: { from: hit.from, at: hit.at, preview: hit.preview }, mention },
+      signal,
+      call.lang,
+    );
+    if (!answer.ok) return { text: answer.message, isError: true, chat: brief };
+    const done = await this.remember(this.exclusive(() => this.typeReply(url, chat, { syncId: hit.syncId!, threadId }, person, found.people, body, rehearse)));
+    const whose = hit.mine ? "your message" : `the message of ${quoted(hit.from ?? "someone")}`;
+    if (rehearse) return { text: `Rehearsed for the thread under ${whose} in ${name}: the field took the text${person ? " and the mention" : ""} exactly and was cleared. Nothing was sent.`, isError: false, chat: brief };
+    this.lastSent = { chatId: threadId, text: body, at: Date.now() };
+    const mentioned = !person ? "" : done.mentioned ? ` with a mention of ${quoted(person.name ?? "")}` : `, but the client did not attach the mention of ${quoted(person.name ?? "")} to it: check the thread`;
+    return { text: `Sent to the thread under ${whose} in ${name}${mentioned}.`, isError: false, chat: brief };
+  }
+
+  /**
+   * Types a text line by line, as a person does: a pasted line break is dropped by the client's
+   * field. A new line is Shift+Enter, or Enter when the client sends with Ctrl or Cmd+Enter. After
+   * each line break `sent` says whether a message went out; then typing stops.
+   */
+  private async typeLines(page: Page, text: string, sendButton: string, sent: () => Promise<boolean>): Promise<void> {
+    const lines = text.split("\n");
+    const newline = /ctrl|cmd|meta/i.test(sendButton) ? 0 : 8;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i]) await page.insertText(lines[i]!);
+      if (i === lines.length - 1) break;
+      await page.pressEnter(newline);
+      await sleep(400);
+      if (await sent()) throw new Error(`The line break (${newline ? "Shift+Enter" : "Enter"}) sent the message after line ${i + 1}, so only part of the text went out. Check the chat before sending again.`);
+    }
+  }
+
+  /**
+   * Clears a field the way a person does: select all, delete. The client's editor keeps its own copy
+   * of the text: a field emptied by the page alone shows nothing, while the client still holds the
+   * text and keeps it as a draft (seen on the real client). Answers whether the field is empty now.
+   */
+  private async clearByKeys(page: Page, selector: string, empty: () => Promise<boolean>): Promise<boolean> {
+    for (let i = 0; i < 3; i++) {
+      // No such field any more: the keys would go to whatever has the focus, perhaps another draft.
+      if (!(await page.click(selector))) return false;
+      await page.pressKey("a", "KeyA", 65, process.platform === "darwin" ? 4 : 2, ["selectAll"]);
+      await page.pressKey("Backspace", "Backspace", 8);
+      await sleep(500);
+      if (await empty()) return true;
+    }
+    return false;
+  }
+
+  /** The thread's marked field. */
+  private clearTarget(page: Page, state: () => Promise<ThreadState>): Promise<boolean> {
+    return this.clearByKeys(page, TARGET_SELECTOR, async () => {
+      const now = await state();
+      return !now.composer || (!now.field && !now.inline);
+    });
+  }
+
+  /** The chat's field; the page's own way only when the keys did not empty it. */
+  private async clearComposer(page: Page, state: () => Promise<SendState>): Promise<boolean> {
+    if (await this.clearByKeys(page, COMPOSER_SELECTOR(), async () => (await state()).empty)) return true;
+    return page.evaluate<boolean>(CLEAR_FIELD, 10_000).catch(() => false);
+  }
+
+  /**
+   * Opens the thread, puts the mention in through the client's "@" list, types the confirmed text
+   * and sends it. The field must be empty first, must hold exactly the mention and the text before
+   * the send key and after every key that did not send, and is cleared when a send fails. The answer
+   * must show up in the thread and nowhere else.
+   */
+  private async typeReply(
+    url: string,
+    chat: Chat,
+    target: { syncId: string; threadId: string },
+    person: ChatPerson | null,
+    people: readonly ChatPerson[],
+    body: string,
+    rehearse: boolean,
+  ): Promise<{ mentioned: boolean | null }> {
+    const page = await this.ready(url);
+    const name = quoted(chat.name);
+    try {
+      const opened = await page.evaluate<Opened>(OPEN_THREAD(target.threadId, chat.id, target.syncId), 120_000);
+      if (!opened.opened) {
+        throw new Error(opened.why === "row" ? `Not sent: the client did not show the message in ${name}, so its thread could not be opened.` : "Not sent: the client did not open the message field of that thread.");
+      }
+      this.options.diagnose?.(`thread: opened ${opened.opened ? `by ${opened.how}` : "no"}, fields on the page ${opened.composers}, messages loaded ${opened.loaded}, history settled ${opened.settled ? "yes" : "no"}`);
+      if (!opened.settled) throw new Error("Not sent: the history of the thread kept loading, so an earlier answer of yours there could be missed.");
+      const state = () => page.evaluate<ThreadState>(THREAD_STATE(target.threadId, chat.id, body, person?.huid ?? null));
+      const before = await state();
+      if (!before.composer) throw new Error("Not sent: the client did not open the message field of that thread.");
+      if (before.same) throw new Error("Not sent: the thread already has your message with this text.");
+      if (before.field || before.inline) throw new Error("Not sent: the message field of the thread already holds text, perhaps an unfinished draft. Nothing was typed and the field was left as it is.");
+      const expected = normalizeText(body);
+      // The mention comes first: the field ends with the text, and before it there is only the mention.
+      const holds = (now: ThreadState) => (person ? now.field.endsWith(expected) && !now.field.slice(0, now.field.length - expected.length).includes("\n") && now.field.length - expected.length <= 160 : now.field === expected);
+      const moved = (now: ThreadState) => now.mine !== before.mine || now.inParent !== before.inParent;
+      let typed = false;
+      try {
+        await page.click(TARGET_SELECTOR);
+        await sleep(300);
+        if (!(await page.evaluate<boolean>(FOCUS_TARGET))) throw new Error("Not sent: the message field of the thread did not take the focus.");
+        typed = true;
+        let separator = "";
+        if (person) {
+          const parts = String(person.name ?? "").split(/[\s,]+/).filter((word) => word.length >= 2);
+          let point: { x: number; y: number } | null = null;
+          const queries = [...new Set([parts[0], parts[parts.length - 1]].filter((word): word is string => !!word))];
+          for (const [n, query] of queries.entries()) {
+            await page.evaluate(MARK_PAGE);
+            await page.insertText(`@${query}`);
+            // The client draws its list a moment after the typing.
+            let item: MentionItem | null = null;
+            for (let i = 0; i < 8 && !item?.point; i++) {
+              await sleep(i ? 500 : 1000);
+              item = await page.evaluate<MentionItem>(MENTION_ITEM(person.huid, people.map((p) => p.huid), person.name, people.map((p) => p.name).filter((name): name is string => !!name)));
+            }
+            this.options.diagnose?.(
+              `"@" list, word ${n + 1} of ${queries.length}: people ${item!.people} (by ${item!.by}), the person ${item!.point ? "found" : "not found"}; new elements ${item!.added}, "@" in the field ${item!.fieldHasAt ? "yes" : "no"}, focus in the field ${item!.focused ? "yes" : "no"}`,
+            );
+            if (item?.point) {
+              point = item.point;
+              break;
+            }
+            if (!(await this.clearTarget(page, state))) throw new Error("Not sent: the message field could not be cleared after looking for the person.");
+          }
+          if (!point) throw new Error(`Not sent: the client's @ list in this thread does not offer ${quoted(person.name ?? "")}.`);
+          await page.clickAt(point.x, point.y);
+          await sleep(800);
+          const placed = await page.evaluate<FieldMention>(FIELD_MENTION(person.huid, person.name));
+          if (!placed.mention) throw new Error("Not sent: the client did not put the mention in the field.");
+          separator = placed.endsWithSpace ? "" : " ";
+        }
+        await this.typeLines(page, separator + body, before.sendButton, async () => moved(await state()));
+        await sleep(900);
+        const ready = await state();
+        if (moved(ready)) throw new Error("A message went out while typing. Check the thread before sending again.");
+        if (!holds(ready)) throw new Error("Not sent: the message field of the thread does not hold exactly the confirmed text.");
+        if (person) {
+          const placed = await page.evaluate<FieldMention>(FIELD_MENTION(person.huid, person.name));
+          if (!placed.mention) throw new Error("Not sent: the mention is no longer in the field.");
+          if (placed.listOpen) throw new Error("Not sent: the client's @ list is still open, and the send key would pick someone from it.");
+        }
+        if (rehearse) {
+          if (!(await this.clearTarget(page, state))) throw new Error("Rehearsed, but the message field could not be cleared, so the text may still be there.");
+          return { mentioned: null };
+        }
+        const ctrlFirst = /ctrl|cmd|meta/i.test(before.sendButton);
+        const keys: [string, number][] = ctrlFirst ? [["Ctrl+Enter", 2], ["Cmd+Enter", 4], ["Enter", 0]] : [["Enter", 0], ["Ctrl+Enter", 2], ["Cmd+Enter", 4]];
+        for (const [key, modifiers] of keys) {
+          await page.pressEnter(modifiers);
+          let now = await state();
+          for (let i = 0; i < 8; i++) {
+            await sleep(500);
+            now = await state();
+            if (now.inParent !== before.inParent) throw new Error(`A message of yours appeared in ${name} itself rather than in the thread. Check the chat before sending again.`);
+            const empty = !now.field && !now.inline;
+            if (now.mine > before.mine && empty) return { mentioned: person ? now.lastMentionsPerson === true : null };
+            if (empty && i >= 5) throw new Error(`After ${key} the field is empty but the answer is not in the thread yet. Check the thread before sending again.`);
+            if (!empty && !holds(now)) throw new Error(`Not sent: the message field changed after ${key}, so it no longer holds exactly the confirmed text.`);
+          }
+          // Another key could send it twice.
+          if (now.mine > before.mine) throw new Error("The thread has a new message, but the field still holds the text too. Check the thread before sending again.");
+        }
+        throw new Error("Not sent: no send key worked.");
+      } catch (error) {
+        if (!typed) throw error;
+        const cleared = await this.clearTarget(page, state).catch(() => false);
+        if (cleared) throw error;
+        throw new Error(`${error instanceof Error ? error.message : String(error)} The message field could not be cleared, so the text may still be there.`);
+      }
+    } finally {
+      await page.evaluate(LEAVE_THREAD, 10_000).catch(() => undefined);
+    }
   }
 
   /**
@@ -505,7 +789,7 @@ export class MessengerService {
    * be the person's), must hold exactly this text before the send key and after every key that did
    * not send, and is cleared when a send fails.
    */
-  private async typeAndSend(url: string, chat: Chat, body: string): Promise<void> {
+  private async typeAndSend(url: string, chat: Chat, body: string, rehearse = false): Promise<void> {
     const page = await this.ready(url);
     const name = quoted(chat.name);
     const opened = await page.evaluate<{ header: string | null; composer: boolean }>(OPEN_CHAT(chat.id), 45_000);
@@ -518,9 +802,13 @@ export class MessengerService {
     try {
       await page.click(COMPOSER_SELECTOR());
       await sleep(300);
-      await page.insertText(body);
+      await this.typeLines(page, body, before.sendButton, async () => (await state()).own > before.own);
       await sleep(700);
       if (!(await state()).exact) throw new Error("Not sent: the message field does not hold exactly the confirmed text.");
+      if (rehearse) {
+        if (!(await this.clearComposer(page, state))) throw new Error("Rehearsed, but the message field could not be cleared, so the text may still be there.");
+        return;
+      }
       // The send key from the client's settings first, then the others; each only while the field holds the text.
       const ctrlFirst = /ctrl|cmd|meta/i.test(before.sendButton);
       const keys: [string, number][] = ctrlFirst ? [["Ctrl+Enter", 2], ["Cmd+Enter", 4], ["Enter", 0]] : [["Enter", 0], ["Ctrl+Enter", 2], ["Cmd+Enter", 4]];
@@ -539,7 +827,7 @@ export class MessengerService {
       }
       throw new Error("Not sent: no send key worked.");
     } catch (error) {
-      const cleared = await page.evaluate<boolean>(CLEAR_FIELD, 10_000).catch(() => false);
+      const cleared = await this.clearComposer(page, state).catch(() => false);
       if (cleared) throw error;
       throw new Error(`${error instanceof Error ? error.message : String(error)} The message field could not be cleared, so the text may still be there.`);
     }
@@ -570,6 +858,39 @@ function describe(chat: Chat, matchScore?: number): string {
   ]
     .filter(Boolean)
     .join("  ");
+}
+
+/** Text as the page compares it (NORMALIZE in page.ts): line ends, zero-width marks, no-break spaces and empty lines do not count. */
+function normalizeText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(new RegExp(`[${String.fromCharCode(0x200b, 0xfeff)}]`, "g"), "")
+    .replace(new RegExp(String.fromCharCode(0xa0), "g"), " ")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+/** The person to mention: an email address only as it is, a name only when one person of the chat clearly fits. */
+function pickPerson(query: string, people: readonly ChatPerson[]): { person: ChatPerson } | { text: string } {
+  const wanted = query.trim();
+  if (wanted.includes("@")) {
+    const hits = people.filter((p) => p.email && p.email.toLowerCase() === wanted.toLowerCase());
+    if (hits.length === 1) return { person: hits[0]! };
+    return { text: hits.length ? `Several people of the chat have the address ${quoted(wanted)}.` : `Nobody among the people of the chat has the address ${quoted(wanted)}. Ask the user whom to mention.` };
+  }
+  const found = findBest(wanted, people.filter((p) => p.name), { limit: 3, strict: true });
+  const top = found.matches[0];
+  if (top && !found.ambiguous && top.score >= 0.9) return { person: top.entry };
+  if (!found.matches.length) return { text: `Nobody among the people of the chat matches ${quoted(wanted)}. Ask the user whom to mention.` };
+  const lines = found.matches.map((match) => {
+    const p = match.entry;
+    const job = [p.position, p.department].filter((part): part is string => !!part).map((part) => oneLine(part)).join(", ");
+    return [oneLine(p.name ?? ""), job ? `— ${job}` : null, p.email ? oneLine(p.email) : null, `match ${match.score.toFixed(2)}`].filter(Boolean).join("  ");
+  });
+  return { text: [UNTRUSTED_NOTE, `${quoted(wanted)} does not name one person of the chat clearly. Ask the user which one, then pass the email address:`, dataBlock("people", lines.join("\n"))].join("\n") };
 }
 
 /** Local time of this machine: 2026-11-01 14:05. */

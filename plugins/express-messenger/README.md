@@ -2,7 +2,8 @@
 
 Agents work with your chats in the eXpress messenger the way you would: find a
 chat or a colleague by the words you use, tell you what is going on in a chat,
-send a message on your behalf, and keep an eye on chats for you.
+send a message on your behalf, answer in a thread with a mention, and keep an eye
+on chats for you.
 
 - **Find by your words.** "Volkov Alexander" typed in Cyrillic finds "Alexander
   Volkov"; "Sasha Volkov" finds him by the diminutive; a chat named with Latin
@@ -13,6 +14,11 @@ send a message on your behalf, and keep an eye on chats for you.
 - **Send with a confirmation.** A message goes only to one clearly named chat
   and only after you press Send in a system window on your machine, which shows
   the chat and the whole text.
+- **Answer in a thread, with a mention.** "Answer under my message about the
+  release and tag Alexander": the agent finds the message by a piece of its text,
+  opens its thread, picks the person in the client's own "@" list so that they get
+  a notification, and types the answer. The window shows the message and the
+  person too.
 - **Watch rules.** "When the team chat has unread messages, tell me what is
   going on there": after you confirm the rule in the same kind of window, bb
   starts a thread that reads the last messages and sums them up, at most once per
@@ -72,6 +78,7 @@ messenger tools, so pick one of them in that thread.
 | `messenger_unread` | Chats with unread messages now |
 | `messenger_read` | The last messages of a chat (10 by default, up to 100); the chat stays unread |
 | `messenger_send` | Sends a text to one clearly named chat, after the confirmation window |
+| `messenger_reply` | Answers in the thread under one message of a chat, with a mention of a person of the chat, after the confirmation window |
 | `messenger_watch_add` | Adds a watch rule after the confirmation window: unread in this chat → a digest thread |
 | `messenger_watch_list`, `messenger_watch_remove` | Watch rules |
 
@@ -140,6 +147,31 @@ search pattern, not the folder.
   that did not send, and a failed send clears what it typed. The send counts only
   when the chat has one more such message and the field is empty. The same text is
   not sent to the same chat twice within two minutes.
+- A text of several lines is typed line by line: the client's field drops a pasted
+  line break. A new line is Shift+Enter, or Enter when the client sends with
+  Ctrl or Cmd+Enter. If a line break sends the message, typing stops there.
+
+## Answering in a thread
+
+- The message is found by a piece of its text among the messages the client has
+  loaded; the list stays hidden while it loads, so the chat stays unread until the
+  answer is typed. When several messages hold the piece, nothing is sent and they
+  come back for the agent to ask you. A message without a thread is refused: the
+  plugin does not start threads.
+- A message belongs to its thread by the message's own id. Other threads of the
+  same chat share the chat and its people with it, and do not count.
+- The person to mention is found among the people of the chat: by email address
+  exactly, or by a name only when one person clearly fits. The client's "@" list
+  must offer that person; the plugin picks them there, as you would, so the client
+  attaches the mention and notifies them.
+- The window shows the chat, the message (who wrote it and its first line), the
+  person with position and address, and the whole text.
+- The thread opens the way you open it: by the button under the message. The
+  field must belong to that thread, be empty, and, after typing, hold exactly the
+  mention and the text, with the "@" list closed. The plugin waits until the
+  thread's history stops loading, so an answer of yours already there is seen and
+  not sent again. The answer counts only when it shows up in the thread; a message
+  that appears in the chat itself is reported.
 
 ## Watch rules
 
