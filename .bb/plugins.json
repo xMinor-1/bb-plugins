@@ -8,10 +8,6 @@
       "source": "./plugins/app-branding"
     },
     {
-      "name": "bug-report-button",
-      "source": "./plugins/bug-report-button"
-    },
-    {
       "name": "claude-design",
       "source": "./plugins/claude-design"
     },
@@ -24,36 +20,8 @@
       "source": "./plugins/doc-review"
     },
     {
-      "name": "exchange-mail",
-      "source": "./plugins/exchange-mail"
-    },
-    {
-      "name": "express-messenger",
-      "source": "./plugins/express-messenger"
-    },
-    {
       "name": "file-manager",
       "source": "./plugins/file-manager"
-    },
-    {
-      "name": "fleet-kit",
-      "source": "./plugins/fleet-kit"
-    },
-    {
-      "name": "http-data-service",
-      "source": "./plugins/http-data-service"
-    },
-    {
-      "name": "mcp-catalog",
-      "source": "./plugins/mcp-catalog"
-    },
-    {
-      "name": "obfuscation-proxy",
-      "source": "./plugins/obfuscation-proxy"
-    },
-    {
-      "name": "qlik-sense",
-      "source": "./plugins/qlik-sense"
     },
     {
       "name": "server-status",
@@ -66,10 +34,6 @@
     {
       "name": "theme-toggle",
       "source": "./plugins/theme-toggle"
-    },
-    {
-      "name": "tracker-board",
-      "source": "./plugins/tracker-board"
     },
     {
       "name": "usage-meter",
