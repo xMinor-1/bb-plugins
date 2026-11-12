@@ -1,9 +1,8 @@
-// components/panel-bus.ts — the only way the title-bar and sidebar slots can
-// talk to the panel body.
+// components/panel-bus.ts — the only way the title-bar slot can talk to the
+// panel body.
 //
-// `headerContent` and `experimental_sidebarAccessory` are mounted by the host
-// in *different* React subtrees from the panel component (§10), so React
-// context cannot reach them. This is a module-level store instead: the panel
+// `headerContent` is mounted by the host in a *different* React subtree from
+// the panel component (§10), so React context cannot reach it. This is a module-level store instead: the panel
 // publishes what the header needs to render, and the header dispatches
 // commands back. Both live for as long as the plugin bundle does.
 import { useSyncExternalStore } from "react";

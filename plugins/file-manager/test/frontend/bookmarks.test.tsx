@@ -183,7 +183,7 @@ async function mountTab(
 ): Promise<RenderedSlot> {
   const slot = renderSlot(
     { component: threadAction.component },
-    { threadId: "thr_1", params: null },
+    { threadId: "thr_1", environment: null, params: null },
     { rpc: handlers as PluginRpcTestHandlers<FileManagerContract> },
   ) as RenderedSlot;
   await slot.findByText("notes.txt");

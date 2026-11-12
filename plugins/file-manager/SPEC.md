@@ -1035,7 +1035,6 @@ URL (a `?` or `#` inside a file name would break naive parsing).
 app.tsx                                   FRONTEND  slot registration (§10) + panel root wiring
 components/FileManagerPanel.tsx           FRONTEND  layout, state owner, keyboard map, DnD root
 components/HeaderActions.tsx              FRONTEND  headerContent: Upload / New folder / overflow menu
-components/SidebarAccessory.tsx           FRONTEND  active upload count (text only)
 components/Toolbar.tsx                    FRONTEND  breadcrumbs + search + sort + hidden toggle + view actions
 components/Breadcrumbs.tsx                FRONTEND  clickable path segments, drop targets
 components/FileTable.tsx                  FRONTEND  header row, sorting, rubber-band-free multi-select
@@ -1067,7 +1066,7 @@ lib/viewer.ts                             FRONTEND  which renderer a file name g
 lib/archive-tree.ts                       FRONTEND  an archive's member list as a folder tree (§8.13)
 lib/fm-rpc.ts                             FRONTEND  typed useRpc wrapper + error parsing
 lib/upload-manager.ts                     FRONTEND  token cache, XHR chunking, queue, resume, events
-lib/download.ts                           FRONTEND  anchor-click download helper
+lib/download.ts                           FRONTEND  download URLs handed to experimental_saveFile
 lib/fm-paths.ts                           FRONTEND  subPath encode/decode, join, basename, relative<->absolute
 lib/format.ts                             FRONTEND  bytes, dates, speed, ETA
 lib/errors.ts                             FRONTEND  parseRpcError → { code, message }, toast text
@@ -1796,10 +1795,13 @@ export default definePluginApp((app) => {
     path: PANEL_PATH, // "files" → /plugins/file-manager/files/*
     component: FileManagerPanel,
     headerContent: HeaderActions,
-    experimental_sidebarAccessory: SidebarAccessory,
+    experimental_useBadge: useUploadBadge,
   });
 });
 ```
+
+`experimental_useBadge` (`hooks/useUploadBadge.ts`) counts the uploads still in
+flight on the sidebar entry, so they stay visible after the panel unmounts.
 
 `id` and `path` must match `/^[a-zA-Z0-9_-]+$/` or the whole frontend fails to
 register. Do not add `fixedTabs` (`experimental_fixedTabs` before SDK 0.4.16): only the active fixed tab
@@ -1812,8 +1814,10 @@ The same file manager also opens as a tab in bb's right-hand panel, from
 registrations, because bb keeps the two launchers apart:
 
 ```tsx
-app.slots.threadPanelAction({
+app.slots.experimental_tab({
   id: "file-manager",
+  context: { kind: "thread" },
+  availability: "action",
   title: "File Manager",
   icon: "FolderOpen",
   layout: "flush",
@@ -1915,7 +1919,7 @@ unfolds the compact filter).
 
 ### 10.3 Thread workspace — the folder a thread's code lives in (v0.7)
 
-`threadPanelAction` is the one surface bb names a thread for, so it is the one
+The thread action tab (`experimental_tab`) is the one surface bb names a thread for, so it is the one
 surface that can offer a jump into that thread's checkout. `FileManagerTab`
 forwards its `threadId` into `FileManagerSurface` as a fourth optional prop;
 every other surface (the nav panel, the New thread launcher, both file openers)
@@ -2031,7 +2035,7 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 
 | File | Must cover |
 | --- | --- |
-| `registration.test.tsx` | `app.navPanels[0]` matches `{ id: "file-manager", title: "File Manager", icon: "FolderOpen", path: "files" }`; `headerContent` and `experimental_sidebarAccessory` are functions |
+| `registration.test.tsx` | `app.navPanels[0]` matches `{ id: "file-manager", title: "File Manager", icon: "FolderOpen", path: "files" }`; `headerContent` and `experimental_useBadge` are functions |
 | `panel.test.tsx` | renders rows from a stubbed `listDir`; hidden toggle re-issues `listDir` with `showHidden: true`; sorting by size reorders without an RPC; search filters client-side; `emitRealtime("fs", { paths:[cwd] })` triggers exactly one refetch; `setRealtimeConnectionState("connected")` refetches |
 | `selection.test.tsx` | click / ctrl-click / shift-click / `Ctrl+A` / `Escape` produce the expected selections |
 | `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed; coarse-pointer selection (compact or wide) disables native row/tile dragging and exposes the responsive drawer; a compact fine-pointer window shows the bar and stays draggable; desktop remains draggable; desktop and touch action IDs and disabled states stay in parity |
@@ -2240,7 +2244,7 @@ Frontend contract assumptions it may rely on without asking:
 * Batch methods resolve even when some paths failed.
 * Uploads: `uploadCreate` → N × chunk POST → `uploadFinish`, resume by
   `expected`/`received` (§5.2).
-* Download: build the URL, click an anchor. Never read the body in JS.
+* Download: build the URL, hand it to `experimental_saveFile`. Never read the body in JS.
 
 ### Integration order
 

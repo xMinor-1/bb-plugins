@@ -1,10 +1,15 @@
 // lib/download.ts — downloads happen by navigating, never by reading bytes.
 //
-// The download route is a plain GET with `auth: "local"` (§5.3), so an
-// `<a download>` click carries the browser's own credentials and the response
-// streams straight to disk. Reading it in JS (`await res.blob()`) would buffer
-// a multi-GB file in the renderer, which is exactly what this plugin exists to
-// avoid — so this module only ever builds a URL and clicks a link.
+// The download route is a plain GET with `auth: "local"` (§5.3), so the
+// browser's own credentials go with it and the response streams straight to
+// disk. Reading it in JS (`await res.blob()`) would buffer a multi-GB file in
+// the renderer, which is exactly what this plugin exists to avoid — so this
+// module only ever builds a URL and hands it to bb's `experimental_saveFile`.
+// That is bb's own download path: an ordinary download in browsers and bb
+// Desktop, the share sheet in the bb iOS app, and an error toast when the
+// download cannot start.
+import { experimental_saveFile } from "@get-bb/plugin-sdk/app";
+
 import { DOWNLOAD_URL, DOWNLOAD_ZIP_URL, type FileEntry } from "../contract";
 import { basename, dirname } from "./fm-paths";
 
@@ -22,31 +27,19 @@ export function buildDownloadUrl(
 
 export interface DownloadOptions {
   disposition?: DownloadDisposition;
-  /** Overrides the `download` attribute; defaults to the path's base name. */
+  /** The saved file's name; defaults to the path's base name. */
   fileName?: string;
-  /** Test seam. */
-  document?: Document;
 }
 
 /**
  * Starts one download. Returns the URL that was triggered so callers (and
- * tests) can assert on it without stubbing the DOM.
+ * tests) can assert on it.
  */
 export function downloadPath(path: string, options: DownloadOptions = {}): string {
   const url = buildDownloadUrl(path, options.disposition ?? "attachment");
-  const doc = options.document ?? (typeof document === "undefined" ? undefined : document);
-  if (doc === undefined) return url;
-
-  const anchor = doc.createElement("a");
-  anchor.href = url;
-  // Same-origin, so the browser honours `download`; the server's
-  // Content-Disposition still wins on the exact name (incl. non-ASCII).
-  anchor.download = options.fileName ?? basename(path);
-  anchor.rel = "noopener";
-  anchor.style.display = "none";
-  doc.body.append(anchor);
-  anchor.click();
-  anchor.remove();
+  // The server's Content-Disposition still wins on the exact name (incl.
+  // non-ASCII); bb reports a download that cannot start with its own toast.
+  void experimental_saveFile({ fileName: options.fileName ?? basename(path), url });
   return url;
 }
 
@@ -89,19 +82,19 @@ export function buildZipDownloadUrl(paths: readonly string[]): string {
  * `paths` must already be top-level (`topLevelPaths`). Returns `null` when
  * the selection is too long to fit in a URL.
  */
-export function downloadZip(paths: readonly string[], options: Pick<DownloadOptions, "document"> = {}): string | null {
+export function downloadZip(paths: readonly string[]): string | null {
   const url = buildZipDownloadUrl(paths);
   if (url.length > MAX_ZIP_URL_LENGTH) return null;
-  const doc = options.document ?? (typeof document === "undefined" ? undefined : document);
-  if (doc === undefined) return url;
-  const anchor = doc.createElement("a");
-  anchor.href = url;
-  // The server names the archive; this is only the fallback.
-  anchor.download = "";
-  anchor.rel = "noopener";
-  anchor.style.display = "none";
-  doc.body.append(anchor);
-  anchor.click();
-  anchor.remove();
+  void experimental_saveFile({ fileName: zipFileName(paths), url });
   return url;
+}
+
+/**
+ * Server twin: `zipFileName` in `src/http-routes.ts`, whose Content-Disposition
+ * wins on the exact name; this is only the fallback.
+ */
+export function zipFileName(paths: readonly string[]): string {
+  const single = paths.length === 1 ? paths[0] : undefined;
+  const base = basename(single ?? commonParent(paths));
+  return `${base === "/" ? "files" : base}.zip`;
 }
