@@ -83,3 +83,11 @@ bb plugin dev .
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## macOS metrics
+
+RAM used excludes the file cache and purgeable pages and includes resident anonymous, wired, and physical compressed memory. These are sampled native counters, so the total can differ slightly from Activity Monitor. The ring fills with RAM usage; its color follows macOS memory pressure (normal, warning, critical), also shown as text in the panel. High allocation alone is not a pressure warning. Linux retains MemAvailable-based usage and percentage thresholds.
+
+macOS swap comes from `sysctl vm.swapusage`; its allocation grows dynamically, so its percentage alone does not establish exhaustion. CPU uses deltas of native per-core counters. macOS collector failures surface as plugin errors instead of silently reporting a healthy zero.
+
+Run `node --experimental-strip-types --test metrics.test.ts`, `npx tsc --noEmit`, and `bb plugin build .` to validate.
