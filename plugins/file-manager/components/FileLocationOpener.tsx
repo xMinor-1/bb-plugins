@@ -47,6 +47,7 @@ const messages = defineMessages(
     missing: (name: string) => `${name} is not there`,
     openLocationHint: "Open location shows the folder it points into.",
     openLocation: "Open location",
+    backToFile: "Back to file",
   },
   {
     notThere: (name, dir) => `${name} здесь нет. Вместо этого открыта папка ${dir}.`,
@@ -58,6 +59,7 @@ const messages = defineMessages(
     missing: (name) => `${name} здесь нет`,
     openLocationHint: "«Открыть расположение» покажет папку, на которую она указывает.",
     openLocation: "Открыть расположение",
+    backToFile: "К файлу",
   },
 );
 
@@ -139,9 +141,11 @@ function LocationView({
   path,
   source,
   extract = false,
+  onOpenRevealedFile,
 }: Pick<PluginFileOpenerProps, "path" | "source"> & {
   /** Open the archive's Extract dialog once it is selected (§8.13). */
   extract?: boolean;
+  onOpenRevealedFile?: () => void;
 }) {
   const t = useMessages(messages);
   const state = useLocatedFile(path, source, (located) => {
@@ -175,6 +179,7 @@ function LocationView({
       initialPath={located.dirPath}
       revealPath={located.exists && !located.isDirectory ? located.absolutePath : null}
       extractOnReveal={extract}
+      onOpenRevealedFile={onOpenRevealedFile}
       initialQuery={located.exists ? "" : (located.matchHint ?? "")}
     />
   );
@@ -231,7 +236,21 @@ export function FileLocationOpener({ path, source }: PluginFileOpenerProps) {
  * the file. For an archive "the file" is its contents (§8.13): bb's preview
  * cannot render one, so that one kind is drawn here instead.
  */
-export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerProps) {
+export function FilePreviewOpener(props: PluginFileOpenerProps) {
+  const { path, source } = props;
+  // BB reuses the opener across file tabs; reveal state belongs to one target.
+  const targetKey = JSON.stringify([
+    path,
+    source.kind,
+    source.threadId,
+    source.environmentId,
+    source.projectId,
+    source.experimental_hostId ?? null,
+  ]);
+  return <FilePreview key={targetKey} {...props} />;
+}
+
+function FilePreview({ path, source, Original }: PluginFileOpenerProps) {
   /** Null while previewing; once switched, whether to extract on arrival. */
   const t = useMessages(messages);
   const [reveal, setReveal] = useState<{ extract: boolean } | null>(null);
@@ -241,7 +260,31 @@ export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerPr
   const archive = detectArchiveFormat(basename(path)) !== null;
 
   if (reveal !== null) {
-    return <LocationView path={path} source={source} extract={reveal.extract} />;
+    return (
+      <div className="@container flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex h-8 shrink-0 items-center border-b border-border px-2">
+          <span className="shrink-0" title={t.backToFile}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 shrink-0 gap-1.5 px-2 text-xs"
+              aria-label={t.backToFile}
+              onClick={() => setReveal(null)}
+            >
+              <Icon name="ChevronLeft" className="size-4" aria-hidden />
+              <span className="hidden @md:inline">{t.backToFile}</span>
+            </Button>
+          </span>
+        </div>
+        <LocationView
+          path={path}
+          source={source}
+          extract={reveal.extract}
+          onOpenRevealedFile={() => setReveal(null)}
+        />
+      </div>
+    );
   }
 
   return (
@@ -264,19 +307,22 @@ export function FilePreviewOpener({ path, source, Original }: PluginFileOpenerPr
             </span>
           </>
         )}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="h-6 shrink-0 gap-1.5 px-2 text-xs"
-          data-testid="fm-open-location"
-          // LocationView owns the lookup, its loading state and its failure
-          // text, so this only has to switch to it.
-          onClick={() => setReveal({ extract: false })}
-        >
-          <Icon name="FolderOpen" className="size-4" aria-hidden />
-          <span className="hidden @md:inline">{t.openLocation}</span>
-        </Button>
+        <span className="shrink-0" title={t.openLocation}>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 shrink-0 gap-1.5 px-2 text-xs"
+            data-testid="fm-open-location"
+            aria-label={t.openLocation}
+            // LocationView owns the lookup, its loading state and its failure
+            // text, so this only has to switch to it.
+            onClick={() => setReveal({ extract: false })}
+          >
+            <Icon name="FolderOpen" className="size-4" aria-hidden />
+            <span className="hidden @md:inline">{t.openLocation}</span>
+          </Button>
+        </span>
       </div>
       {/*
        * This wrapper is the scroller, and that is not a detail: BB's preview
