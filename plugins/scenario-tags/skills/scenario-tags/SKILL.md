@@ -36,8 +36,9 @@ Ids: letters, digits, `_ . -`, up to 64. Labels up to 60 characters.
 | Command | Effect |
 | --- | --- |
 | `bb plugin config scenario-tags set scenarios "$(cat catalog.json)"` | Replace the catalog. |
-| `bb scenario-tags check` | List scenarios, the pinned row, and every problem; exit 1 on a problem. |
+| `bb scenario-tags check` | List scenarios, the pinned row, hidden and new ones, and every problem; exit 1 on a problem. |
 | `bb scenario-tags reset-pins` | Drop the person's own pins. |
+| `bb scenario-tags unhide <id\|--all>` | Show a scenario the person hid again. |
 
 If a build manifest writes the setting, change the catalog in the manifest's
 source instead: the next sync overwrites a hand edit.

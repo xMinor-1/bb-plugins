@@ -3,7 +3,11 @@ Turn the tasks your team repeats with agents into tags above the message box.
 ## What you get
 
 - A thin row of tags above the message box, in thread and new-thread composers.
-- **Scenarios** expands every scenario by group; a pin keeps a tag in the row.
+- **Scenarios** expands the tags you kept, by group: a pin keeps a tag in the
+  row, a cross hides one you never use. **Hidden (N)** brings them back.
+- **All scenarios** shows the whole catalog with each tag's description and
+  questions, a search box, and Add to my row or Hide. Tags added to the
+  catalog later are marked new there instead of landing in your row.
 - A tag opens a short form with its questions. Required questions, including
   "attach the file", must be answered before anything is inserted.
 - The answers become a ready prompt in the message box. You read it and send it

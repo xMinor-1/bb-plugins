@@ -2,7 +2,8 @@
 //
 // Collapsed, the row shows the pinned tags; expanded, the scenarios the person
 // kept (not hidden) by group, each with a pin and, for catalog ones, a cross
-// that hides it. "All scenarios" lists the whole catalog. A tag opens a short form with the scenario's questions;
+// that hides it. "All scenarios" lists the whole catalog with search. A tag
+// opens a short form with the scenario's questions;
 // the answers become a prompt that goes into the message box. The person
 // reads it and sends it themselves: nothing here submits.
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";

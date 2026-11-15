@@ -6,8 +6,16 @@ Required questions must be answered first. The answers then become a ready
 prompt in the message box, which the person reads and sends. The plugin never
 sends anything by itself.
 
-- Collapsed, the row shows the pinned tags. **Scenarios** expands every
-  scenario by group, each with a pin.
+- Collapsed, the row shows the pinned tags. **Scenarios** expands the
+  scenarios the person kept, by group, each with a pin. A catalog scenario
+  also has a cross that hides it: it leaves the row and the list, and
+  **Hidden (N)** at the bottom brings it back.
+- **All scenarios** lists the whole catalog by group, with each scenario's
+  description and form questions, a search box, and **Add to my row** and
+  **Hide** (or **Show again**) on each. A scenario that arrives in a later
+  catalog is marked **new** there, and the **Scenarios** toggle shows a dot,
+  until the person opens All scenarios; it does not join the row by itself
+  unless the catalog pins it.
 - The catalog (groups, tags, questions, prompt templates) is one setting,
   usually written by a build manifest, so a new tag reaches everyone with the
   next release. Each person can pin their own tags on top of it.
@@ -21,7 +29,10 @@ sends anything by itself.
   scenarios show first under **Mine**, with **Change**, **Delete** and
   **Suggest to everyone** (download, copy or email the scenario as a catalog
   entry). They live in the plugin's storage on that bb, so restarts and catalog
-  updates keep them.
+  updates keep them. Own scenarios are not hidden: they have **Delete**.
+- Pins, hidden scenarios and what counts as seen are kept per person in the
+  plugin's storage, so restarts and catalog updates keep them too. The catalog
+  the person starts with sets the baseline: nothing in it is marked new.
 
 The interface is in English and Russian.
 
@@ -89,9 +100,10 @@ lists every problem and exits with code 1 when there is one.
 
 | Command | Effect |
 | --- | --- |
-| `bb scenario-tags check [--json]` | Check the catalog and show what the row holds. |
+| `bb scenario-tags check [--json]` | Check the catalog and show what the row holds, what is hidden and what is new. |
 | `bb scenario-tags reset-pins` | Return the row to the catalog's pinned tags. |
 | `bb scenario-tags remove-own <id>` | Delete one of the person's own scenarios. |
+| `bb scenario-tags unhide <id>` | Show a hidden catalog scenario again; `--all` shows every one. |
 
 ## Agent tool
 
@@ -102,15 +114,28 @@ after **Save**. The answer comes back to the agent when the person decides.
 
 ## How it works
 
-- `server.ts` defines the settings, keeps the person's pins and own scenarios
-  in the plugin's storage (`pins_get`, `pins_set`, `own_list`, `own_delete`),
-  registers `scenario_save` and the CLI.
+- `server.ts` defines the settings, keeps the person's pins, own scenarios and
+  curation (hidden and seen ids) in the plugin's storage (`pins_get`,
+  `pins_set`, `own_list`, `own_delete`, `curation_get`, `curation_update`),
+  registers `scenario_save` and the CLI. It sets the seen baseline from the
+  first non-empty catalog.
 - `app.tsx` registers a bare composer banner for thread and new-thread
   composers. It reads the catalog with `useSettings`, opens the form inline
   and puts the prompt in with `useComposer().insert`.
-- `src/catalog.ts` holds parsing, pins, own scenarios and prompt rendering as
-  plain functions; `src/app/` holds the form fields, the save preview (a
-  `pendingInteraction` slot) and the own-scenario controls.
+- `src/catalog.ts` holds parsing, pins, hiding, new marks, search, own
+  scenarios and prompt rendering as plain functions; `src/app/` holds the form
+  fields, the All scenarios view, the save preview (a `pendingInteraction`
+  slot) and the own-scenario controls.
+
+## Changes
+
+- **0.3.0** Hide catalog scenarios with a cross, **Hidden (N)** to bring them
+  back, the **All scenarios** view with search, and new marks for scenarios
+  added to the catalog later. `bb scenario-tags unhide`; `check` lists hidden
+  and new scenarios.
+- **0.2.0** Own scenarios made in a conversation, with a save preview.
+- **0.1.1** Runs on bb 0.48 (SDK 0.6.104).
+- **0.1.0** Tags above the message box with a short form and a ready prompt.
 
 ## Development
 
