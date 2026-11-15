@@ -56,6 +56,10 @@
       "source": "./plugins/qlik-sense"
     },
     {
+      "name": "scenario-tags",
+      "source": "./plugins/scenario-tags"
+    },
+    {
       "name": "server-status",
       "source": "./plugins/server-status"
     },
