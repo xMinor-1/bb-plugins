@@ -13,6 +13,15 @@ sends anything by itself.
   next release. Each person can pin their own tags on top of it.
 - A question can ask for a file: the form then waits until a file is attached
   to the message.
+- People make their own scenarios without editing the catalog. **New
+  scenario** puts a prompt into the message box; the agent asks about the task
+  and saves the tag with the `scenario_save` tool after the person confirms a
+  preview of the tag and its form. **Save this conversation as a scenario**
+  (also in the `+` menu) does the same from a conversation that worked. Own
+  scenarios show first under **Mine**, with **Change**, **Delete** and
+  **Suggest to everyone** (download, copy or email the scenario as a catalog
+  entry). They live in the plugin's storage on that bb, so restarts and catalog
+  updates keep them.
 
 The interface is in English and Russian.
 
@@ -60,6 +69,19 @@ bb scenario-tags check
 Name the tool or skill the agent should use in the prompt itself. Some agents
 do not run a skill from a leading `/name`; they read it as plain text.
 
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `scenarios` | The catalog above. |
+| `builderPrompt` | What **New scenario** puts into the message box. |
+| `saveChatPrompt` | What **Save this conversation as a scenario** puts in. |
+| `editPrompt` | What **Change** puts in; `{{label}}`, `{{id}}` and `{{scenario}}` (its JSON) are filled in. |
+| `suggestEmail` | Where **Suggest to everyone** offers to send the file; empty: download and copy only. |
+| `suggestHint` | Who adds suggested scenarios to the catalog and how to send them. |
+
+The defaults are in English; a build manifest usually sets them in its own language.
+
 A broken entry is left out and the rest still show; `bb scenario-tags check`
 lists every problem and exits with code 1 when there is one.
 
@@ -69,15 +91,26 @@ lists every problem and exits with code 1 when there is one.
 | --- | --- |
 | `bb scenario-tags check [--json]` | Check the catalog and show what the row holds. |
 | `bb scenario-tags reset-pins` | Return the row to the catalog's pinned tags. |
+| `bb scenario-tags remove-own <id>` | Delete one of the person's own scenarios. |
+
+## Agent tool
+
+`scenario_save` takes `label`, `description`, `fields` and `prompt` (and `id`
+to change an own scenario). It checks the scenario with the catalog rules,
+shows the person a preview in place of the message box, and stores it only
+after **Save**. The answer comes back to the agent when the person decides.
 
 ## How it works
 
-- `server.ts` defines the `scenarios` setting, keeps the person's pins in the
-  plugin's storage (`pins_get`, `pins_set`) and registers the CLI.
+- `server.ts` defines the settings, keeps the person's pins and own scenarios
+  in the plugin's storage (`pins_get`, `pins_set`, `own_list`, `own_delete`),
+  registers `scenario_save` and the CLI.
 - `app.tsx` registers a bare composer banner for thread and new-thread
   composers. It reads the catalog with `useSettings`, opens the form inline
   and puts the prompt in with `useComposer().insert`.
-- `src/catalog.ts` holds parsing, pins and prompt rendering as plain functions.
+- `src/catalog.ts` holds parsing, pins, own scenarios and prompt rendering as
+  plain functions; `src/app/` holds the form fields, the save preview (a
+  `pendingInteraction` slot) and the own-scenario controls.
 
 ## Development
 

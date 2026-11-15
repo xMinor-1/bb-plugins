@@ -14,7 +14,7 @@ const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/, "letters, digit
 const label = z.string().trim().min(1).max(60);
 const text = (max: number) => z.string().max(max);
 
-const fieldSchema = z.discriminatedUnion("type", [
+export const fieldSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("text"),
     id,
@@ -87,6 +87,20 @@ function issueText(error: z.ZodError): string {
     .join("; ");
 }
 
+/** One scenario against the schema and its own rules: unique fields, known placeholders. */
+export function checkScenario(entry: unknown): { scenario: Scenario } | { problem: string } {
+  const parsed = scenarioSchema.safeParse(entry);
+  if (!parsed.success) return { problem: issueText(parsed.error) };
+  const scenario: Scenario = { ...parsed.data, fields: parsed.data.fields ?? [] };
+  const fieldIds = new Set<string>();
+  const repeated = scenario.fields.find((field) => (fieldIds.has(field.id) ? true : (fieldIds.add(field.id), false)));
+  if (repeated) return { problem: `the field id "${repeated.id}" repeats` };
+  if (fieldIds.has("answers")) return { problem: `"answers" is reserved for the list of answers` };
+  const unknown = placeholders(scenario.prompt ?? "").filter((name) => name !== "answers" && !fieldIds.has(name));
+  if (unknown.length > 0) return { problem: `the prompt uses {{${unknown[0]}}}, which is not a field` };
+  return { scenario };
+}
+
 /** Reads the `scenarios` setting. Never throws: problems come back as text. */
 export function parseCatalog(raw: string | undefined | null): Catalog {
   const source = (raw ?? "").trim();
@@ -125,31 +139,15 @@ export function parseCatalog(raw: string | undefined | null): Catalog {
   const entries = Array.isArray(record.scenarios) ? record.scenarios : [];
   if (!Array.isArray(record.scenarios)) problems.push("The catalog has no `scenarios` list.");
   for (const [index, entry] of entries.slice(0, MAX_SCENARIOS).entries()) {
-    const parsed = scenarioSchema.safeParse(entry);
-    if (!parsed.success) {
+    const checked = checkScenario(entry);
+    if ("problem" in checked) {
       const name = entry && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string" ? ` (${(entry as { id: string }).id})` : "";
-      problems.push(`scenarios[${index}]${name}: ${issueText(parsed.error)}`);
+      problems.push(`scenarios[${index}]${name}: ${checked.problem}`);
       continue;
     }
-    const scenario: Scenario = { ...parsed.data, fields: parsed.data.fields ?? [] };
-    const where = `scenarios[${index}] (${scenario.id})`;
+    const { scenario } = checked;
     if (scenarioIds.has(scenario.id)) {
-      problems.push(`${where}: the id repeats`);
-      continue;
-    }
-    const fieldIds = new Set<string>();
-    const repeated = scenario.fields.find((field) => (fieldIds.has(field.id) ? true : (fieldIds.add(field.id), false)));
-    if (repeated) {
-      problems.push(`${where}: the field id "${repeated.id}" repeats`);
-      continue;
-    }
-    if (fieldIds.has("answers")) {
-      problems.push(`${where}: "answers" is reserved for the list of answers`);
-      continue;
-    }
-    const unknown = placeholders(scenario.prompt ?? "").filter((name) => name !== "answers" && !fieldIds.has(name));
-    if (unknown.length > 0) {
-      problems.push(`${where}: the prompt uses {{${unknown[0]}}}, which is not a field`);
+      problems.push(`scenarios[${index}] (${scenario.id}): the id repeats`);
       continue;
     }
     if (scenario.group && !groupIds.has(scenario.group)) {
@@ -259,4 +257,40 @@ export function renderPrompt(
     lines.push(line.replace(PLACEHOLDER, (_, name: string) => values.get(name) ?? ""));
   }
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+// ---------- The person's own scenarios ----------
+
+/** The group own scenarios show under; its label comes from the interface language. */
+export const MINE_GROUP = "mine-own";
+export const MAX_OWN = 50;
+export const OWN_PREFIX = "my-";
+
+export const isOwn = (scenario: Scenario) => scenario.group === MINE_GROUP;
+
+/** Own scenarios first, under their own group; a catalog entry with the same id gives way. */
+export function withOwn(catalog: Catalog, own: readonly Scenario[], mineLabel: string): Catalog {
+  if (own.length === 0) return catalog;
+  const ownIds = new Set(own.map((scenario) => scenario.id));
+  return {
+    groups: [{ id: MINE_GROUP, label: mineLabel }, ...catalog.groups.filter((group) => group.id !== MINE_GROUP)],
+    scenarios: [...own.map((scenario) => ({ ...scenario, group: MINE_GROUP, pinned: false })), ...catalog.scenarios.filter((s) => !ownIds.has(s.id))],
+    problems: catalog.problems,
+  };
+}
+
+/** A scenario as the catalog file has it, for "suggest to everyone". */
+export function catalogEntry(scenario: Scenario, keepId = false): Record<string, unknown> {
+  const { group: _group, pinned: _pinned, ...rest } = scenario;
+  const shortId = scenario.id.startsWith(OWN_PREFIX) ? scenario.id.slice(OWN_PREFIX.length) : scenario.id;
+  const entry: Record<string, unknown> = { ...rest, id: keepId ? scenario.id : shortId };
+  if (scenario.fields.length === 0) delete entry.fields;
+  return entry;
+}
+
+/** Fills `{{label}}`, `{{id}}` and `{{scenario}}` in the edit prompt. */
+export function editPrompt(template: string, scenario: Scenario): string {
+  const json = JSON.stringify(catalogEntry(scenario, true), null, 2);
+  const values: Record<string, string> = { label: scenario.label, id: scenario.id, scenario: json };
+  return template.replace(PLACEHOLDER, (match, name: string) => values[name] ?? match);
 }

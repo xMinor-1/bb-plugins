@@ -1,9 +1,21 @@
 ---
 name: scenario-tags
-description: Write or fix the Scenario Tags catalog (the tags above the message box) and check it with `bb scenario-tags check`. Use when the user asks to add, change, or debug a scenario tag, its form questions, or the prompt it inserts.
+description: Make a scenario tag for the person with the `scenario_save` tool, or write and check the Scenario Tags catalog (the tags above the message box). Use when the user asks to create, save, change or debug a scenario tag, its form questions, or the prompt it inserts.
 ---
 
-# Scenario Tags catalog
+# Scenario Tags
+
+## The person's own scenario
+
+When the person asks to make, save or change a scenario, find out the task, the
+data and tools it needs, the questions the form should ask (and which are
+required), and the shape of the result. Then call `scenario_save` with
+`label` (up to 30 characters), `description`, `fields` and `prompt`; pass `id`
+only to change one of their own scenarios (ids start with `my-`). The person
+sees a preview and decides; the tool answers once they do. Do not save
+without being asked.
+
+## The catalog
 
 The tags above the message box come from one setting, `scenarios`, holding JSON:
 

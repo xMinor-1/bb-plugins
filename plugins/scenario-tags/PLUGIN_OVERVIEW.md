@@ -8,6 +8,10 @@ Turn the tasks your team repeats with agents into tags above the message box.
   "attach the file", must be answered before anything is inserted.
 - The answers become a ready prompt in the message box. You read it and send it
   yourself.
+- Make your own tags in a conversation: **New scenario** has the agent ask
+  about the task, then shows you the tag and its form before saving. Turn a
+  conversation that worked into a tag with **Save as scenario**. Your tags show
+  under **Mine** with Change, Delete and Suggest to everyone.
 
 ## How it works
 

@@ -5,19 +5,23 @@
 // the answers become a prompt that goes into the message box. The person
 // reads it and sends it themselves: nothing here submits.
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { definePluginApp, useComposer, useRealtime, useRpc, useSettings } from "@get-bb/plugin-sdk/app";
+import { definePluginApp, useComposer, useRealtime, useRpc, useSettings, type PluginComposerApi } from "@get-bb/plugin-sdk/app";
 import type { RpcContract } from "./server";
 import { Icon } from "@/components/ui/icon";
-import { useMessages } from "@/lib/i18n";
+import { messagesNow, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
+  checkScenario,
+  editPrompt,
   groupedScenarios,
+  isOwn,
   initialAnswers,
   missingFields,
   parseCatalog,
   pinnedScenarios,
   renderPrompt,
   togglePin,
+  withOwn,
   type Answers,
   type Catalog,
   type OwnPins,
@@ -25,7 +29,11 @@ import {
   type ScenarioField,
 } from "./src/catalog";
 import { messages } from "./src/messages";
-import { PINS_CHANGED } from "./src/shared";
+import { FieldInput } from "./src/app/fields";
+import { OWN_CHANGED, PINS_CHANGED, PREVIEW_RENDERER } from "./src/shared";
+import { DEFAULT_BUILDER_PROMPT, DEFAULT_EDIT_PROMPT, DEFAULT_SAVE_CHAT_PROMPT } from "./src/prompts";
+import { DeleteConfirm, OwnActions, SuggestPanel } from "./src/app/own";
+import { ScenarioPreview } from "./src/app/preview";
 
 type Texts = (typeof messages)["en"];
 
@@ -64,6 +72,72 @@ function usePins(): [OwnPins | null | undefined, (next: OwnPins | null) => void]
     [rpc, load],
   );
   return [own, save];
+}
+
+/** The person's own scenarios, checked again on the way in. */
+function useOwnScenarios(): [Scenario[], (id: string) => void] {
+  const rpc = useRpc<RpcContract>();
+  const [own, setOwn] = useState<Scenario[]>([]);
+  const latest = useRef(0);
+  const load = useCallback(() => {
+    const request = ++latest.current;
+    rpc.call("own_list", null).then(
+      (result) => {
+        if (request !== latest.current) return;
+        const checked = result.scenarios.map(checkScenario).flatMap((item) => ("scenario" in item ? [item.scenario] : []));
+        setOwn(checked);
+      },
+      () => {},
+    );
+  }, [rpc]);
+  useEffect(load, [load]);
+  useRealtime(OWN_CHANGED, load);
+  const remove = useCallback(
+    (id: string) => {
+      latest.current++;
+      setOwn((current) => current.filter((scenario) => scenario.id !== id));
+      rpc.call("own_delete", { id }).catch(load);
+    },
+    [rpc, load],
+  );
+  return [own, remove];
+}
+
+type ComposerTexts = { builder: string; saveChat: string; edit: string; suggestEmail: string; suggestHint: string };
+
+const text = (value: unknown, fallback: string) => (typeof value === "string" && value.trim() !== "" ? value : fallback);
+
+/** What the row puts into the message box; the plus menu reads the latest copy outside React. */
+let latestTexts: ComposerTexts = {
+  builder: DEFAULT_BUILDER_PROMPT,
+  saveChat: DEFAULT_SAVE_CHAT_PROMPT,
+  edit: DEFAULT_EDIT_PROMPT,
+  suggestEmail: "",
+  suggestHint: "",
+};
+
+function useComposerTexts(): ComposerTexts {
+  const { values } = useSettings();
+  const texts = useMemo(
+    () => ({
+      builder: text(values?.builderPrompt, DEFAULT_BUILDER_PROMPT),
+      saveChat: text(values?.saveChatPrompt, DEFAULT_SAVE_CHAT_PROMPT),
+      edit: text(values?.editPrompt, DEFAULT_EDIT_PROMPT),
+      suggestEmail: text(values?.suggestEmail, "").trim(),
+      suggestHint: text(values?.suggestHint, ""),
+    }),
+    [values],
+  );
+  useEffect(() => {
+    latestTexts = texts;
+  }, [texts]);
+  return texts;
+}
+
+/** Puts text at the end of the draft, on its own paragraph when the draft has text. */
+function putIntoComposer(composer: PluginComposerApi, value: string) {
+  composer.insert(value, { at: "end", block: !composer.isEmpty });
+  composer.focus();
 }
 
 // ---------- Tags ----------
@@ -107,6 +181,8 @@ function PinButton({ pinned, label, onToggle, t }: { pinned: boolean; label: str
   );
 }
 
+type OwnPanel = { kind: "delete" | "suggest"; scenario: Scenario } | null;
+
 function AllScenarios({
   catalog,
   row,
@@ -114,6 +190,11 @@ function AllScenarios({
   onTogglePin,
   onReset,
   canReset,
+  onNew,
+  onSaveChat,
+  onEdit,
+  onDelete,
+  texts,
   t,
 }: {
   catalog: Catalog;
@@ -122,11 +203,34 @@ function AllScenarios({
   onTogglePin: (scenario: Scenario) => void;
   onReset: () => void;
   canReset: boolean;
+  onNew: () => void;
+  onSaveChat: (() => void) | null;
+  onEdit: (scenario: Scenario) => void;
+  onDelete: (scenario: Scenario) => void;
+  texts: ComposerTexts;
   t: Texts;
 }) {
   const inRow = new Set(row.map((scenario) => scenario.id));
+  const [panel, setPanel] = useState<OwnPanel>(null);
+  const panelScenario = panel ? catalog.scenarios.find((scenario) => scenario.id === panel.scenario.id) ?? null : null;
   return (
-    <div className="flex max-h-64 flex-col gap-2 overflow-y-auto pb-1 pt-1.5">
+    <div className="flex max-h-72 flex-col gap-2 overflow-y-auto pb-1 pt-1.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button
+          type="button"
+          onClick={onNew}
+          title={t.newScenarioHint}
+          className="inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-border px-2.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Icon name="Plus" className="size-3" />
+          {t.newScenario}
+        </button>
+        {onSaveChat && (
+          <button type="button" onClick={onSaveChat} className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+            {t.saveChat}
+          </button>
+        )}
+      </div>
       {groupedScenarios(catalog).map(({ group, scenarios }) => (
         <section key={group?.id ?? "__other"} className="flex flex-col gap-1">
           <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{group?.label ?? t.other}</h3>
@@ -135,11 +239,34 @@ function AllScenarios({
               <span key={scenario.id} className="inline-flex min-w-0 items-center gap-0.5">
                 <Tag scenario={scenario} onOpen={onOpen} />
                 <PinButton pinned={inRow.has(scenario.id)} label={scenario.label} onToggle={() => onTogglePin(scenario)} t={t} />
+                {isOwn(scenario) && (
+                  <OwnActions
+                    scenario={scenario}
+                    onEdit={() => onEdit(scenario)}
+                    onAskDelete={() => setPanel({ kind: "delete", scenario })}
+                    onSuggest={() => setPanel({ kind: "suggest", scenario })}
+                    t={t}
+                  />
+                )}
               </span>
             ))}
           </div>
         </section>
       ))}
+      {panel && panelScenario && panel.kind === "delete" && (
+        <DeleteConfirm
+          scenario={panelScenario}
+          onDelete={() => {
+            onDelete(panelScenario);
+            setPanel(null);
+          }}
+          onKeep={() => setPanel(null)}
+          t={t}
+        />
+      )}
+      {panel && panelScenario && panel.kind === "suggest" && (
+        <SuggestPanel scenario={panelScenario} email={texts.suggestEmail} hint={texts.suggestHint} onClose={() => setPanel(null)} t={t} />
+      )}
       <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
         {canReset && (
           <button type="button" onClick={onReset} className="underline-offset-2 hover:text-foreground hover:underline">
@@ -153,80 +280,6 @@ function AllScenarios({
 }
 
 // ---------- Form ----------
-
-const inputClass =
-  "w-full rounded-md border border-input bg-background px-2 py-1 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 aria-invalid:border-destructive";
-
-function FieldInput({
-  field,
-  value,
-  invalid,
-  onChange,
-  attachmentCount,
-  inputId,
-  autoFocus,
-  t,
-}: {
-  field: ScenarioField;
-  value: string;
-  invalid: boolean;
-  onChange: (value: string) => void;
-  attachmentCount: number;
-  inputId: string;
-  autoFocus: boolean;
-  t: Texts;
-}) {
-  const common = { id: inputId, "aria-invalid": invalid || undefined, "aria-required": field.required || undefined, autoFocus };
-  if (field.type === "attachment") {
-    return (
-      <p
-        id={inputId}
-        tabIndex={-1}
-        className={cn(
-          "flex items-center gap-1.5 text-xs",
-          attachmentCount > 0 ? "text-foreground" : invalid ? "text-destructive" : "text-muted-foreground",
-        )}
-      >
-        <Icon name={attachmentCount > 0 ? "Check" : "Paperclip"} className="size-3.5 shrink-0" />
-        {attachmentCount > 0 ? t.attached(attachmentCount) : t.attachHint}
-      </p>
-    );
-  }
-  if (field.type === "textarea") {
-    return (
-      <textarea
-        {...common}
-        rows={3}
-        value={value}
-        placeholder={field.placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        className={cn(inputClass, "min-h-16 resize-y")}
-      />
-    );
-  }
-  if (field.type === "select") {
-    return (
-      <select {...common} value={value} onChange={(event) => onChange(event.target.value)} className={cn(inputClass, "h-8")}>
-        <option value="">{t.choose}</option>
-        {field.options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    );
-  }
-  return (
-    <input
-      {...common}
-      type="text"
-      value={value}
-      placeholder={field.placeholder}
-      onChange={(event) => onChange(event.target.value)}
-      className={cn(inputClass, "h-8")}
-    />
-  );
-}
 
 function ScenarioForm({ scenario, onDone, t }: { scenario: Scenario; onDone: () => void; t: Texts }) {
   const composer = useComposer();
@@ -330,21 +383,28 @@ function ScenarioForm({ scenario, onDone, t }: { scenario: Scenario; onDone: () 
 
 export function ScenarioBar() {
   const t = useMessages(messages);
-  const catalog = useCatalog();
+  const composer = useComposer();
+  const texts = useComposerTexts();
+  const shared = useCatalog();
+  const [ownScenarios, removeOwn] = useOwnScenarios();
+  const catalog = useMemo(() => withOwn(shared, ownScenarios, t.mine), [shared, ownScenarios, t.mine]);
   const [own, savePins] = usePins();
   const [expanded, setExpanded] = useState(false);
   const [open, setOpen] = useState<Scenario | null>(null);
 
-  // A scenario that left the catalog (new manifest) closes its form.
+  // A scenario that left the catalog (new manifest, deleted) closes its form.
   const openId = open?.id;
   useEffect(() => {
     if (openId && !catalog.scenarios.some((scenario) => scenario.id === openId)) setOpen(null);
   }, [catalog, openId]);
 
-  if (catalog.scenarios.length === 0) return null;
   const row = pinnedScenarios(catalog, own ?? null);
   const current = open ? catalog.scenarios.find((scenario) => scenario.id === open.id) ?? null : null;
   const openScenario = (scenario: Scenario) => setOpen((now) => (now?.id === scenario.id ? null : scenario));
+  const insertAndClose = (value: string) => {
+    putIntoComposer(composer, value);
+    setExpanded(false);
+  };
 
   return (
     <div className="flex flex-col px-1">
@@ -364,7 +424,7 @@ export function ScenarioBar() {
           {row.length > 0 ? (
             row.map((scenario) => <Tag key={scenario.id} scenario={scenario} onOpen={openScenario} active={current?.id === scenario.id} />)
           ) : (
-            <span className="truncate text-xs text-muted-foreground">{t.noPins}</span>
+            <span className="truncate text-xs text-muted-foreground">{catalog.scenarios.length > 0 ? t.noPins : t.emptyRow}</span>
           )}
         </div>
       </div>
@@ -387,6 +447,11 @@ export function ScenarioBar() {
             onTogglePin={(scenario) => savePins(togglePin(catalog, own ?? null, scenario.id))}
             onReset={() => savePins(null)}
             canReset={own !== null && own !== undefined}
+            onNew={() => insertAndClose(texts.builder)}
+            onSaveChat={composer.scope.kind === "thread" ? () => insertAndClose(texts.saveChat) : null}
+            onEdit={(scenario) => insertAndClose(editPrompt(texts.edit, scenario))}
+            onDelete={(scenario) => removeOwn(scenario.id)}
+            texts={texts}
             t={t}
           />
         )
@@ -400,5 +465,16 @@ export default definePluginApp((app) => {
     id: "scenario-tags",
     scopes: ["thread", "new-thread"],
     banners: [{ id: "scenario-bar", chrome: "bare", component: ScenarioBar }],
+    plusMenu: [
+      {
+        id: "save-as-scenario",
+        label: messagesNow(messages).saveChatMenu,
+        description: messagesNow(messages).saveChatMenuHint,
+        icon: "Plus",
+        disabled: (composer) => composer.scope.kind !== "thread",
+        run: ({ composer }) => putIntoComposer(composer, latestTexts.saveChat),
+      },
+    ],
   });
+  app.slots.pendingInteraction({ id: PREVIEW_RENDERER, component: ScenarioPreview });
 });

@@ -130,3 +130,36 @@ describe("answers and the prompt", () => {
     expect(renderPrompt(scenario, { question: "{{period}}", period: "" }, 0)).toBe("Read the reports guide first.\nQuestion: {{period}}");
   });
 });
+
+import { catalogEntry, checkScenario, editPrompt, MINE_GROUP, withOwn } from "../src/catalog";
+
+describe("own scenarios", () => {
+  const mine = { id: "my-abc12345", label: "Invoice", group: MINE_GROUP, pinned: false, fields: [], prompt: "Check it" };
+
+  it("puts own scenarios first under Mine and lets them win an id clash", () => {
+    const clash = { ...mine, id: "plain", label: "My plain" };
+    const merged = withOwn(catalog, [mine, clash], "Mine");
+    expect(merged.groups[0]).toEqual({ id: MINE_GROUP, label: "Mine" });
+    expect(merged.scenarios.map((s) => s.id)).toEqual(["my-abc12345", "plain", "report-guide", "contract-check"]);
+    expect(groupedScenarios(merged)[0]!.scenarios.map((s) => s.label)).toEqual(["Invoice", "My plain"]);
+    expect(withOwn(catalog, [], "Mine")).toBe(catalog);
+  });
+
+  it("an own scenario never comes pinned by default", () => {
+    const merged = withOwn(catalog, [{ ...mine, pinned: true }], "Mine");
+    expect(pinnedScenarios(merged, null).map((s) => s.id)).toEqual(["report-guide"]);
+  });
+
+  it("the suggested file is a plain catalog entry that passes the checks", () => {
+    const entry = catalogEntry({ ...mine, fields: [{ id: "x", label: "X", type: "text" }] });
+    expect(entry).toEqual({ id: "abc12345", label: "Invoice", fields: [{ id: "x", label: "X", type: "text" }], prompt: "Check it" });
+    expect("scenario" in checkScenario(entry)).toBe(true);
+    expect(catalogEntry(mine)).not.toHaveProperty("fields");
+  });
+
+  it("fills the edit prompt and leaves unknown placeholders alone", () => {
+    const out = editPrompt("Change {{label}} ({{id}}) {{other}}\n{{scenario}}", mine);
+    expect(out.startsWith("Change Invoice (my-abc12345) {{other}}\n{")).toBe(true);
+    expect(JSON.parse(out.slice(out.indexOf("\n{") + 1))).toMatchObject({ id: "my-abc12345" });
+  });
+});
