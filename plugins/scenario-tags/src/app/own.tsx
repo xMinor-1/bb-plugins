@@ -76,7 +76,8 @@ export function suggestionFile(scenario: Scenario): { name: string; text: string
 /** A mailto link with the scenario in the body; mail clients cap long links, so the body is cut. */
 export function mailLink(email: string, scenario: Scenario, intro: string): string {
   const { text } = suggestionFile(scenario);
-  const body = `${intro}\n\n${text}`.slice(0, 1800);
+  // Cut by whole code points: half of an emoji makes encodeURIComponent throw while the panel renders.
+  const body = Array.from(`${intro}\n\n${text}`).slice(0, 1800).join("");
   return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(`Scenario: ${scenario.label}`)}&body=${encodeURIComponent(body)}`;
 }
 
