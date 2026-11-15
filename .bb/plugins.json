@@ -24,6 +24,10 @@
       "source": "./plugins/file-manager"
     },
     {
+      "name": "russian-ui",
+      "source": "./plugins/russian-ui"
+    },
+    {
       "name": "scenario-tags",
       "source": "./plugins/scenario-tags"
     },
