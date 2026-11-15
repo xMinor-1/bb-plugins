@@ -6,6 +6,8 @@ import type { Scenario } from "./catalog";
 export const PINS_CHANGED = "pins-changed";
 /** Realtime channel: the person's own scenarios changed. */
 export const OWN_CHANGED = "own-changed";
+/** Realtime channel: the person hid or showed a scenario again, or saw new ones. */
+export const CURATION_CHANGED = "curation-changed";
 /** Most tags a person can pin. */
 export const MAX_PINS = 50;
 /** The `pendingInteraction` renderer that previews a scenario before `scenario_save` stores it. */

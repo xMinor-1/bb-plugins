@@ -1,7 +1,8 @@
 // Scenario Tags — a row of scenario tags above the message box.
 //
-// Collapsed, the row shows the pinned tags; expanded, every scenario by group,
-// each with a pin. A tag opens a short form with the scenario's questions;
+// Collapsed, the row shows the pinned tags; expanded, the scenarios the person
+// kept (not hidden) by group, each with a pin and, for catalog ones, a cross
+// that hides it. "All scenarios" lists the whole catalog. A tag opens a short form with the scenario's questions;
 // the answers become a prompt that goes into the message box. The person
 // reads it and sends it themselves: nothing here submits.
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
@@ -11,29 +12,39 @@ import { Icon } from "@/components/ui/icon";
 import { messagesNow, useMessages } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
+  applyCuration,
+  canHide,
   checkScenario,
+  EMPTY_CURATION,
   editPrompt,
   groupedScenarios,
+  hiddenScenarios,
   isOwn,
   initialAnswers,
   missingFields,
+  newScenarioIds,
   parseCatalog,
-  pinnedScenarios,
+  pinsAfterHide,
+  pinsAfterToggle,
   renderPrompt,
-  togglePin,
+  rowScenarios,
+  visibleCatalog,
   withOwn,
   type Answers,
   type Catalog,
+  type Curation,
+  type CurationChange,
   type OwnPins,
   type Scenario,
   type ScenarioField,
 } from "./src/catalog";
 import { messages } from "./src/messages";
 import { FieldInput } from "./src/app/fields";
-import { OWN_CHANGED, PINS_CHANGED, PREVIEW_RENDERER } from "./src/shared";
+import { CURATION_CHANGED, OWN_CHANGED, PINS_CHANGED, PREVIEW_RENDERER } from "./src/shared";
 import { DEFAULT_BUILDER_PROMPT, DEFAULT_EDIT_PROMPT, DEFAULT_SAVE_CHAT_PROMPT } from "./src/prompts";
 import { DeleteConfirm, OwnActions, SuggestPanel } from "./src/app/own";
 import { ScenarioPreview } from "./src/app/preview";
+import { CatalogView } from "./src/app/all";
 
 type Texts = (typeof messages)["en"];
 
@@ -101,6 +112,40 @@ function useOwnScenarios(): [Scenario[], (id: string) => void] {
     [rpc, load],
   );
   return [own, remove];
+}
+
+/** What the person hid and has seen; `undefined` while loading. */
+function useCuration(): [Curation | undefined, (change: CurationChange) => void] {
+  const rpc = useRpc<RpcContract>();
+  const [curation, setCuration] = useState<Curation | undefined>(undefined);
+  const latest = useRef(0);
+  const load = useCallback(() => {
+    const request = ++latest.current;
+    rpc.call("curation_get", null).then(
+      (result) => {
+        if (request === latest.current) setCuration(result);
+      },
+      () => {
+        if (request === latest.current) setCuration((current) => current ?? EMPTY_CURATION);
+      },
+    );
+  }, [rpc]);
+  useEffect(load, [load]);
+  useRealtime(CURATION_CHANGED, load);
+  const update = useCallback(
+    (change: CurationChange) => {
+      const request = ++latest.current;
+      setCuration((current) => applyCuration(current ?? EMPTY_CURATION, change).next);
+      rpc.call("curation_update", change).then(
+        (result) => {
+          if (request === latest.current) setCuration(result);
+        },
+        load,
+      );
+    },
+    [rpc, load],
+  );
+  return [curation, update];
 }
 
 type ComposerTexts = { builder: string; saveChat: string; edit: string; suggestEmail: string; suggestHint: string };
@@ -181,13 +226,34 @@ function PinButton({ pinned, label, onToggle, t }: { pinned: boolean; label: str
   );
 }
 
+function HideButton({ label, onHide, t }: { label: string; onHide: () => void; t: Texts }) {
+  return (
+    <button
+      type="button"
+      aria-label={t.hide(label)}
+      title={t.hide(label)}
+      onClick={onHide}
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Icon name="X" className="size-3" />
+    </button>
+  );
+}
+
+const linkButton = "underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
 type OwnPanel = { kind: "delete" | "suggest"; scenario: Scenario } | null;
 
-function AllScenarios({
+function ScenarioList({
   catalog,
+  hidden,
+  newCount,
   row,
   onOpen,
   onTogglePin,
+  onHide,
+  onUnhide,
+  onAll,
   onReset,
   canReset,
   onNew,
@@ -197,10 +263,16 @@ function AllScenarios({
   texts,
   t,
 }: {
+  /** What the person kept: the catalog without hidden scenarios. */
   catalog: Catalog;
+  hidden: readonly Scenario[];
+  newCount: number;
   row: readonly Scenario[];
   onOpen: (scenario: Scenario) => void;
   onTogglePin: (scenario: Scenario) => void;
+  onHide: (scenario: Scenario) => void;
+  onUnhide: (scenario: Scenario) => void;
+  onAll: () => void;
   onReset: () => void;
   canReset: boolean;
   onNew: () => void;
@@ -212,6 +284,7 @@ function AllScenarios({
 }) {
   const inRow = new Set(row.map((scenario) => scenario.id));
   const [panel, setPanel] = useState<OwnPanel>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const panelScenario = panel ? catalog.scenarios.find((scenario) => scenario.id === panel.scenario.id) ?? null : null;
   return (
     <div className="flex max-h-72 flex-col gap-2 overflow-y-auto pb-1 pt-1.5">
@@ -230,6 +303,18 @@ function AllScenarios({
             {t.saveChat}
           </button>
         )}
+        <button
+          type="button"
+          onClick={onAll}
+          title={t.allScenariosHint}
+          className="ml-auto inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Icon name="GridView" className="size-3" />
+          {t.allScenarios}
+          {newCount > 0 && (
+            <span className="inline-flex h-4 items-center rounded bg-primary px-1 text-[10px] font-medium text-primary-foreground">{t.newCount(newCount)}</span>
+          )}
+        </button>
       </div>
       {groupedScenarios(catalog).map(({ group, scenarios }) => (
         <section key={group?.id ?? "__other"} className="flex flex-col gap-1">
@@ -239,6 +324,7 @@ function AllScenarios({
               <span key={scenario.id} className="inline-flex min-w-0 items-center gap-0.5">
                 <Tag scenario={scenario} onOpen={onOpen} />
                 <PinButton pinned={inRow.has(scenario.id)} label={scenario.label} onToggle={() => onTogglePin(scenario)} t={t} />
+                {canHide(scenario) && <HideButton label={scenario.label} onHide={() => onHide(scenario)} t={t} />}
                 {isOwn(scenario) && (
                   <OwnActions
                     scenario={scenario}
@@ -267,9 +353,29 @@ function AllScenarios({
       {panel && panelScenario && panel.kind === "suggest" && (
         <SuggestPanel scenario={panelScenario} email={texts.suggestEmail} hint={texts.suggestHint} onClose={() => setPanel(null)} t={t} />
       )}
+      {showHidden && hidden.length > 0 && (
+        <section className="flex flex-col gap-1" aria-label={t.hiddenList(hidden.length)}>
+          <div className="flex flex-wrap gap-x-2 gap-y-1">
+            {hidden.map((scenario) => (
+              <span key={scenario.id} className="inline-flex min-w-0 items-center gap-1 rounded-full border border-dashed border-border py-0.5 pl-2.5 pr-1 text-xs text-muted-foreground">
+                <span className="max-w-[12rem] truncate">{scenario.label}</span>
+                <button type="button" onClick={() => onUnhide(scenario)} aria-label={t.showAgainLabel(scenario.label)} className={cn("text-[11px] text-foreground", linkButton)}>
+                  {t.showAgain}
+                </button>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
       <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+        {hidden.length > 0 && (
+          <button type="button" aria-expanded={showHidden} onClick={() => setShowHidden((now) => !now)} className={cn("inline-flex items-center gap-0.5", linkButton)}>
+            <Icon name={showHidden ? "ChevronDown" : "ChevronRight"} className="size-3" />
+            {t.hiddenList(hidden.length)}
+          </button>
+        )}
         {canReset && (
-          <button type="button" onClick={onReset} className="underline-offset-2 hover:text-foreground hover:underline">
+          <button type="button" onClick={onReset} className={linkButton}>
             {t.resetPins}
           </button>
         )}
@@ -389,8 +495,13 @@ export function ScenarioBar() {
   const [ownScenarios, removeOwn] = useOwnScenarios();
   const catalog = useMemo(() => withOwn(shared, ownScenarios, t.mine), [shared, ownScenarios, t.mine]);
   const [own, savePins] = usePins();
-  const [expanded, setExpanded] = useState(false);
+  const [curationState, updateCuration] = useCuration();
+  const curation = curationState ?? EMPTY_CURATION;
+  const [view, setView] = useState<"closed" | "list" | "all">("closed");
+  const expanded = view !== "closed";
   const [open, setOpen] = useState<Scenario | null>(null);
+  /** New when "All scenarios" opened: marked there until it closes. */
+  const [freshSnapshot, setFreshSnapshot] = useState<ReadonlySet<string>>(new Set());
 
   // A scenario that left the catalog (new manifest, deleted) closes its form.
   const openId = open?.id;
@@ -398,12 +509,30 @@ export function ScenarioBar() {
     if (openId && !catalog.scenarios.some((scenario) => scenario.id === openId)) setOpen(null);
   }, [catalog, openId]);
 
-  const row = pinnedScenarios(catalog, own ?? null);
+  const pins = own ?? null;
+  const row = rowScenarios(catalog, pins, curation.hidden);
+  const fresh = useMemo(() => newScenarioIds(shared, curation.seen), [shared, curation.seen]);
   const current = open ? catalog.scenarios.find((scenario) => scenario.id === open.id) ?? null : null;
   const openScenario = (scenario: Scenario) => setOpen((now) => (now?.id === scenario.id ? null : scenario));
   const insertAndClose = (value: string) => {
     putIntoComposer(composer, value);
-    setExpanded(false);
+    setView("closed");
+  };
+  const togglePinOf = (scenario: Scenario) => {
+    savePins(pinsAfterToggle(catalog, pins, curation.hidden, scenario.id));
+    if (curation.hidden.includes(scenario.id)) updateCuration({ unhide: [scenario.id] });
+  };
+  const hide = (scenario: Scenario) => {
+    const nextPins = pinsAfterHide(catalog, pins, curation.hidden, scenario.id);
+    if (nextPins) savePins(nextPins);
+    updateCuration({ hide: [scenario.id] });
+  };
+  const unhide = (scenario: Scenario) => updateCuration({ unhide: [scenario.id] });
+  const openAll = () => {
+    // The marks stay for this visit; next time these are no longer new.
+    setFreshSnapshot(fresh);
+    if (fresh.size > 0) updateCuration({ seen: [...fresh] });
+    setView("all");
   };
 
   return (
@@ -414,11 +543,14 @@ export function ScenarioBar() {
           aria-expanded={expanded}
           aria-label={expanded ? t.hideAll : t.showAll}
           title={expanded ? t.hideAll : t.showAll}
-          onClick={() => setExpanded((now) => !now)}
+          onClick={() => setView((now) => (now === "closed" ? "list" : "closed"))}
           className="inline-flex h-6 shrink-0 items-center gap-0.5 rounded-md px-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Icon name={expanded ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
           {t.scenarios}
+          {fresh.size > 0 && view !== "all" && (
+            <span role="status" aria-label={t.newDot(fresh.size)} title={t.newDot(fresh.size)} className="ml-0.5 inline-block size-1.5 rounded-full bg-primary" />
+          )}
         </button>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none]">
           {row.length > 0 ? (
@@ -435,16 +567,34 @@ export function ScenarioBar() {
           t={t}
           onDone={() => {
             setOpen(null);
-            setExpanded(false);
+            setView("closed");
           }}
         />
+      ) : view === "all" ? (
+        <CatalogView
+          catalog={catalog}
+          rowIds={new Set(row.map((scenario) => scenario.id))}
+          hiddenIds={new Set(hiddenScenarios(catalog, curation.hidden).map((scenario) => scenario.id))}
+          newIds={freshSnapshot}
+          onOpen={openScenario}
+          onTogglePin={togglePinOf}
+          onHide={hide}
+          onUnhide={unhide}
+          onBack={() => setView("list")}
+          t={t}
+        />
       ) : (
-        expanded && (
-          <AllScenarios
-            catalog={catalog}
+        view === "list" && (
+          <ScenarioList
+            catalog={visibleCatalog(catalog, curation.hidden)}
+            hidden={hiddenScenarios(catalog, curation.hidden)}
+            newCount={fresh.size}
             row={row}
             onOpen={openScenario}
-            onTogglePin={(scenario) => savePins(togglePin(catalog, own ?? null, scenario.id))}
+            onTogglePin={togglePinOf}
+            onHide={hide}
+            onUnhide={unhide}
+            onAll={openAll}
             onReset={() => savePins(null)}
             canReset={own !== null && own !== undefined}
             onNew={() => insertAndClose(texts.builder)}

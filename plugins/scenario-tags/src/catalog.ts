@@ -294,3 +294,112 @@ export function editPrompt(template: string, scenario: Scenario): string {
   const values: Record<string, string> = { label: scenario.label, id: scenario.id, scenario: json };
   return template.replace(PLACEHOLDER, (match, name: string) => values[name] ?? match);
 }
+
+// ---------- What the person hides and has seen ----------
+
+/**
+ * The person's curation of the shared catalog. `hidden` lists catalog
+ * scenarios taken out of the row and the expanded view. `seen` lists every
+ * catalog id the person has had in front of them: a catalog id outside it is
+ * new. `null` means no baseline yet; the first catalog read sets one, so the
+ * scenarios a person starts with are never marked new.
+ */
+export type Curation = { hidden: string[]; seen: string[] | null };
+
+export const EMPTY_CURATION: Curation = { hidden: [], seen: null };
+export const MAX_HIDDEN = 200;
+export const MAX_SEEN = 1000;
+
+/** Own scenarios cannot be hidden: they have Delete. */
+export const canHide = (scenario: Scenario) => !isOwn(scenario);
+
+/** The catalog without what the person hid; own scenarios always stay. */
+export function visibleCatalog(catalog: Catalog, hidden: readonly string[]): Catalog {
+  if (hidden.length === 0) return catalog;
+  const set = new Set(hidden);
+  return { ...catalog, scenarios: catalog.scenarios.filter((scenario) => !canHide(scenario) || !set.has(scenario.id)) };
+}
+
+/** Hidden scenarios still in the catalog, in catalog order: what "Hidden (N)" counts. */
+export function hiddenScenarios(catalog: Catalog, hidden: readonly string[]): Scenario[] {
+  const set = new Set(hidden);
+  return catalog.scenarios.filter((scenario) => canHide(scenario) && set.has(scenario.id));
+}
+
+/** The collapsed row: the person's pick or the catalog's, without hidden tags. */
+export function rowScenarios(catalog: Catalog, own: OwnPins | null, hidden: readonly string[]): Scenario[] {
+  return pinnedScenarios(visibleCatalog(catalog, hidden), own);
+}
+
+/** Catalog scenarios the person has not seen yet. Without a baseline nothing is new. */
+export function newScenarioIds(catalog: Catalog, seen: readonly string[] | null): Set<string> {
+  if (seen === null) return new Set();
+  const known = new Set(seen);
+  return new Set(catalog.scenarios.filter((scenario) => canHide(scenario) && !known.has(scenario.id)).map((scenario) => scenario.id));
+}
+
+/**
+ * Pins after the person adds a tag to the row or takes it out. A hidden tag
+ * that is added is shown again by the caller, so it counts as visible here.
+ * `known` takes the defaults of the whole catalog, hidden ones too: a hidden
+ * default that is shown again later does not jump back into the row.
+ */
+export function pinsAfterToggle(catalog: Catalog, own: OwnPins | null, hidden: readonly string[], scenarioId: string): OwnPins {
+  const visible = visibleCatalog(catalog, hidden.filter((item) => item !== scenarioId));
+  const { pins } = togglePin(visible, own, scenarioId);
+  return { pins, known: [...new Set([...(own?.known ?? []), ...defaultPins(catalog)])] };
+}
+
+/**
+ * Pins after hiding a tag that is in the row: it leaves the person's pick, so
+ * showing it again does not put it back in the row. `undefined` when the pins
+ * do not change.
+ */
+export function pinsAfterHide(catalog: Catalog, own: OwnPins | null, hidden: readonly string[], scenarioId: string): OwnPins | undefined {
+  const inRow = rowScenarios(catalog, own, hidden).some((scenario) => scenario.id === scenarioId);
+  return inRow ? pinsAfterToggle(catalog, own, hidden, scenarioId) : undefined;
+}
+
+/** A change to the curation; ids that are not catalog-shaped are ignored by the caller. */
+export type CurationChange = { hide?: string[]; unhide?: string[]; seen?: string[] };
+
+/** Applies a change; `changed` is false when nothing moved, so no signal goes out. */
+export function applyCuration(current: Curation, change: CurationChange): { next: Curation; changed: boolean } {
+  const unhide = new Set(change.unhide ?? []);
+  const hidden = [...new Set([...current.hidden.filter((item) => !unhide.has(item)), ...(change.hide ?? []).filter((item) => !item.startsWith(OWN_PREFIX))])].slice(-MAX_HIDDEN);
+  let seen = current.seen;
+  // A hidden scenario has been seen: it is never marked new afterwards.
+  const nowSeen = [...(change.seen ?? []), ...(change.hide ?? [])];
+  if (nowSeen.length > 0 && !(seen === null && !change.seen?.length)) {
+    const merged = [...new Set([...(seen ?? []), ...nowSeen])];
+    seen = merged.slice(-MAX_SEEN);
+  }
+  const same = (a: readonly string[] | null, b: readonly string[] | null) =>
+    a === b || (a !== null && b !== null && a.length === b.length && a.every((item, index) => item === b[index]));
+  const next = { hidden, seen };
+  return { next, changed: !same(current.hidden, hidden) || !same(current.seen, seen) };
+}
+
+/** The first baseline: every catalog id, once the catalog has any. */
+export function baselineCuration(current: Curation, catalog: Catalog): Curation | undefined {
+  if (current.seen !== null || catalog.scenarios.length === 0) return undefined;
+  return { ...current, seen: catalog.scenarios.filter(canHide).map((scenario) => scenario.id).slice(-MAX_SEEN) };
+}
+
+const fold = (value: string) => value.toLocaleLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+
+/**
+ * Scenarios matching every word of the query in their label, description,
+ * group name or question labels. An empty query keeps them all.
+ */
+export function searchScenarios(catalog: Catalog, query: string): Scenario[] {
+  const words = fold(query).split(/\s+/).filter((word) => word !== "");
+  if (words.length === 0) return catalog.scenarios;
+  const groupLabel = new Map(catalog.groups.map((group) => [group.id, group.label]));
+  return catalog.scenarios.filter((scenario) => {
+    const haystack = fold(
+      [scenario.label, scenario.description ?? "", scenario.group ? groupLabel.get(scenario.group) ?? "" : "", ...scenario.fields.map((field) => field.label)].join("\n"),
+    );
+    return words.every((word) => haystack.includes(word));
+  });
+}

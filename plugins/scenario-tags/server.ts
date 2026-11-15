@@ -9,26 +9,42 @@ import { randomUUID } from "node:crypto";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
+  applyCuration,
+  baselineCuration,
   checkScenario,
+  EMPTY_CURATION,
+  hiddenScenarios,
+  MAX_HIDDEN,
+  MAX_SEEN,
+  newScenarioIds,
   fieldSchema,
   MAX_CATALOG_CHARS,
   MAX_OWN,
   MINE_GROUP,
   OWN_PREFIX,
   parseCatalog,
-  pinnedScenarios,
+  rowScenarios,
   withOwn,
+  type Catalog,
+  type Curation,
+  type CurationChange,
   type OwnPins,
   type Scenario,
 } from "./src/catalog";
 import { DEFAULT_BUILDER_PROMPT, DEFAULT_EDIT_PROMPT, DEFAULT_SAVE_CHAT_PROMPT, SAVE_TOOL } from "./src/prompts";
-import { MAX_PINS, OWN_CHANGED, PINS_CHANGED, PREVIEW_RENDERER, type PreviewDecision, type PreviewPayload } from "./src/shared";
+import { CURATION_CHANGED, MAX_PINS, OWN_CHANGED, PINS_CHANGED, PREVIEW_RENDERER, type PreviewDecision, type PreviewPayload } from "./src/shared";
 
 const scenarioId = z.string().min(1).max(64);
 const ownPinsSchema = z.object({
   pins: z.array(scenarioId).max(MAX_PINS),
   known: z.array(scenarioId).max(500),
 });
+
+const curationSchema = z.object({
+  hidden: z.array(scenarioId).max(MAX_HIDDEN),
+  seen: z.array(scenarioId).max(MAX_SEEN).nullable(),
+});
+const idList = z.array(scenarioId).max(MAX_SEEN).optional();
 
 export const rpcContract = defineRpcContract({
   pins_get: {
@@ -49,11 +65,22 @@ export const rpcContract = defineRpcContract({
     input: z.object({ id: scenarioId }),
     output: z.object({ removed: z.boolean() }),
   },
+  /** Hidden catalog scenarios and the ids the person has seen; the first read sets the baseline. */
+  curation_get: {
+    input: z.null(),
+    output: curationSchema,
+  },
+  /** Hide, show again, or mark scenarios seen; returns the stored state. */
+  curation_update: {
+    input: z.object({ hide: idList, unhide: idList, seen: idList }),
+    output: curationSchema,
+  },
 });
 export type RpcContract = typeof rpcContract;
 
 const PINS_KEY = "pins";
 const OWN_KEY = "own-scenarios";
+const CURATION_KEY = "curation";
 
 export const CATALOG_HELP =
   "The tags above the message box, as JSON: `{ \"groups\": [{ \"id\", \"label\" }], \"scenarios\": [{ \"id\", \"label\", \"group\", \"pinned\", \"fields\": [{ \"id\", \"label\", \"type\": \"text\" | \"textarea\" | \"select\" | \"attachment\", \"required\" }], \"prompt\" }] }`. " +
@@ -155,6 +182,42 @@ export default async function plugin(bb: BbPluginApi) {
     bb.realtime.publish(OWN_CHANGED, {});
   }
 
+  async function catalogNow(): Promise<Catalog> {
+    const { scenarios } = await settings.get();
+    return parseCatalog(scenarios);
+  }
+
+  async function readCuration(): Promise<Curation> {
+    const parsed = curationSchema.safeParse(await bb.storage.kv.get(CURATION_KEY));
+    return parsed.success ? parsed.data : EMPTY_CURATION;
+  }
+
+  /** The stored curation, with the first baseline written once the catalog has scenarios. */
+  async function curationWithBaseline(catalog?: Catalog): Promise<Curation> {
+    const current = await readCuration();
+    const baseline = baselineCuration(current, catalog ?? (await catalogNow()));
+    if (!baseline) return current;
+    await bb.storage.kv.set(CURATION_KEY, baseline);
+    return baseline;
+  }
+
+  /** One change at a time, so two message boxes hiding at once both land. */
+  let queue: Promise<unknown> = Promise.resolve();
+  function updateCuration(change: CurationChange): Promise<Curation> {
+    const run = queue.then(async () => {
+      const { next, changed } = applyCuration(await curationWithBaseline(), change);
+      if (!changed) return next;
+      await bb.storage.kv.set(CURATION_KEY, next);
+      bb.realtime.publish(CURATION_CHANGED, {});
+      return next;
+    });
+    queue = run.catch(() => {});
+    return run;
+  }
+
+  // The catalog the person starts with is not "new": set the baseline at load.
+  await curationWithBaseline().catch(() => undefined);
+
   bb.rpc.register(rpcContract, {
     pins_get: async () => ({ own: await readPins() }),
     pins_set: async ({ own }) => {
@@ -164,6 +227,9 @@ export default async function plugin(bb: BbPluginApi) {
       return { own };
     },
     own_list: async () => ({ scenarios: await readOwn() }),
+    // Through the queue too: the first read may write the baseline.
+    curation_get: async () => updateCuration({}),
+    curation_update: async (change) => updateCuration(change),
     own_delete: async ({ id }) => {
       const current = await readOwn();
       const next = current.filter((scenario) => scenario.id !== id);
@@ -238,6 +304,7 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb scenario-tags check [--json]    Check the scenario catalog setting and list what the tags show",
     "  bb scenario-tags reset-pins        Return the collapsed row to the catalog's own pick",
     "  bb scenario-tags remove-own <id>   Delete one of the person's own scenarios",
+    "  bb scenario-tags unhide <id|--all> Show a hidden catalog scenario again",
   ].join("\n");
 
   bb.cli.register({
@@ -247,16 +314,21 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "check", summary: "Check the scenario catalog and list own scenarios", usage: "bb scenario-tags check [--json]" },
       { name: "reset-pins", summary: "Drop the person's own pinned tags", usage: "bb scenario-tags reset-pins" },
       { name: "remove-own", summary: "Delete one of the person's own scenarios", usage: "bb scenario-tags remove-own <id>" },
+      { name: "unhide", summary: "Show a hidden catalog scenario again", usage: "bb scenario-tags unhide <id|--all>" },
     ],
     async run(argv) {
       const json = argv.includes("--json");
       const [command, ...args] = argv.filter((arg) => arg !== "--json");
       if (command === "check") {
-        const { scenarios: raw } = await settings.get();
-        const catalog = parseCatalog(raw);
+        const catalog = await catalogNow();
         const ownScenarios = await readOwn();
         const pins = await readPins();
-        const row = pinnedScenarios(withOwn(catalog, ownScenarios, "Mine"), pins).map((scenario) => scenario.id);
+        const curation = await curationWithBaseline(catalog);
+        const row = rowScenarios(withOwn(catalog, ownScenarios, "Mine"), pins, curation.hidden).map((scenario) => scenario.id);
+        const hidden = hiddenScenarios(catalog, curation.hidden).map((scenario) => scenario.id);
+        const fresh = newScenarioIds(catalog, curation.seen);
+        const mark = (id: string) =>
+          `${row.includes(id) ? "  (in the row)" : ""}${hidden.includes(id) ? "  (hidden)" : ""}${fresh.has(id) ? "  (new)" : ""}`;
         const exitCode = catalog.problems.length > 0 ? 1 : 0;
         if (json) {
           return {
@@ -265,6 +337,8 @@ export default async function plugin(bb: BbPluginApi) {
               scenarios: catalog.scenarios.map(({ id, label, group }) => ({ id, label, group: group ?? null })),
               own: ownScenarios.map(({ id, label }) => ({ id, label })),
               row,
+              hidden,
+              new: [...fresh],
               ownPins: pins !== null,
               problems: catalog.problems,
             }),
@@ -274,7 +348,8 @@ export default async function plugin(bb: BbPluginApi) {
           catalog.scenarios.length === 0
             ? "The catalog is empty."
             : `${catalog.scenarios.length} scenario(s) in ${catalog.groups.length} group(s).`,
-          ...catalog.scenarios.map((s) => `  ${s.id}  ${s.label}${s.group ? `  [${s.group}]` : ""}${row.includes(s.id) ? "  (in the row)" : ""}`),
+          ...catalog.scenarios.map((s) => `  ${s.id}  ${s.label}${s.group ? `  [${s.group}]` : ""}${mark(s.id)}`),
+          hidden.length === 0 ? "Nothing is hidden." : `${hidden.length} hidden: ${hidden.join(", ")}. "bb scenario-tags unhide <id>" shows one again.`,
           ownScenarios.length === 0 ? "No own scenarios." : `${ownScenarios.length} own scenario(s):`,
           ...ownScenarios.map((s) => `  ${s.id}  ${s.label}${row.includes(s.id) ? "  (in the row)" : ""}`),
           pins !== null ? "The person pinned their own tags." : "The row shows the catalog's pinned tags.",
@@ -293,6 +368,17 @@ export default async function plugin(bb: BbPluginApi) {
         if (next.length === current.length) return { exitCode: 1, stderr: `No own scenario with id ${args[0]}. Run "bb scenario-tags check" to see ids.` };
         await writeOwn(next);
         return { exitCode: 0, stdout: `Deleted ${args[0]}.` };
+      }
+      if (command === "unhide" && args.length === 1) {
+        const before = await readCuration();
+        const ids = args[0] === "--all" ? before.hidden : args.filter((id) => before.hidden.includes(id));
+        if (ids.length === 0) {
+          return args[0] === "--all"
+            ? { exitCode: 0, stdout: "Nothing is hidden." }
+            : { exitCode: 1, stderr: `${args[0]} is not hidden. Run "bb scenario-tags check" to see what is.` };
+        }
+        await updateCuration({ unhide: ids });
+        return { exitCode: 0, stdout: `Shown again: ${ids.join(", ")}.` };
       }
       if (command === undefined || command === "help" || command === "--help") return { exitCode: 0, stdout: usage };
       return { exitCode: 1, stderr: usage };
