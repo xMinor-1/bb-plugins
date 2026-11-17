@@ -22,3 +22,15 @@ paths:
   `app.experimental_icons.register({ name, component })` и это имя в `navPanel.icon`
   и `experimental_sidebarFooter.register({ icon })`. id градиентов — через `useId()`,
   иначе два экземпляра значка делят одни `<defs>` (sticker-note 0.1.0, 31.10.2026).
+
+## Данные значков Hugeicons — копией в плагине
+
+- `@hugeicons/core-free-icons` в `dependencies` не держать: bb ставит плагин из git через
+  `npm install --omit=dev` и распаковывает весь пакет (16–24 тыс. файлов) ради сотни значков.
+  Значки — в `components/ui/hugeicons.ts`, их пишет `scripts/vendor-hugeicons.mjs`
+  (порядок — в шапке файла). doc-review 0.8.2, voice-ink 0.11.1, file-manager 0.11.1
+  (17.11.2026): установка с 26,9/25,2/17,4 тыс. файлов до 2,6/1,1/1,1 тыс.
+- `npx shadcn add @bb/icon` вернёт импорт из пакета и перезапишет `icon.tsx`: после него —
+  снова генератор. Тест `hugeicons.test.ts` плагина падает на импорте пакета.
+- Версию пакета брать из lock-файла плагина: между 4.2.3 и 4.3.x пять значков
+  нарисованы иначе (`Copy01Icon`, `Idea01Icon`, `Mic02Icon`, `UserIcon`, `UserAdd01Icon`).
