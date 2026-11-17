@@ -9,7 +9,7 @@ import {
   Loading03Icon,
   StopCircleIcon,
   VolumeHighIcon,
-} from "@hugeicons/core-free-icons";
+} from "./ui/hugeicons";
 import { toast } from "sonner";
 import { Conversation, type ConversationStatus, type ReplyEvent } from "@/lib/conversation";
 import { defineMessages, intlLocale, messagesNow, useLang, type Lang } from "@/lib/i18n";

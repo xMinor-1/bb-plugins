@@ -363,3 +363,10 @@ npx tsc --noEmit
 bb plugin build .
 bb plugin dev .    # rebuild + reload on save
 ```
+
+The Hugeicons glyphs the panel draws are copied into
+`components/ui/hugeicons.ts` from `@hugeicons/core-free-icons` (MIT, copyright
+Hugeicons, see `components/ui/hugeicons-LICENSE.md`), so installing the plugin
+does not unpack the whole icon package (over 16,000 files). To add an icon, import it
+from `./hugeicons` and regenerate the file with `scripts/vendor-hugeicons.mjs`
+at the repository root; the steps are in the file's header.

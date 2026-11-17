@@ -100,7 +100,7 @@ import {
   ViewOffIcon,
   ZoomInAreaIcon,
   ZoomOutAreaIcon,
-} from "@hugeicons/core-free-icons";
+} from "./hugeicons";
 import { type ExtendedIconMap, registerExtendedIcons } from "./icon-registry";
 
 const PaletteStrokeRoundedIcon: IconSvgElement = [
