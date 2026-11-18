@@ -9,7 +9,7 @@
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
-import type { PluginRpcTestHandlers, RenderedSlot } from "@get-bb/plugin-sdk/testing/app";
+import type { PluginRpcTestHandlers, RenderedSlot, RenderSlotOptions } from "@get-bb/plugin-sdk/testing/app";
 
 import type { PluginFileOpenerProps } from "@get-bb/plugin-sdk/app";
 
@@ -143,11 +143,12 @@ function mountOpener(
   registration: { component: React.ComponentType<PluginFileOpenerProps> },
   handlers: Partial<PluginRpcTestHandlers<FileManagerContract>>,
   path = "knowledge-base/backups/readme.md",
+  options: Pick<RenderSlotOptions, "openFilePreview"> = {},
 ): RenderedSlot {
   return renderSlot(
     { component: registration.component },
     { path, source: SOURCE, Original },
-    { rpc: handlers as PluginRpcTestHandlers<FileManagerContract> },
+    { rpc: handlers as PluginRpcTestHandlers<FileManagerContract>, ...options },
   ) as RenderedSlot;
 }
 
@@ -407,6 +408,153 @@ describe("Preview + location opener — an archive link (§8.13)", () => {
 });
 
 describe("Preview + location opener", () => {
+  describe.each(["readme.md", "config.toml"])("reopening %s", (name) => {
+    it.each(["double click", "Enter", "Open menu"])("returns to preview on every %s", async (activation) => {
+      const current = entryFor(name);
+      const slot = mountOpener(
+        previewOpener,
+        baseRpc({ absolutePath: current.path, name }, [current]),
+        `knowledge-base/backups/${name}`,
+        { openFilePreview: () => true },
+      );
+      await slot.findByTestId("bb-preview");
+
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        fireEvent.click(slot.getByRole("button", { name: "Open location" }));
+        await slot.findByText(name);
+        const row = slot.getAllByTestId("fm-row").find(
+          (candidate) => candidate.getAttribute("data-fm-path") === current.path,
+        )!;
+
+        if (activation === "double click") {
+          fireEvent.doubleClick(row);
+        } else if (activation === "Enter") {
+          fireEvent.click(row);
+          fireEvent.keyDown(slot.getByRole("treegrid"), { key: "Enter" });
+        } else {
+          fireEvent.contextMenu(row, { button: 2 });
+          const menu = await slot.findByTestId("fm-row-menu");
+          fireEvent.click(within(menu).getByRole("menuitem", { name: /^Open/ }));
+        }
+
+        expect(slot.queryByTestId("bb-preview")).not.toBeNull();
+        expect(slot.queryByTestId("fm-panel")).toBeNull();
+      }
+      expect(slot.inspection.navigateCalls).toHaveLength(0);
+    });
+  });
+
+  it("delegates opening the revealed file when there is no owning preview", async () => {
+    const current = entryFor("readme.md");
+    const slot = mountOpener(
+      locationOpener,
+      baseRpc(),
+      undefined,
+      { openFilePreview: () => true },
+    );
+    await slot.findByText(current.name);
+    const row = slot.getAllByTestId("fm-row").find(
+      (candidate) => candidate.getAttribute("data-fm-path") === current.path,
+    )!;
+
+    fireEvent.doubleClick(row);
+
+    expect(slot.inspection.navigateCalls).toEqual([
+      {
+        method: "experimental_openFilePreview",
+        options: { target: { kind: "host", hostId: HOST_ID, path: current.path }, location: null },
+      },
+    ]);
+  });
+
+  it("opens a TOML file selected from a revealed folder as a preview", async () => {
+    const config = entryFor("config.toml");
+    const slot = mountOpener(
+      previewOpener,
+      baseRpc({}, [entryFor("readme.md"), config]),
+      undefined,
+      { openFilePreview: () => true },
+    );
+    await slot.findByTestId("bb-preview");
+    fireEvent.click(slot.getByTestId("fm-open-location"));
+    await slot.findByText("config.toml");
+
+    const row = slot.getAllByTestId("fm-row").find(
+      (candidate) => candidate.getAttribute("data-fm-path") === config.path,
+    )!;
+    fireEvent.doubleClick(row);
+    expect(slot.inspection.navigateCalls).toEqual([
+      {
+        method: "experimental_openFilePreview",
+        options: { target: { kind: "host", hostId: HOST_ID, path: config.path }, location: null },
+      },
+    ]);
+
+    const Preview = previewOpener.component;
+    slot.lifecycle.rerender(
+      <Preview
+        path={config.path}
+        source={{ kind: "host", threadId: null, environmentId: null, projectId: null, experimental_hostId: HOST_ID }}
+        Original={() => <div data-testid="bb-preview">enabled = true</div>}
+      />,
+    );
+
+    expect(await slot.findByTestId("bb-preview")).toHaveProperty("textContent", "enabled = true");
+    expect(slot.queryByTestId("fm-panel")).toBeNull();
+  });
+
+  it.each([
+    ["path", "knowledge-base/backups/config.toml", SOURCE],
+    ["source kind", "knowledge-base/backups/readme.md", { ...SOURCE, kind: "host" as const }],
+    ["environment", "knowledge-base/backups/readme.md", { ...SOURCE, environmentId: "env_2" }],
+    ["thread", "knowledge-base/backups/readme.md", { ...SOURCE, threadId: "thr_2" }],
+    ["project", "knowledge-base/backups/readme.md", { ...SOURCE, projectId: "proj_2" }],
+    ["host", "knowledge-base/backups/readme.md", { ...SOURCE, experimental_hostId: "host_2" }],
+  ])("previews the file when its %s changes in a reused opener", async (_label, path, source) => {
+    const slot = mountOpener(previewOpener, baseRpc());
+    await slot.findByTestId("bb-preview");
+    fireEvent.click(slot.getByTestId("fm-open-location"));
+    await slot.findByText("readme.md");
+
+    const Preview = previewOpener.component;
+    slot.lifecycle.rerender(<Preview path={path} source={source} Original={Original} />);
+
+    expect(await slot.findByTestId("bb-preview")).toBeDefined();
+    expect(slot.queryByTestId("fm-panel")).toBeNull();
+  });
+
+  it("keeps the revealed folder when the same file's props are rebuilt", async () => {
+    const slot = mountOpener(previewOpener, baseRpc());
+    await slot.findByTestId("bb-preview");
+    fireEvent.click(slot.getByTestId("fm-open-location"));
+    await slot.findByText("readme.md");
+
+    const Preview = previewOpener.component;
+    slot.lifecycle.rerender(
+      <Preview path="knowledge-base/backups/readme.md" source={{ ...SOURCE }} Original={() => <Original />} />,
+    );
+
+    expect(slot.getByTestId("fm-panel")).toBeDefined();
+    expect(slot.queryByTestId("bb-preview")).toBeNull();
+  });
+
+  it("returns from the revealed folder to the current file", async () => {
+    const slot = mountOpener(previewOpener, baseRpc());
+    await slot.findByTestId("bb-preview");
+    const openLocation = slot.getByRole("button", { name: "Open location" });
+    expect(openLocation.closest("[title]")?.getAttribute("title")).toBe("Open location");
+    fireEvent.click(openLocation);
+    await slot.findByText("readme.md");
+
+    fireEvent.click(slot.getByRole("button", { name: "Back to file" }));
+
+    expect(await slot.findByTestId("bb-preview")).toBeDefined();
+    expect(slot.queryByTestId("fm-panel")).toBeNull();
+    expect(slot.inspection.navigateCalls).toHaveLength(0);
+    fireEvent.click(slot.getByRole("button", { name: "Open location" }));
+    expect(await slot.findByTestId("fm-panel")).toBeDefined();
+  });
+
   it("renders bb's own preview until the location is asked for", async () => {
     const slot = mountOpener(previewOpener, baseRpc());
 

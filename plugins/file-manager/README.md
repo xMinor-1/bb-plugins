@@ -162,6 +162,11 @@ automatically per extension, and the plugin has to claim extensions to appear
 in the menu at all. So the preview wrapper is what a plain click lands on: the
 file still opens as a preview, plus one button.
 
+**Back to file** returns from the folder to the linked file. Opening the linked
+file from its folder also returns to the preview. Opening another file starts
+in preview mode. In a narrow panel the location and return buttons show icons,
+with their names in tooltips.
+
 An archive is the exception, because bb's preview has nothing to show for one:
 a link to a `.zip`, `.tar.gz`, `.7z` or `.rar` opens its contents under the
 same strip (see [Look inside an archive](#look-inside-an-archive)). *Extract…*
