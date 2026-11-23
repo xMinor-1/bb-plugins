@@ -26,6 +26,7 @@ import { Icon } from "@/components/ui/icon";
 import { LanguageSwitch, intlLocale, messagesNow, useLang, useMessages, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { messages, type Messages } from "./src/messages";
+import { RUN_LABEL, runVerdict, skipReasonText } from "./src/runs";
 import { describeCron, everyText, hoursText } from "./src/schedule";
 
 const PANEL_PATH = "automation-hub";
@@ -382,17 +383,9 @@ function Runs({ rpc, item }: { rpc: Rpc; item: HubItem }) {
   useEffect(load, [load, item.lastRunAt, item.status]);
   if (error) return <p className="text-xs text-destructive">{error}</p>;
   if (runs === null) return <p className="text-xs text-muted-foreground">{t.runsLoading}</p>;
-  const shown = onlyFindings ? runs.filter((r) => r.status !== "succeeded" || (r.output ?? "").trim() !== "") : runs;
-  const label = (run: HubRun) =>
-    run.status === "succeeded" && (run.output ?? "").trim() !== "" && item.kind === "watch"
-      ? t.runsFound
-      : run.status === "succeeded"
-        ? t.runsDone
-        : run.status === "failed"
-          ? t.runsFailed
-          : run.status === "running"
-            ? t.runsRunning
-            : t.runsSkipped;
+  // A quiet check is neither a finding nor an error, whatever bb calls it.
+  const shown = onlyFindings ? runs.filter((r) => runVerdict(r, item.kind) !== "quiet") : runs;
+  const label = (run: HubRun) => t[RUN_LABEL[runVerdict(run, item.kind)]];
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -424,7 +417,7 @@ function Runs({ rpc, item }: { rpc: Rpc; item: HubItem }) {
                 ) : null}
               </div>
               {run.error ? <p className="mt-1 whitespace-pre-wrap break-words text-destructive">{run.error}</p> : null}
-              {run.skipReason ? <p className="mt-1 text-muted-foreground">{run.skipReason}</p> : null}
+              {run.skipReason && runVerdict(run, item.kind) === "skipped" ? <p className="mt-1 text-muted-foreground">{skipReasonText(run.skipReason, lang)}</p> : null}
               {run.output && run.output.trim() !== "" ? (
                 <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-muted px-2 py-1 font-mono text-[11px]">{run.output.trim()}</pre>
               ) : null}
