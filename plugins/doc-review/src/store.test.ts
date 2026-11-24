@@ -165,3 +165,25 @@ describe("comments from another reviewer", () => {
     expect(comment!.thread[0]!.name).toBe("Reviewer");
   });
 });
+
+describe("Windows documents", () => {
+  it("keep one row whatever the separators and drive case", () => {
+    const { store } = setup();
+    const legacy = store.upsertDoc("host-windows", "C:\\Users\\me\\Report.html", "html");
+    const comment = store.createComment({
+      docId: legacy.id,
+      anchor: { kind: "doc" },
+      body: "Shorter title",
+      docVersion: null,
+    });
+
+    const again = store.upsertDoc("host-windows", "C:/Users/me/Report.html", "html");
+    expect(again.id).toBe(legacy.id);
+    expect(store.listComments(again.id).map((row) => row.id)).toEqual([comment.id]);
+    // The row takes the spelling with forward slashes the rest of the plugin uses.
+    expect(store.getDoc(legacy.id)?.absPath).toBe("C:/Users/me/Report.html");
+    expect(store.upsertDoc("host-windows", "c:/users/me/report.html", "html").id).toBe(legacy.id);
+    // Another host's file with the same path is a different document.
+    expect(store.upsertDoc("host-other", "C:/Users/me/Report.html", "html").id).not.toBe(legacy.id);
+  });
+});

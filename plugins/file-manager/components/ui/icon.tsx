@@ -138,7 +138,7 @@ import {
   ZapIcon,
   ZoomInAreaIcon,
   ZoomOutAreaIcon,
-} from "@hugeicons/core-free-icons";
+} from "./hugeicons";
 import { cn } from "../../lib/utils";
 
 // The free hugeicons set ships no artist-palette glyph (its `Palette` export

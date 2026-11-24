@@ -186,6 +186,7 @@ const docSchema = z.object({
   name: z.string(),
   absPath: z.string(),
   hostId: z.string().nullable(),
+  previewHostId: z.string().nullable(),
   version: z.string(),
 });
 
@@ -244,7 +245,17 @@ const recentSchema = z.object({
 });
 
 const sendTargetSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("thread"), threadId: z.string().min(1) }).strict(),
+  z
+    .object({
+      kind: z.literal("thread"),
+      threadId: z.string().min(1),
+      /**
+       * How the message meets an agent that is still working. `auto` (the
+       * default) does what Enter does for this person in bb.
+       */
+      mode: z.enum(["auto", "queue-if-active", "steer-if-active"]).optional(),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("new-thread"),

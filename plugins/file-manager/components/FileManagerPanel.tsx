@@ -458,6 +458,8 @@ export interface FileManagerSurfaceProps {
   initialPath?: string | null;
   /** Absolute path of an entry to select once its folder is listed (§5.3). */
   revealPath?: string | null;
+  /** Return the revealed file to its owning preview when it is opened. */
+  onOpenRevealedFile?: () => void;
   /**
    * Also open the Extract dialog for `revealPath` once it is selected — the
    * file opener's "Extract…" for an archive link (§8.13). Ignored for a
@@ -482,6 +484,7 @@ export function FileManagerSurface({
   chrome,
   initialPath = null,
   revealPath = null,
+  onOpenRevealedFile,
   extractOnReveal = false,
   initialQuery = "",
   threadId = null,
@@ -1579,10 +1582,14 @@ export function FileManagerSurface({
    */
   const showEntry = useCallback(
     (entry: FileEntry) => {
+      if (entry.path === revealPath && onOpenRevealedFile !== undefined) {
+        onOpenRevealedFile();
+        return;
+      }
       if (previewEntry(entry)) return;
       setDialog({ kind: "view", entry });
     },
-    [previewEntry],
+    [onOpenRevealedFile, previewEntry, revealPath],
   );
 
   const openEntry = useCallback(

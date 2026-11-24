@@ -1,0 +1,43 @@
+{
+  "name": "bb-plugin-russian-ui",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.49",
+    "bbPluginSdk": ">=0.6.132"
+  },
+  "bb": {
+    "name": "Russian UI",
+    "description": "Russian text for the hard-to-read parts of bb: settings, first run and dialogs. Chat, code and the thread list stay as they are.",
+    "branding": {
+      "icon": "./icon.svg"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.132",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^12.0.0",
+    "cron-parser": "^5.5.0",
+    "hono": "^4.11.9",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.12"
+  },
+  "license": "MIT",
+  "author": "Foma",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xMinor-1/bb-plugins.git",
+    "directory": "plugins/russian-ui"
+  },
+  "scripts": {
+    "build": "env -u BB_CLI bb plugin build .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  }
+}

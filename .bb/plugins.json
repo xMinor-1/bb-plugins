@@ -8,8 +8,8 @@
       "source": "./plugins/app-branding"
     },
     {
-      "name": "bug-report-button",
-      "source": "./plugins/bug-report-button"
+      "name": "automation-hub",
+      "source": "./plugins/automation-hub"
     },
     {
       "name": "claude-design",
@@ -24,32 +24,16 @@
       "source": "./plugins/doc-review"
     },
     {
-      "name": "exchange-mail",
-      "source": "./plugins/exchange-mail"
-    },
-    {
-      "name": "express-messenger",
-      "source": "./plugins/express-messenger"
-    },
-    {
       "name": "file-manager",
       "source": "./plugins/file-manager"
     },
     {
-      "name": "fleet-kit",
-      "source": "./plugins/fleet-kit"
+      "name": "russian-ui",
+      "source": "./plugins/russian-ui"
     },
     {
-      "name": "http-data-service",
-      "source": "./plugins/http-data-service"
-    },
-    {
-      "name": "mcp-catalog",
-      "source": "./plugins/mcp-catalog"
-    },
-    {
-      "name": "qlik-sense",
-      "source": "./plugins/qlik-sense"
+      "name": "scenario-tags",
+      "source": "./plugins/scenario-tags"
     },
     {
       "name": "server-status",
