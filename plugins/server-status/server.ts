@@ -9,10 +9,11 @@
 // subscribers, and frames would reach tabs that are hidden and not polling.
 //
 // Everything is read straight from Node: /proc for CPU and memory, statfs for
-// the disk. No dependencies, no shelling out.
+// the disk. macOS memory uses bounded native vm_stat/sysctl queries.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { readFileSync, statfsSync } from "node:fs";
 import os from "node:os";
+import { readMacMemory, readMacSwap, readMacPressure } from "./mac-metrics.ts";
 import { z } from "zod";
 
 const TICK_MS = 5_000;
@@ -31,12 +32,24 @@ type CpuSample = { total: number; idle: number };
 // user nice system idle iowait irq softirq steal guest guest_nice.
 // Load is the delta between two samples; a single read says nothing.
 function readCpuSample(): CpuSample | null {
+  if (os.platform() !== "linux") {
+    const cores = os.cpus();
+    if (!cores.length) return null;
+    return cores.reduce(
+      (sum, { times }) => ({
+        idle: sum.idle + times.idle,
+        total: sum.total + Object.values(times).reduce((a, b) => a + b, 0),
+      }),
+      { idle: 0, total: 0 },
+    );
+  }
   try {
     const stat = readFileSync("/proc/stat", "utf8");
     const first = stat.slice(0, stat.indexOf("\n"));
     if (!first.startsWith("cpu ")) return null;
     const fields = first.trim().split(/\s+/).slice(1).map(Number);
-    if (fields.length < 5 || fields.some((n) => !Number.isFinite(n))) return null;
+    if (fields.length < 5 || fields.some((n) => !Number.isFinite(n)))
+      return null;
     const total = fields.reduce((sum, n) => sum + n, 0);
     // iowait counts as idle: the CPU is waiting, not working.
     const idle = (fields[3] ?? 0) + (fields[4] ?? 0);
@@ -73,20 +86,30 @@ type Usage = { percent: number; usedBytes: number; totalBytes: number };
 // which is what a person means by "used". MemFree alone counts every
 // page-cache page as used and reports 95% on an idle machine.
 function readMemory(): Usage {
+  if (os.platform() === "darwin") return readMacMemory(os.totalmem());
   const info = readMeminfo();
   const total = info.get("MemTotal") ?? os.totalmem();
   const available = info.get("MemAvailable") ?? os.freemem();
   if (!(total > 0)) return { percent: 0, usedBytes: 0, totalBytes: 0 };
   const used = Math.max(0, total - available);
-  return { percent: round1((used / total) * 100), usedBytes: used, totalBytes: total };
+  return {
+    percent: round1((used / total) * 100),
+    usedBytes: used,
+    totalBytes: total,
+  };
 }
 
 function readSwap(): Usage | null {
+  if (os.platform() === "darwin") return readMacSwap();
   const info = readMeminfo();
   const total = info.get("SwapTotal") ?? 0;
   if (!(total > 0)) return null;
   const used = Math.max(0, total - (info.get("SwapFree") ?? 0));
-  return { percent: round1((used / total) * 100), usedBytes: used, totalBytes: total };
+  return {
+    percent: round1((used / total) * 100),
+    usedBytes: used,
+    totalBytes: total,
+  };
 }
 
 type DiskUsage = Usage & { availBytes: number; path: string };
@@ -169,8 +192,11 @@ const snapshotSchema = z.object({
   cores: z.number(),
   load: z.tuple([z.number(), z.number(), z.number()]),
   memory: usageSchema,
+  memoryPressure: z.enum(["normal", "warning", "critical"]).nullable(),
   swap: usageSchema.nullable(),
-  disk: usageSchema.extend({ availBytes: z.number(), path: z.string() }).nullable(),
+  disk: usageSchema
+    .extend({ availBytes: z.number(), path: z.string() })
+    .nullable(),
   uptimeSeconds: z.number(),
   // Kernel version and human OS name are static, but the panel shows them.
   kernel: z.string(),
@@ -229,6 +255,7 @@ export default async function plugin(bb: BbPluginApi) {
       // on this host /proc/stat showed 11.7% while loadavg1 said 8.09.
       load: [round1(one), round1(five), round1(fifteen)],
       memory: readMemory(),
+      memoryPressure: os.platform() === "darwin" ? readMacPressure() : null,
       swap: readSwap(),
       disk: disk(),
       uptimeSeconds,
@@ -255,6 +282,7 @@ export default async function plugin(bb: BbPluginApi) {
         const current = readCpuSample();
         const cpu = previous && current ? cpuPercent(previous, current) : null;
         if (current) previous = current;
+        latest = null; // Failed collection must not leave a stale healthy snapshot.
         latest = snapshot(cpu);
         await sleep(TICK_MS, signal);
       }

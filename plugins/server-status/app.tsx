@@ -94,7 +94,10 @@ const NUM1 = new Intl.NumberFormat("en-GB", {
  * while every number in that row is printed in it: on a nine-terabyte volume
  * "9220 of 9313 GB used" does not read — "9.0 of 9.1 TB used" does.
  */
-function scale(...bytes: number[]): { unit: string; format: (value: number) => string } {
+function scale(...bytes: number[]): {
+  unit: string;
+  format: (value: number) => string;
+} {
   const tera = Math.max(...bytes) >= TIB;
   const divisor = tera ? TIB : GIB;
   return {
@@ -158,7 +161,10 @@ function uptimeSeconds(snapshot: Snapshot): number {
 // --- ring -------------------------------------------------------------------
 
 /** Perimeter of a rounded rectangle along the button edge; a square gives a circle. */
-function ringPath(width: number, height: number): { d: string; length: number } {
+function ringPath(
+  width: number,
+  height: number,
+): { d: string; length: number } {
   const inset = RING_STROKE / 2;
   const w = Math.max(0, width - RING_STROKE);
   const h = Math.max(0, height - RING_STROKE);
@@ -195,7 +201,10 @@ class Ring {
     this.node = document.createElement("span");
     this.node.dataset.serverStatus = "ring";
     // The ring takes no pointer events: clicks and the tooltip stay with the button.
-    this.node.setAttribute("style", "position:absolute;inset:0;pointer-events:none");
+    this.node.setAttribute(
+      "style",
+      "position:absolute;inset:0;pointer-events:none",
+    );
     this.node.setAttribute("aria-hidden", "true");
 
     this.svg = document.createElementNS(SVG_NS, "svg");
@@ -213,7 +222,8 @@ class Ring {
     this.value = document.createElementNS(SVG_NS, "path");
     this.value.setAttribute("stroke-width", String(RING_STROKE));
     this.value.setAttribute("stroke-linecap", "round");
-    this.value.style.transition = "stroke-dasharray 300ms ease, stroke 300ms ease";
+    this.value.style.transition =
+      "stroke-dasharray 300ms ease, stroke 300ms ease";
 
     this.svg.append(this.track, this.value);
     this.node.append(this.svg);
@@ -230,11 +240,25 @@ class Ring {
   }
 
   /** The ring shows RAM usage; null means no snapshot yet, track only. */
-  draw(percent: number | null): void {
+  draw(
+    percent: number | null,
+    pressure: Snapshot["memoryPressure"] = null,
+  ): void {
     const known = percent !== null;
     const safe = known ? Math.min(100, Math.max(0, percent)) : 0;
     const filled = (safe / 100) * this.length;
-    this.value.setAttribute("stroke", levelColor(level(percent)));
+    this.value.setAttribute(
+      "stroke",
+      levelColor(
+        pressure === null
+          ? level(percent)
+          : pressure === "critical"
+            ? "danger"
+            : pressure === "warning"
+              ? "warn"
+              : "ok",
+      ),
+    );
     this.value.setAttribute("stroke-dasharray", `${filled} ${this.length}`);
     this.value.setAttribute("stroke-opacity", known && safe > 0 ? "1" : "0");
   }
@@ -383,8 +407,20 @@ class MetricRow {
     this.root.append(head, bar, this.detail);
   }
 
-  update(percent: number | null, detail: string, mount = ""): void {
-    const state = level(percent);
+  update(
+    percent: number | null,
+    detail: string,
+    mount = "",
+    pressure: Snapshot["memoryPressure"] = null,
+  ): void {
+    const state =
+      pressure === null
+        ? level(percent)
+        : pressure === "critical"
+          ? "danger"
+          : pressure === "warning"
+            ? "warn"
+            : "ok";
     this.value.textContent = percentText(percent);
     this.value.dataset.level = state;
     this.fill.style.width = `${percent === null ? 0 : Math.min(100, Math.max(0, percent))}%`;
@@ -444,7 +480,10 @@ class Panel {
     this.booted = div("");
     foot.append(this.loadAvg, this.uptime, this.booted);
 
-    this.stale = div("bb-ss-stale", "The last poll failed — these numbers may be stale.");
+    this.stale = div(
+      "bb-ss-stale",
+      "The last poll failed — these numbers may be stale.",
+    );
     this.stale.hidden = true;
 
     node.append(
@@ -542,7 +581,12 @@ class Panel {
     this.memory.update(
       memory.percent,
       `${inMemory.format(memory.usedBytes)} of` +
-        ` ${inMemory.format(memory.totalBytes)} ${inMemory.unit} used`,
+        ` ${inMemory.format(memory.totalBytes)} ${inMemory.unit} used` +
+        (snapshot.memoryPressure
+          ? ` · Pressure: ${snapshot.memoryPressure}`
+          : ""),
+      "",
+      snapshot.memoryPressure,
     );
 
     const swap = snapshot.swap;
@@ -560,11 +604,11 @@ class Panel {
       if (swap.percent >= WARN) {
         this.swapNote.hidden = false;
         this.swapNote.textContent =
-          "Swap is nearly full: RAM has run out and the server may slow down noticeably.";
+          "Swap usage is high. Check memory pressure and performance.";
       } else if (swap.percent >= SWAP_NOTE) {
         this.swapNote.hidden = false;
         this.swapNote.textContent =
-          "Some memory has been pushed out to disk — the server no longer fits in RAM.";
+          "Some memory is stored on disk. Swap usage alone does not indicate current memory pressure.";
       }
     }
 
@@ -662,14 +706,21 @@ export default definePluginApp((app) => {
       let inFlight = false;
       let lastFetch = 0;
 
-      const draw = () => ring.draw(snapshot ? snapshot.memory.percent : null);
+      const draw = () =>
+        ring.draw(
+          snapshot ? snapshot.memory.percent : null,
+          snapshot?.memoryPressure ?? null,
+        );
 
       // The button size drives the ring geometry: the sidebar can collapse.
       const resizeObserver = new ResizeObserver((entries) => {
         for (const entry of entries) {
           const box = entry.contentRect;
           const target = entry.target as HTMLElement;
-          ring.layout(target.offsetWidth || box.width, target.offsetHeight || box.height);
+          ring.layout(
+            target.offsetWidth || box.width,
+            target.offsetHeight || box.height,
+          );
         }
         draw();
         panel.place();
@@ -678,7 +729,8 @@ export default definePluginApp((app) => {
       const detach = () => {
         resizeObserver.disconnect();
         ring.node.remove();
-        if (button && restorePosition !== null) button.style.position = restorePosition;
+        if (button && restorePosition !== null)
+          button.style.position = restorePosition;
         restorePosition = null;
         button = null;
       };
@@ -731,7 +783,8 @@ export default definePluginApp((app) => {
       const refresh = async (force = false): Promise<void> => {
         // A hidden tab learns nothing from polling, and every open one would
         // otherwise keep poking the same server.
-        if (document.visibilityState === "hidden" || inFlight || signal.aborted) return;
+        if (document.visibilityState === "hidden" || inFlight || signal.aborted)
+          return;
         const now = Date.now();
         if (!force && now - lastFetch < MIN_GAP_MS) return;
         lastFetch = now;
@@ -801,8 +854,14 @@ export default definePluginApp((app) => {
         if (event.type === "pointerup" && buttonFrom(event.target)) return;
         suppressedPointer = null;
       };
-      document.addEventListener("pointerup", endGesture, { capture: true, signal });
-      document.addEventListener("pointercancel", endGesture, { capture: true, signal });
+      document.addEventListener("pointerup", endGesture, {
+        capture: true,
+        signal,
+      });
+      document.addEventListener("pointercancel", endGesture, {
+        capture: true,
+        signal,
+      });
 
       document.addEventListener(
         "click",
