@@ -14,6 +14,7 @@ const MIN_RENEW_DELAY_MS = 5_000;
 
 interface PreviewBase {
   path: string;
+  refreshKey: number;
   /** null when the server has no preview transport — tiles fall back to icons. */
   baseUrl: string | null;
 }
@@ -23,14 +24,18 @@ export interface UsePreviewBaseArgs {
   path: string;
   /** False while the gallery is off screen: no RPC at all. */
   enabled: boolean;
+  /** Change to request a fresh grant after a failed image load. */
+  refreshKey?: number;
 }
 
 /**
- * Base URL for `path`, or null while it is unknown — which covers both "still
- * loading" and "this server cannot mint one". Both render the same way, so the
- * caller never has to tell them apart.
+ * Base URL for `path`, undefined while loading, or null if the mint failed.
  */
-export function usePreviewBase({ path, enabled }: UsePreviewBaseArgs): string | null {
+export function usePreviewBase({
+  path,
+  enabled,
+  refreshKey = 0,
+}: UsePreviewBaseArgs): string | null | undefined {
   const rpc = useFmRpc();
   const [base, setBase] = useState<PreviewBase | null>(null);
   /** Bumped by the renewal timer; the effect below is the only fetcher. */
@@ -44,7 +49,7 @@ export function usePreviewBase({ path, enabled }: UsePreviewBaseArgs): string | 
       try {
         const result = await rpc.call("createPreviewUrl", { path });
         if (cancelled) return;
-        setBase({ path, baseUrl: result.baseUrl });
+        setBase({ path, refreshKey, baseUrl: result.baseUrl });
         // A renewal swaps every `src` on screen, so it is scheduled as late as
         // the margin allows rather than on a fixed interval.
         const delay = Math.max(
@@ -56,16 +61,16 @@ export function usePreviewBase({ path, enabled }: UsePreviewBaseArgs): string | 
         // Silent on purpose: thumbnails are decoration, and a toast per folder
         // would punish everyone whose server predates the preview transport.
         // Remembered per path so a re-render does not re-ask.
-        if (!cancelled) setBase({ path, baseUrl: null });
+        if (!cancelled) setBase({ path, refreshKey, baseUrl: null });
       }
     })();
     return () => {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [enabled, path, renewal, rpc]);
+  }, [enabled, path, refreshKey, renewal, rpc]);
 
   // Never hand out another folder's URL: between a navigation and the new
   // answer landing, `base` still holds the folder the user just left.
-  return base !== null && base.path === path ? base.baseUrl : null;
+  return base?.path === path && base.refreshKey === refreshKey ? base.baseUrl : undefined;
 }

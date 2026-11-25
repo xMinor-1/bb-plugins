@@ -1,6 +1,6 @@
 // components/dialogs/FileViewerDialog.tsx — the built-in viewer (§8.12).
 //
-// bb's shared preview panel is the nicer surface and stays the first choice,
+// bb's shared preview panel stays the first choice for files other than HTML,
 // but it does not exist everywhere: `experimental_openFilePreview` is wired up
 // by the thread split view and by the right-hand panel host, and by nothing
 // else. In the sidebar's own full-page File Manager the host answers `false`
@@ -18,15 +18,14 @@
 //     is what turns "unknown extension" into either a source view or an
 //     honest "no preview", never a wall of mojibake.
 //
-// Markdown renders through bb's own `Markdown`, and every other text through
-// bb's `experimental_SourceCode`, so a file looks here exactly like it looks
-// in a thread — same theme, same highlighting, one implementation.
+// Markdown uses bb's renderer. HTML uses a static sandboxed document.
+// Both can switch to bb's source viewer, which also shows other text.
 //
 // An archive is the third case (§8.13): neither a URL nor a string, but its
 // table of contents, drawn by components/ArchiveContents.tsx from
 // `listArchive`. Its "Extract…" hands the entry back to the panel, which
 // swaps this dialog for its own ExtractDialog.
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown, experimental_SourceCode as SourceCode } from "@get-bb/plugin-sdk/app";
 
 import type { FileEntry } from "../../contract";
@@ -35,6 +34,7 @@ import { parseRpcError } from "../../lib/errors";
 import { dirname } from "../../lib/fm-paths";
 import { formatBytes } from "../../lib/format";
 import { useFmRpc, type RpcOutput } from "../../lib/fm-rpc";
+import { htmlPreviewDocument } from "../../lib/html-preview";
 import { previewUrl } from "../../lib/preview";
 import { isTextViewerKind, isUrlViewerKind, viewerKindForEntry } from "../../lib/viewer";
 import { usePreviewBase } from "../../hooks/usePreviewBase";
@@ -62,6 +62,8 @@ const messages = defineMessages(
     showingFirst: (size: string) => `· showing the first ${size}`,
     source: "Source",
     rendered: "Rendered",
+    htmlTooLarge: "This HTML file is too large for a rendered preview. Open Source to read its beginning.",
+    retry: "Retry",
     download: "Download",
   },
   {
@@ -75,6 +77,8 @@ const messages = defineMessages(
     showingFirst: (size) => `— показаны первые ${size}`,
     source: "Исходник",
     rendered: "Просмотр",
+    htmlTooLarge: "Этот HTML-файл слишком большой для просмотра. В исходнике можно прочитать его начало.",
+    retry: "Повторить",
     download: "Скачать",
   },
 );
@@ -106,6 +110,39 @@ function Placeholder({ children }: { children: React.ReactNode }) {
   );
 }
 
+function ImageBody({ name, url, failure }: { name: string; url: string; failure: React.ReactNode }) {
+  const t = useMessages(messages);
+  const image = useRef<HTMLImageElement>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
+
+  useLayoutEffect(() => {
+    if (image.current?.complete && image.current.naturalWidth > 0) setStatus("ready");
+  }, []);
+
+  if (status === "failed") return failure;
+
+  return (
+    <div className="relative min-h-0 flex-1">
+      {status === "loading" ? (
+        <div className="absolute inset-0" role="status">
+          <Placeholder>{t.loading}</Placeholder>
+        </div>
+      ) : null}
+      <div className="absolute inset-4">
+        <img
+          ref={image}
+          src={url}
+          alt={name}
+          data-testid="fm-viewer-image"
+          className={`block h-full w-full object-scale-down ${status === "loading" ? "invisible" : ""}`}
+          onLoad={() => setStatus("ready")}
+          onError={() => setStatus("failed")}
+        />
+      </div>
+    </div>
+  );
+}
+
 /**
  * Text, once it has arrived. Markdown gets bb's document renderer with the
  * source one click away — a README is written to be read, but a file manager
@@ -131,28 +168,55 @@ function TextBody({
   );
 }
 
+function HtmlBody({
+  title,
+  markup,
+  failedMessage,
+}: { title: string; markup: string; failedMessage: string }) {
+  const srcDoc = useMemo(() => {
+    try {
+      return htmlPreviewDocument(markup);
+    } catch {
+      return null;
+    }
+  }, [markup]);
+  if (srcDoc === null) return <Placeholder>{failedMessage}</Placeholder>;
+
+  return (
+    <iframe
+      srcDoc={srcDoc}
+      title={title}
+      sandbox=""
+      referrerPolicy="no-referrer"
+      data-testid="fm-viewer-html"
+      className="min-h-0 w-full flex-1 border-0 bg-white"
+    />
+  );
+}
+
 export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileViewerDialogProps) {
   const t = useMessages(messages);
   const rpc = useFmRpc();
   const kind = viewerKindForEntry(entry);
   const wantsUrl = isUrlViewerKind(kind);
   const wantsText = isTextViewerKind(kind);
+  const [retry, setRetry] = useState(0);
 
   // One base URL per folder, exactly like the gallery's — and only for the
   // kinds that are shown from a URL, so opening a text file costs no mint.
-  const baseUrl = usePreviewBase({ path: dirname(entry.path), enabled: open && wantsUrl });
-  const url = baseUrl === null ? null : previewUrl(baseUrl, entry.name);
+  const baseUrl = usePreviewBase({ path: dirname(entry.path), enabled: open && wantsUrl, refreshKey: retry });
+  const url = typeof baseUrl === "string" ? previewUrl(baseUrl, entry.name) : null;
 
   const [text, setText] = useState<TextState>({ status: "loading" });
-  /** Markdown starts rendered; the toggle is per open, not a preference. */
+  /** Renderable documents start rendered on each open. */
   const [rendered, setRendered] = useState(true);
-  /** A broken <img>/<video> falls back to the same "no preview" body. */
+  /** A broken audio or video player falls back to the media error. */
   const [mediaFailed, setMediaFailed] = useState(false);
 
   useEffect(() => {
     setRendered(true);
     setMediaFailed(false);
-  }, [entry.path]);
+  }, [entry.path, open]);
 
   useEffect(() => {
     if (!open || !wantsText) return;
@@ -184,6 +248,16 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
     downloadEntry(entry);
   };
 
+  const imageError = (
+    <Placeholder>
+      <p className="font-medium text-foreground">{t.mediaFailedTitle}</p>
+      <p>{t.mediaFailedBody}</p>
+      <Button type="button" size="sm" variant="outline" onClick={() => setRetry((attempt) => attempt + 1)}>
+        {t.retry}
+      </Button>
+    </Placeholder>
+  );
+
   let body: React.ReactNode;
   if (kind === "archive") {
     body = (
@@ -199,20 +273,12 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
         <p>{t.mediaFailedBody}</p>
       </Placeholder>
     );
+  } else if (kind === "image" && baseUrl === null) {
+    body = imageError;
   } else if (wantsUrl && url === null) {
     body = <Placeholder>{t.loading}</Placeholder>;
   } else if (kind === "image" && url !== null) {
-    body = (
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-        <img
-          src={url}
-          alt={entry.name}
-          data-testid="fm-viewer-image"
-          className="max-h-full max-w-full object-contain"
-          onError={() => setMediaFailed(true)}
-        />
-      </div>
-    );
+    body = <ImageBody key={url} name={entry.name} url={url} failure={imageError} />;
   } else if (kind === "pdf" && url !== null) {
     // A PDF is the one kind bb's transport serves that the browser renders in
     // a frame of its own, complete with its own page controls.
@@ -267,6 +333,10 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
         <p>{text.message}</p>
       </Placeholder>
     );
+  } else if (kind === "html" && rendered) {
+    body = text.result.truncated
+      ? <Placeholder>{t.htmlTooLarge}</Placeholder>
+      : <HtmlBody title={entry.name} markup={text.result.text} failedMessage={t.mediaFailedTitle} />;
   } else {
     body = <TextBody entry={entry} result={text.result} rendered={kind === "markdown" && rendered} />;
   }
@@ -304,12 +374,13 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
               </DialogDescription>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              {kind === "markdown" && text.status === "ready" ? (
+              {(kind === "html" || kind === "markdown") && text.status === "ready" ? (
                 <Button
                   type="button"
                   size="sm"
                   variant="ghost"
                   className="h-7 gap-1.5 px-2 text-xs"
+                  aria-label={rendered ? t.source : t.rendered}
                   data-testid="fm-viewer-toggle-source"
                   onClick={() => setRendered((value) => !value)}
                 >

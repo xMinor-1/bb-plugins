@@ -13,7 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { PluginRpcTestHandlers, RenderedSlot, RpcCall } from "@get-bb/plugin-sdk/testing/app";
 
-import { PREVIEW_TTL_MS, type FileEntry, type FileManagerContract } from "../../contract";
+import { MAX_TEXT_PREVIEW_BYTES, PREVIEW_TTL_MS, type FileEntry, type FileManagerContract } from "../../contract";
+import { htmlPreviewDocument } from "../../lib/html-preview";
 
 const toasts = vi.hoisted(() => ({ error: [] as string[], success: [] as string[] }));
 
@@ -66,10 +67,11 @@ const SHOT = makeEntry({ name: "a b#c.png" });
 const CLIP = makeEntry({ name: "clip.mp4" });
 const SONG = makeEntry({ name: "song.mp3" });
 const MANUAL = makeEntry({ name: "manual.pdf" });
+const HTML = makeEntry({ name: "page.HTML" });
 const BINARY = makeEntry({ name: "tool.bin" });
 const FOLDER = makeEntry({ name: "docs", kind: "directory", path: `${ROOT}/docs` });
 
-const ENTRIES = [FOLDER, MAKEFILE, README, SCRIPT, SHOT, CLIP, SONG, MANUAL, BINARY];
+const ENTRIES = [FOLDER, MAKEFILE, README, SCRIPT, SHOT, CLIP, SONG, MANUAL, HTML, BINARY];
 
 const PREFERENCES = {
   showHiddenFiles: false,
@@ -84,6 +86,18 @@ const PREFERENCES = {
 type Handlers = Partial<PluginRpcTestHandlers<FileManagerContract>>;
 
 const MARKDOWN = "# Readme\n\nA paragraph.\n";
+const HTML_MARKUP = `<!doctype html>
+<html><head>
+  <title>Sample preview</title>
+  <meta http-equiv="refresh" content="30; url=https://example.invalid/next">
+  <link rel="stylesheet" href="https://example.invalid/styles.css">
+  <style>body { color: red; }</style>
+</head><body class="page">
+  <h1 id="file-preview-sample">Sample document</h1>
+  <a href="https://example.invalid/source">Source link</a>
+  <svg><a href="https://example.invalid/source"><text>Sample chart</text></a></svg>
+  <script>document.title = "Sample script";</script>
+</body></html>`;
 
 function baseRpc(extra: Handlers = {}): Handlers {
   return {
@@ -258,16 +272,97 @@ describe("built-in viewer — text (§8.12)", () => {
   });
 });
 
+describe("built-in viewer — HTML documents", () => {
+  it("prepares a bounded document with a long malformed tag within the parsing budget", () => {
+    const markup = `<!doctype html><main>Visible</main><${"a".repeat(MAX_TEXT_PREVIEW_BYTES - 40)}`;
+    const start = performance.now();
+    const document = htmlPreviewDocument(markup);
+    expect(performance.now() - start).toBeLessThan(3_000);
+    expect(document).toContain("<main>Visible</main>");
+  });
+
+  it.each([false, true])("uses the static HTML sandbox when the host preview is available: %s", async (available) => {
+    const slot = renderSlot(
+      { component: registration.component },
+      { subPath: "" },
+      {
+        rpc: baseRpc({
+          readTextFile: ({ path }) => ({
+            path, text: HTML_MARKUP, sizeBytes: HTML_MARKUP.length, readBytes: HTML_MARKUP.length, truncated: false,
+          }),
+        }) as PluginRpcTestHandlers<FileManagerContract>,
+        openFilePreview: () => available,
+      },
+    ) as RenderedSlot;
+    await openViewer(slot, HTML);
+    const frame = await slot.findByTestId("fm-viewer-html");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(frame.hasAttribute("src")).toBe(false);
+    expect(slot.inspection.navigateCalls).toHaveLength(0);
+    expect(callsTo(slot, "createPreviewUrl")).toHaveLength(0);
+    expect(callsTo(slot, "readTextFile")[0]?.input).toEqual({ path: HTML.path });
+
+    const markup = new DOMParser().parseFromString(frame.getAttribute("srcdoc") ?? "", "text/html");
+    expect(markup.head.firstElementChild?.getAttribute("http-equiv")).toBe("Content-Security-Policy");
+    expect(markup.head.firstElementChild?.getAttribute("content")).toContain("default-src 'none'");
+    expect(markup.body.className).toBe("page");
+    expect(markup.querySelector("h1")?.textContent).toBe("Sample document");
+    expect(markup.querySelector("style")?.textContent).toContain("color: red");
+    expect(markup.querySelector("meta[http-equiv='refresh'], link, script, a")).toBeNull();
+    expect(markup.querySelector("svg g text")?.textContent).toBe("Sample chart");
+    expect(markup.body.textContent).toContain("Source link");
+    expect(document.getElementById("file-preview-sample")).toBeNull();
+
+    fireEvent.click(slot.getByRole("button", { name: "Source" }));
+    expect(slot.getByTestId("bb-source-code").textContent).toBe(HTML_MARKUP);
+    expect(slot.queryByTestId("fm-viewer-html")).toBeNull();
+    fireEvent.click(slot.getByRole("button", { name: "Rendered" }));
+    expect(slot.getByTestId("fm-viewer-html")).toBeTruthy();
+  });
+
+  it("keeps partial HTML available as source without rendering a truncated document", async () => {
+    const slot = mount(baseRpc({
+      readTextFile: ({ path }) => ({
+        path, text: HTML_MARKUP, sizeBytes: 2_000_000, readBytes: HTML_MARKUP.length, truncated: true,
+      }),
+    }));
+    await openViewer(slot, HTML);
+
+    await slot.findByText(/too large for a rendered preview/);
+    expect(slot.queryByTestId("fm-viewer-html")).toBeNull();
+    fireEvent.click(slot.getByRole("button", { name: "Source" }));
+    expect(slot.getByTestId("bb-source-code").textContent).toBe(HTML_MARKUP);
+    expect(slot.getByTestId("fm-viewer-truncated").textContent).toContain("first");
+  });
+});
+
 describe("built-in viewer — bytes a browser paints (§8.12)", () => {
-  it("shows an image from the folder's preview URL, percent-encoded", async () => {
+  it("keeps loading until the image from the percent-encoded preview URL is ready", async () => {
     const slot = mount();
     await openViewer(slot, SHOT);
 
     const image = await slot.findByTestId("fm-viewer-image");
     expect(image.getAttribute("src")).toBe(`${BASE_URL}/a%20b%23c.png`);
+    expect(image.classList.contains("invisible")).toBe(true);
+    expect(slot.getByRole("status").textContent).toContain("Loading");
+    fireEvent.load(image);
+    expect(image.classList.contains("invisible")).toBe(false);
+    expect(slot.queryByRole("status")).toBeNull();
     // One mint for the folder, and no attempt to read the bytes as text.
     expect(callsTo(slot, "createPreviewUrl")[0]?.input).toEqual({ path: ROOT });
     expect(callsTo(slot, "readTextFile")).toHaveLength(0);
+  });
+
+  it("shows an already decoded image without waiting for a load event", async () => {
+    vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(1920);
+    const slot = mount();
+    await openViewer(slot, SHOT);
+
+    const image = await slot.findByRole("img", { name: SHOT.name });
+    expect(image.classList.contains("invisible")).toBe(false);
+    expect(slot.queryByRole("status")).toBeNull();
   });
 
   it("shows a PDF in a frame and media in their players", async () => {
@@ -287,8 +382,13 @@ describe("built-in viewer — bytes a browser paints (§8.12)", () => {
     await cleanupAndOpen(SONG, "fm-viewer-audio");
   });
 
-  it("falls back to a message when the browser refuses the bytes", async () => {
-    const slot = mount();
+  it("offers a fresh preview URL when the browser refuses the image", async () => {
+    const replacementUrl = `${BASE_URL}-retry`;
+    const slot = mount(baseRpc({
+      createPreviewUrl: vi.fn()
+        .mockReturnValueOnce({ path: ROOT, baseUrl: BASE_URL, expiresAtMs: Date.now() + PREVIEW_TTL_MS })
+        .mockReturnValueOnce({ path: ROOT, baseUrl: replacementUrl, expiresAtMs: Date.now() + PREVIEW_TTL_MS }),
+    }));
     const viewer = await openViewer(slot, SHOT);
 
     fireEvent.error(await slot.findByTestId("fm-viewer-image"));
@@ -296,6 +396,25 @@ describe("built-in viewer — bytes a browser paints (§8.12)", () => {
     await waitFor(() => {
       expect(viewer.textContent).toContain("could not be displayed");
     });
+    fireEvent.click(slot.getByRole("button", { name: "Retry" }));
+    const replacement = await slot.findByTestId("fm-viewer-image");
+    expect(replacement.getAttribute("src")).toBe(`${replacementUrl}/a%20b%23c.png`);
+    expect(callsTo(slot, "createPreviewUrl")).toHaveLength(2);
+    fireEvent.load(replacement);
+    expect(slot.getByRole("img", { name: SHOT.name })).toBe(replacement);
+  });
+
+  it("offers retry when the image preview URL could not be minted", async () => {
+    const slot = mount(baseRpc({
+      createPreviewUrl: vi.fn()
+        .mockRejectedValueOnce(new Error("Preview unavailable"))
+        .mockReturnValueOnce({ path: ROOT, baseUrl: BASE_URL, expiresAtMs: Date.now() + PREVIEW_TTL_MS }),
+    }));
+    await openViewer(slot, SHOT);
+
+    fireEvent.click(await slot.findByRole("button", { name: "Retry" }));
+    expect(await slot.findByTestId("fm-viewer-image")).toBeTruthy();
+    expect(callsTo(slot, "createPreviewUrl")).toHaveLength(2);
   });
 });
 

@@ -7,21 +7,23 @@ import type { FileEntry } from "../contract";
 /**
  * Extensions a browser will paint from an <img> without help.
  *
- * Deliberately narrower than "image formats": `tiff`, `heic`, `psd` and `ico`
+ * Deliberately narrower than "image formats": `tiff`, `heic` and `psd`
  * are images that most browsers will not decode, and a tile that requests one
- * pays for the bytes and then falls back to the icon anyway. `svg` is in
- * because it renders everywhere — and because it arrives through bb's preview
- * transport, not from this page's origin, so a hostile file cannot script the
- * panel it is displayed in.
+ * pays for the bytes and then falls back to the icon anyway. SVG is loaded in
+ * an image element, where browsers disable document scripting.
  */
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   "png",
+  "apng",
   "jpg",
   "jpeg",
+  "jpe",
+  "jfif",
   "gif",
   "webp",
   "avif",
   "bmp",
+  "ico",
   "svg",
 ]);
 

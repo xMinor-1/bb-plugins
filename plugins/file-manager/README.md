@@ -23,11 +23,12 @@ Interface: English and Russian — the EN | RU switch sits in the panel's title 
 - **Upload** — drag and drop files or whole folders. Uploads are chunked,
   resumable, and keep running while you browse elsewhere in bb.
 - **Open a file to read it** — double-click, `Enter`, or **Open** in the
-  right-click menu. Beside a thread the file goes to bb's own preview panel, so
-  it opens as a tab next to the manager; on the standalone File Manager page,
-  where bb has no preview panel to offer, the plugin shows the file itself:
-  images, PDFs, video and audio play in place, Markdown is rendered (with the
-  source one click away), and everything else — including `Makefile`,
+  right-click menu. HTML opens in File Manager's static sandbox with scripts
+  and external resources blocked. Use **Source** to read the original markup
+  or the beginning of a large HTML file. For other files, File Manager uses
+  bb's preview panel beside a thread. On the standalone File Manager page,
+  images, PDFs, video and audio open in place. Markdown has a rendered view
+  and a **Source** toggle. Other text — including `Makefile`,
   `LICENSE` and files with no extension at all — opens in bb's source viewer
   with syntax highlighting. Anything that turns out not to be text says so and
   offers the download. Double-clicking an archive still opens the extract

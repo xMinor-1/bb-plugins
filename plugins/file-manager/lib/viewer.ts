@@ -1,11 +1,9 @@
 // lib/viewer.ts — which renderer the built-in viewer reaches for (§8.12).
 //
-// Only four kinds are decided from the name, and all four for the same reason:
-// they are the ones the browser paints from a URL, so getting them wrong costs
-// a request for bytes nothing can display. Everything else is `text` — a
-// *question*, not a claim. `readTextFile` answers it from the bytes, which is
-// the only way `Makefile`, `LICENSE`, `.gitignore` and `dockerfile` ever open,
-// and the only honest answer for the extension nobody has heard of yet.
+// Images, PDFs and media use a browser URL. HTML and Markdown use the same
+// bounded text transport as the `text` fallback. Reading the bytes lets
+// extensionless files such as `Makefile` or `LICENSE` open as text while
+// binary files get the unsupported-preview message.
 //
 // The one exception to "the name only picks a transport" is an archive
 // (§8.13): its bytes are never text, and what is worth showing is its table
@@ -20,6 +18,7 @@ export type ViewerKind =
   | "pdf"
   | "video"
   | "audio"
+  | "html"
   | "markdown"
   | "text"
   | "archive";
@@ -48,6 +47,7 @@ const AUDIO_EXTENSIONS: ReadonlySet<string> = new Set([
 
 /** Rendered by bb's Markdown component, with the source one click away. */
 const MARKDOWN_EXTENSIONS: ReadonlySet<string> = new Set(["md", "markdown", "mdx"]);
+const HTML_EXTENSIONS: ReadonlySet<string> = new Set(["html", "htm", "xhtml"]);
 
 /** Lowercased extension after the last dot, or "" for a dotfile / no dot. */
 function extensionOf(name: string): string {
@@ -62,6 +62,7 @@ export function viewerKindFor(name: string): ViewerKind {
   if (extension === "pdf") return "pdf";
   if (VIDEO_EXTENSIONS.has(extension)) return "video";
   if (AUDIO_EXTENSIONS.has(extension)) return "audio";
+  if (HTML_EXTENSIONS.has(extension)) return "html";
   if (MARKDOWN_EXTENSIONS.has(extension)) return "markdown";
   return "text";
 }
@@ -77,7 +78,7 @@ export function viewerKindForEntry(entry: FileEntry): ViewerKind {
 
 /** True for the kinds read as a string through `readTextFile`. */
 export function isTextViewerKind(kind: ViewerKind): boolean {
-  return kind === "text" || kind === "markdown";
+  return kind === "text" || kind === "markdown" || kind === "html";
 }
 
 /** True for the kinds shown from a `createPreviewUrl` URL rather than a string. */

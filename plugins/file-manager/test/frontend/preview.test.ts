@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FileEntry } from "../../contract";
 import { isImageEntry, isImageName, previewUrl } from "../../lib/preview";
-import { isViewableEntry, viewerKindFor } from "../../lib/viewer";
+import { isTextViewerKind, isViewableEntry, isUrlViewerKind, viewerKindFor, viewerKindForEntry } from "../../lib/viewer";
 
 function entry(partial: Partial<FileEntry> & { name: string }): FileEntry {
   return {
@@ -18,17 +18,17 @@ function entry(partial: Partial<FileEntry> & { name: string }): FileEntry {
     isHidden: partial.name.startsWith("."),
     isSymlink: partial.isSymlink ?? false,
     escapesRoot: partial.escapesRoot ?? false,
-    archiveFormat: null,
+    archiveFormat: partial.archiveFormat ?? null,
   };
 }
 
 describe("isImageName", () => {
-  it.each(["a.png", "a.JPG", "a.jpeg", "a.gif", "a.webp", "a.avif", "a.bmp", "a.svg"])(
-    "accepts %s",
-    (name) => {
-      expect(isImageName(name)).toBe(true);
-    },
-  );
+  it.each([
+    "a.png", "a.APNG", "a.JPG", "a.jpeg", "a.jpe", "a.jfif",
+    "a.gif", "a.webp", "a.avif", "a.bmp", "a.ICO", "a.svg",
+  ])("accepts %s", (name) => {
+    expect(isImageName(name)).toBe(true);
+  });
 
   it.each([
     // Images a browser will not decode: fetching them would cost the bytes and
@@ -36,7 +36,6 @@ describe("isImageName", () => {
     "a.tiff",
     "a.heic",
     "a.psd",
-    "a.ico",
     "a.txt",
     "archive.zip",
     // No extension at all, and a dotfile whose "extension" is the whole name.
@@ -114,12 +113,22 @@ describe("previewUrl", () => {
 // ---------------------------------------------------------------------------
 
 describe("viewerKindFor", () => {
-  it("names the four kinds a browser paints from a URL", () => {
-    expect(viewerKindFor("shot.PNG")).toBe("image");
-    expect(viewerKindFor("scan.svg")).toBe("image");
-    expect(viewerKindFor("manual.pdf")).toBe("pdf");
-    expect(viewerKindFor("clip.MP4")).toBe("video");
-    expect(viewerKindFor("song.flac")).toBe("audio");
+  it.each(["page.HTML", "page.htm", "page.xhtml"])("reads %s as an HTML document", (name) => {
+    const kind = viewerKindFor(name);
+    expect(kind).toBe("html");
+    expect(isTextViewerKind(kind)).toBe(true);
+    expect(isUrlViewerKind(kind)).toBe(false);
+  });
+
+  it.each([
+    ["shot.PNG", "image"], ["spinner.apng", "image"], ["app.ico", "image"],
+    ["photo.jpe", "image"], ["photo.JFIF", "image"], ["scan.svg", "image"],
+    ["manual.PDF", "pdf"], ["clip.MP4", "video"], ["clip.webm", "video"],
+    ["song.mp3", "audio"], ["song.flac", "audio"], ["song.ogg", "audio"],
+  ])("uses the browser URL renderer for %s", (name, expected) => {
+    const kind = viewerKindFor(name);
+    expect(kind).toBe(expected);
+    expect(isUrlViewerKind(kind)).toBe(true);
   });
 
   it("keeps markdown apart, so it can be rendered as a document", () => {
@@ -131,7 +140,7 @@ describe("viewerKindFor", () => {
   it("sends everything else to the text branch, extension or not", () => {
     // `text` is a question for the server, not a claim about the file — which
     // is the only way these four ever open.
-    for (const name of ["Makefile", "LICENSE", ".gitignore", "server.ts"]) {
+    for (const name of ["Makefile", "LICENSE", ".gitignore", "server.ts", "data.csv", "data.json"]) {
       expect(viewerKindFor(name)).toBe("text");
     }
     // Including the ones that will come back "not text": guessing from the
@@ -145,6 +154,12 @@ describe("viewerKindFor", () => {
     // offer the text branch ends in.
     expect(viewerKindFor("film.mkv")).toBe("text");
     expect(viewerKindFor("old.avi")).toBe("text");
+  });
+});
+
+describe("viewerKindForEntry", () => {
+  it("opens a recognized local archive as its table of contents", () => {
+    expect(viewerKindForEntry(entry({ name: "logs.tar.gz", archiveFormat: "tar.gz" }))).toBe("archive");
   });
 });
 

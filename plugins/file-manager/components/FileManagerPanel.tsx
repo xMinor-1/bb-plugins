@@ -88,7 +88,7 @@ import { useFmRpc, type RpcOutput } from "../lib/fm-rpc";
 import { saveStartFolder, startFolderLabel, startFolderMessages } from "../lib/start-folder";
 import { defineMessages, messagesNow, pluralRu, useMessages } from "../lib/i18n";
 import type { UploadRequest } from "../lib/upload-manager";
-import { isViewableEntry } from "../lib/viewer";
+import { isViewableEntry, viewerKindForEntry } from "../lib/viewer";
 import { ActivityTray, jobSettledText } from "./ActivityTray";
 import { BackgroundContextMenu } from "./BackgroundContextMenu";
 import { BookmarkMenuItems, BookmarksMenu } from "./BookmarksMenu";
@@ -806,7 +806,7 @@ export function FileManagerSurface({
   const previewBaseUrl = usePreviewBase({
     path: currentPath,
     enabled: galleryView && listingEnabled,
-  });
+  }) ?? null;
 
   // A listing that lands is the authority on what is really gone: release the
   // optimistic set against it instead of holding rows hostage on an error.
@@ -1572,13 +1572,9 @@ export function FileManagerSurface({
   );
 
   /**
-   * Show one file: bb's shared preview panel when this surface has one, the
-   * built-in viewer when it does not (§8.12).
-   *
-   * The order is not a preference for our own dialog — it is the opposite.
-   * bb's panel sits *beside* the manager and survives navigation, so it wins
-   * wherever it exists; the viewer is what the standalone page gets, where
-   * the alternative was silently dropping the file in ~/Downloads.
+   * Reopen a revealed file in its original preview. Otherwise, File Manager
+   * renders HTML in its sandbox and uses bb's shared preview for other files
+   * when a preview panel is available (§8.12).
    */
   const showEntry = useCallback(
     (entry: FileEntry) => {
@@ -1586,7 +1582,7 @@ export function FileManagerSurface({
         onOpenRevealedFile();
         return;
       }
-      if (previewEntry(entry)) return;
+      if (viewerKindForEntry(entry) !== "html" && previewEntry(entry)) return;
       setDialog({ kind: "view", entry });
     },
     [onOpenRevealedFile, previewEntry, revealPath],
