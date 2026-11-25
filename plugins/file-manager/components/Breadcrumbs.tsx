@@ -11,8 +11,8 @@ import { breadcrumbs } from "../lib/fm-paths";
 import { defineMessages, useMessages } from "../lib/i18n";
 
 const messages = defineMessages(
-  { home: "Home", breadcrumb: "Breadcrumb" },
-  { home: "Домашняя папка", breadcrumb: "Путь к папке" },
+  { home: "Home", breadcrumb: "Breadcrumb", edit: "Edit folder path" },
+  { home: "Домашняя папка", breadcrumb: "Путь к папке", edit: "Изменить путь к папке" },
 );
 
 export interface BreadcrumbsProps {
@@ -28,9 +28,6 @@ export interface BreadcrumbsProps {
   /**
    * Click on the flex slack to the right of the last crumb — the
    * Explorer/Nautilus gesture for "let me type the path" (PATHBAR-SPEC §3.2).
-   * Every crumb button, and the wrapper around it, is a *descendant* of the
-   * nav, so the target-identity check below makes a crumb click impossible to
-   * confuse with an empty-area one.
    */
   onEmptyAreaClick?: () => void;
   className?: string;
@@ -96,6 +93,15 @@ export function Breadcrumbs({
           </div>
         );
       })}
+      {onEmptyAreaClick ? (
+        <button
+          type="button"
+          aria-label={t.edit}
+          title={t.edit}
+          className="h-7 min-w-4 flex-1 cursor-text rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onEmptyAreaClick}
+        />
+      ) : null}
     </nav>
   );
 }

@@ -26,7 +26,7 @@
 // table of contents, drawn by components/ArchiveContents.tsx from
 // `listArchive`. Its "Extract…" hands the entry back to the panel, which
 // swaps this dialog for its own ExtractDialog.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Markdown, experimental_SourceCode as SourceCode } from "@get-bb/plugin-sdk/app";
 
 import type { FileEntry } from "../../contract";
@@ -36,8 +36,9 @@ import { dirname } from "../../lib/fm-paths";
 import { formatBytes } from "../../lib/format";
 import { useFmRpc, type RpcOutput } from "../../lib/fm-rpc";
 import { previewUrl } from "../../lib/preview";
-import { isTextViewerKind, isUrlViewerKind, viewerKindForEntry } from "../../lib/viewer";
-import { usePreviewBase } from "../../hooks/usePreviewBase";
+import { readRemoteText } from "../../lib/remote-text";
+import { isTextViewerKind, isUrlViewerKind, viewerKindFor, viewerKindForEntry } from "../../lib/viewer";
+import { usePreviewLease } from "../../hooks/usePreviewBase";
 import { ArchiveContents } from "../ArchiveContents";
 import { Button } from "../ui/button";
 import {
@@ -63,6 +64,10 @@ const messages = defineMessages(
     source: "Source",
     rendered: "Rendered",
     download: "Download",
+    downloadFailed: "Could not start download.",
+    remoteFile: "Remote file",
+    remotePreviewFailed: "Could not open this preview",
+    retry: "Retry",
   },
   {
     mediaFailedTitle: "Не удалось показать этот файл",
@@ -76,6 +81,10 @@ const messages = defineMessages(
     source: "Исходник",
     rendered: "Просмотр",
     download: "Скачать",
+    downloadFailed: "Не удалось начать скачивание.",
+    remoteFile: "Файл на другой машине",
+    remotePreviewFailed: "Не удалось открыть просмотр",
+    retry: "Повторить",
   },
 );
 
@@ -95,6 +104,8 @@ export interface FileViewerDialogProps {
    * flow; without it the archive is shown with no way to extract from here.
    */
   onExtract?: ((entry: FileEntry) => void) | undefined;
+  remote?: { hostId: string; directoryPath: string };
+  onDownload?: (() => Promise<void>) | undefined;
 }
 
 /** The middle of the dialog when there is nothing to render. */
@@ -131,16 +142,24 @@ function TextBody({
   );
 }
 
-export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileViewerDialogProps) {
+export function FileViewerDialog({ open, onOpenChange, entry, onExtract, remote, onDownload }: FileViewerDialogProps) {
   const t = useMessages(messages);
   const rpc = useFmRpc();
-  const kind = viewerKindForEntry(entry);
+  const isRemote = remote !== undefined;
+  const kind = isRemote ? viewerKindFor(entry.name) : viewerKindForEntry(entry);
   const wantsUrl = isUrlViewerKind(kind);
   const wantsText = isTextViewerKind(kind);
+  const [retry, setRetry] = useState(0);
 
-  // One base URL per folder, exactly like the gallery's — and only for the
-  // kinds that are shown from a URL, so opening a text file costs no mint.
-  const baseUrl = usePreviewBase({ path: dirname(entry.path), enabled: open && wantsUrl });
+  // A remote player keeps its source while playing. Retry can renew an expired grant.
+  const lease = usePreviewLease({
+    path: remote?.directoryPath ?? dirname(entry.path),
+    enabled: open && (wantsUrl || (isRemote && wantsText)),
+    hostId: remote?.hostId,
+    renew: !isRemote,
+    retry,
+  });
+  const baseUrl = lease?.baseUrl ?? null;
   const url = baseUrl === null ? null : previewUrl(baseUrl, entry.name);
 
   const [text, setText] = useState<TextState>({ status: "loading" });
@@ -148,22 +167,35 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
   const [rendered, setRendered] = useState(true);
   /** A broken <img>/<video> falls back to the same "no preview" body. */
   const [mediaFailed, setMediaFailed] = useState(false);
+  const [downloadState, setDownloadState] = useState<"idle" | "pending" | "failed">("idle");
+  const downloadRequest = useRef(0);
+
+  useEffect(() => {
+    setDownloadState("idle");
+    return () => { downloadRequest.current += 1; };
+  }, [entry.path, open, remote?.hostId]);
 
   useEffect(() => {
     setRendered(true);
     setMediaFailed(false);
-  }, [entry.path]);
+  }, [entry.path, url]);
 
   useEffect(() => {
     if (!open || !wantsText) return;
-    let cancelled = false;
     setText({ status: "loading" });
+    if (isRemote && url === null) return;
+    const controller = new AbortController();
     void (async () => {
       try {
-        const result = await rpc.call("readTextFile", { path: entry.path });
-        if (!cancelled) setText({ status: "ready", result });
+        const remoteText = isRemote && url !== null ? await readRemoteText(url, controller.signal) : null;
+        const result = isRemote
+          ? (remoteText === null ? null : { path: entry.path, ...remoteText })
+          : await rpc.call("readTextFile", { path: entry.path });
+        if (!controller.signal.aborted) setText(result === null
+          ? { status: "unsupported" }
+          : { status: "ready", result });
       } catch (failure) {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         const parsed = parseRpcError(failure);
         // `unsupported` is the server saying "these bytes are not text", which
         // is an answer and not a fault — it renders as the download offer
@@ -175,17 +207,45 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
         );
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [entry.path, open, rpc, wantsText]);
+    return () => controller.abort();
+  }, [entry.path, isRemote, open, rpc, url, wantsText]);
 
-  const download = (): void => {
-    downloadEntry(entry);
+  const download = async (): Promise<void> => {
+    if (!isRemote) {
+      downloadEntry(entry);
+      return;
+    }
+    if (onDownload === undefined) return;
+    const request = ++downloadRequest.current;
+    setDownloadState("pending");
+    try {
+      await onDownload();
+      if (downloadRequest.current === request) setDownloadState("idle");
+    } catch {
+      if (downloadRequest.current === request) setDownloadState("failed");
+    }
   };
 
   let body: React.ReactNode;
-  if (kind === "archive") {
+  if (isRemote && ((lease !== null && url === null) || mediaFailed || (wantsText && text.status === "failed"))) {
+    body = (
+      <Placeholder>
+        <p className="font-medium text-foreground">{t.remotePreviewFailed}</p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            setMediaFailed(false);
+            setText({ status: "loading" });
+            setRetry((attempt) => attempt + 1);
+          }}
+        >
+          {t.retry}
+        </Button>
+      </Placeholder>
+    );
+  } else if (kind === "archive") {
     body = (
       <ArchiveContents
         path={entry.path}
@@ -268,7 +328,7 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
       </Placeholder>
     );
   } else {
-    body = <TextBody entry={entry} result={text.result} rendered={kind === "markdown" && rendered} />;
+    body = <TextBody entry={entry} result={text.result} rendered={!isRemote && kind === "markdown" && rendered} />;
   }
 
   const truncated = text.status === "ready" && text.result.truncated;
@@ -293,7 +353,9 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
                 {entry.name}
               </DialogTitle>
               <DialogDescription className="flex flex-wrap items-center gap-x-2">
-                <span>{formatBytes(entry.sizeBytes)}</span>
+                <span>{isRemote && text.status !== "ready"
+                  ? t.remoteFile
+                  : formatBytes(isRemote && text.status === "ready" ? text.result.sizeBytes : entry.sizeBytes)}</span>
                 {truncated ? (
                   <span data-testid="fm-viewer-truncated">
                     {t.showingFirst(
@@ -304,7 +366,7 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
               </DialogDescription>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              {kind === "markdown" && text.status === "ready" ? (
+              {!isRemote && kind === "markdown" && text.status === "ready" ? (
                 <Button
                   type="button"
                   size="sm"
@@ -317,19 +379,26 @@ export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileV
                   <span className="hidden sm:inline">{rendered ? t.source : t.rendered}</span>
                 </Button>
               ) : null}
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-7 gap-1.5 px-2 text-xs"
-                data-testid="fm-viewer-download"
-                onClick={download}
-              >
-                <Icon name="Download" className="size-4" aria-hidden />
-                <span className="hidden sm:inline">{t.download}</span>
-              </Button>
+              {isRemote && onDownload === undefined ? null : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  aria-label={t.download}
+                  data-testid="fm-viewer-download"
+                  disabled={downloadState === "pending"}
+                  onClick={() => void download()}
+                >
+                  <Icon name="Download" className="size-4" aria-hidden />
+                  <span className="hidden sm:inline">{t.download}</span>
+                </Button>
+              )}
             </div>
           </div>
+          {downloadState === "failed" ? (
+            <p className="mt-2 text-sm text-destructive" role="alert">{t.downloadFailed}</p>
+          ) : null}
         </DialogHeader>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{body}</div>
       </DialogContent>

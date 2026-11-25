@@ -1,12 +1,10 @@
 # File Manager
 
-A bb plugin that adds a full-page file manager for the machine that runs your
-bb server. Browse, upload, download, move, rename and extract files under
-your home folder without leaving bb and without a shell.
+A bb plugin that adds a full-page file manager. Browse, upload, download,
+move, rename and extract files under your home folder on the machine that
+runs bb. Switch to a connected machine to browse and read its files.
 
-Everything the panel touches lives under one hard root — the home directory of
-the user running bb — and
-every path is re-resolved and clamped on the server before a single byte moves.
+Local file operations are rooted at the home directory of the user running bb.
 
 Interface: English and Russian — the EN | RU switch sits in the panel's title bar, or in the ⋯ menu of a File Manager tab.
 
@@ -93,6 +91,19 @@ shows how many are in flight. The same file manager also opens as a tab in the
 right-hand panel, next to a thread — see below.
 
 <img src="../../media/file-manager/context-menu.png" width="640" alt="The row menu: open, download, add to chat, cut, copy, move, rename, copy path, properties, delete">
+
+## Browse connected machines
+
+The machine tabs appear when bb has an active connected machine. Each remote
+tab opens in that machine's home folder. Use **Parent folder**, the breadcrumbs,
+or the pencil button to enter an absolute folder path. Machines enrolled with
+full access can browse up to the filesystem root of their home volume. Other
+machines stay within their home folder.
+
+Connected-machine tabs are read-only. Use list or gallery view, open a file
+to preview it, or choose **Download** from its context menu or preview. The
+selected machine and each machine's last confirmed folder and view are
+remembered for the browser session.
 
 ## Open it beside a thread
 

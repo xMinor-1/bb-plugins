@@ -4,7 +4,7 @@
 // side chat) opens these. They render the same body the nav panel renders —
 // same listing, tree, uploads, downloads, context menus, keyboard map and
 // dialogs — with two differences the surface itself handles: the folder lives
-// in component state instead of the route (a panel tab has no route), and the
+// in the panel session instead of the route (a panel tab has no route), and the
 // title-bar actions ride in the toolbar instead (a panel tab has no title bar).
 //
 // Two registrations because bb keeps the two launchers apart: a thread's panel
@@ -17,21 +17,21 @@ import type { ExperimentalThreadTabProps, PluginNewThreadPanelProps } from "@get
 import { useLocalLocation } from "../hooks/useFmLocation";
 import { FileManagerSurface } from "./FileManagerPanel";
 
-function FileManagerTabBody({ threadId = null }: { threadId?: string | null }) {
-  // Starts at the root and lets the bootstrap redirect to the remembered or
-  // configured folder, exactly as the nav panel does on a cold open (§1.5).
-  const location = useLocalLocation("");
-  return <FileManagerSurface location={location} chrome="inline" threadId={threadId} />;
+function FileManagerTabBody({ sessionScope, threadId = null }: { sessionScope: string; threadId?: string | null }) {
+  const location = useLocalLocation("", sessionScope);
+  return <FileManagerSurface location={location} chrome="inline" threadId={threadId} sessionScope={sessionScope} />;
 }
 
 /** `experimental_tab` (thread action): the panel launcher of an existing thread. */
 export function FileManagerTab({ threadId }: ExperimentalThreadTabProps) {
-  return <FileManagerTabBody threadId={threadId} />;
+  const sessionScope = `thread:${threadId}`;
+  return <FileManagerTabBody key={sessionScope} sessionScope={sessionScope} threadId={threadId} />;
 }
 
 /** `experimental_newThreadPanelAction`: the root New thread screen's launcher. */
-export function FileManagerNewThreadTab(_props: PluginNewThreadPanelProps) {
+export function FileManagerNewThreadTab({ projectId }: PluginNewThreadPanelProps) {
   // No thread has been created yet, so there is no workspace to jump into and
   // the toolbar shows no Thread folder button at all.
-  return <FileManagerTabBody />;
+  const sessionScope = `new-thread:${projectId ?? ""}`;
+  return <FileManagerTabBody key={sessionScope} sessionScope={sessionScope} />;
 }

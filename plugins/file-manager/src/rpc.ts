@@ -16,6 +16,7 @@ import {
 } from "./mutations";
 import { createPreviewUrl, readTextFile } from "./preview";
 import { directorySize, pathProperties } from "./properties";
+import { createRemoteHandlers } from "./remote";
 import { getRoot } from "./root";
 import type { SettingsModule } from "./settings";
 
@@ -79,6 +80,8 @@ export function createCoreHandlers(
   deps: Omit<RpcDeps, "transfer">,
 ): Omit<FileManagerHandlers, keyof TransferHandlers> {
   return {
+    ...createRemoteHandlers(bb, () => resolvePrimaryHostId(bb)),
+
     async getState() {
       return {
         root: getRoot(),

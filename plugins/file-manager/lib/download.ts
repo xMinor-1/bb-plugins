@@ -12,6 +12,7 @@ import { experimental_saveFile } from "@get-bb/plugin-sdk/app";
 
 import { DOWNLOAD_URL, DOWNLOAD_ZIP_URL, type FileEntry } from "../contract";
 import { basename, dirname } from "./fm-paths";
+import { previewUrl } from "./preview";
 
 export type DownloadDisposition = "attachment" | "inline";
 
@@ -41,6 +42,14 @@ export function downloadPath(path: string, options: DownloadOptions = {}): strin
   // non-ASCII); bb reports a download that cannot start with its own toast.
   void experimental_saveFile({ fileName: options.fileName ?? basename(path), url });
   return url;
+}
+
+/** Stream a file using the connected machine's fresh BB preview lease. */
+export async function downloadRemoteFile(baseUrl: string, fileName: string): Promise<void> {
+  const url = new URL(previewUrl(baseUrl, fileName), document.location.href);
+  if (url.origin !== document.location.origin) throw new Error("Invalid remote preview origin");
+  const result = await experimental_saveFile({ fileName, url: url.href });
+  if (result !== "started") throw new Error("Could not start remote download");
 }
 
 /** Convenience for a row: refuses directories and links that leave the root. */

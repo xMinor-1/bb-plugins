@@ -13,7 +13,7 @@
 // (owned by the panel's key map, §7.2). Escape and blur both revert; only
 // Enter commits, and a commit that fails keeps the text and the caret exactly
 // where they were.
-import { useLayoutEffect, useRef, useState, type DragEvent } from "react";
+import { useId, useLayoutEffect, useRef, useState, type DragEvent } from "react";
 
 import { cn } from "../lib/utils";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -84,6 +84,7 @@ export function PathBar({
   onDropOnCrumb,
 }: PathBarProps) {
   const t = useMessages(messages);
+  const errorId = useId();
   return (
     <div
       className="relative flex min-w-0 flex-1 items-center gap-1"
@@ -97,6 +98,7 @@ export function PathBar({
           initialValue={path}
           busy={busy}
           invalid={error !== null}
+          errorId={errorId}
           focusTick={focusTick}
           onSubmit={onSubmit}
           onCancel={onCancel}
@@ -146,7 +148,7 @@ export function PathBar({
         // height and the table below never jumps. This is also exactly where a
         // completion list would render later (§6).
         <p
-          id="fm-path-error"
+          id={errorId}
           role="alert"
           data-testid="fm-path-error"
           className="absolute left-0 top-full z-20 mt-1 max-w-full break-words rounded-md border border-destructive/40 bg-popover px-2 py-1 text-xs text-destructive shadow-md"
@@ -163,6 +165,7 @@ interface PathEditorProps {
   initialValue: string;
   busy: boolean;
   invalid: boolean;
+  errorId?: string;
   focusTick: number;
   onSubmit: (raw: string) => void;
   onCancel: (options: { focusGrid: boolean }) => void;
@@ -175,16 +178,18 @@ interface PathEditorProps {
  * out of edit mode discards it (the component goes away). No second copy of
  * "what is typed" in the panel.
  */
-function PathEditor({
+export function PathEditor({
   initialValue,
   busy,
   invalid,
+  errorId,
   focusTick,
   onSubmit,
   onCancel,
   onDirty,
 }: PathEditorProps) {
   const t = useMessages(messages);
+  const hintId = useId();
   const [value, setValue] = useState(initialValue);
   const localRef = useRef<HTMLInputElement | null>(null);
 
@@ -208,13 +213,12 @@ function PathEditor({
       <Icon name="Folder" className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <Input
         ref={localRef}
-        id="fm-path-input"
         type="text"
         value={value}
         aria-label={t.folderPath}
-        aria-describedby="fm-path-hint"
+        aria-describedby={hintId}
         aria-invalid={invalid || undefined}
-        aria-errormessage={invalid ? "fm-path-error" : undefined}
+        aria-errormessage={invalid ? errorId : undefined}
         spellCheck={false}
         autoCapitalize="off"
         autoCorrect="off"
@@ -257,7 +261,7 @@ function PathEditor({
           onCancel({ focusGrid: false });
         }}
       />
-      <span id="fm-path-hint" className="sr-only">
+      <span id={hintId} className="sr-only">
         {t.help}
       </span>
     </div>

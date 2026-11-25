@@ -279,6 +279,14 @@ describe("path bar — the two states (§3.2)", () => {
     ]);
   });
 
+  it("edits inline from the keyboard-accessible blank space after the crumbs", async () => {
+    const slot = await mountPanel(baseRpc(), "docs");
+    fireEvent.click(slot.getByRole("button", { name: "Edit folder path" }));
+    const input = slot.getByTestId("fm-path-input") as HTMLInputElement;
+    expect(input.value).toBe(DOCS);
+    expect(slot.queryByTestId("fm-breadcrumbs")).toBeNull();
+  });
+
   it("seeds the input with the absolute current path, entirely selected", async () => {
     const slot = await mountPanel(baseRpc(), "docs");
 

@@ -188,16 +188,7 @@ export type ViewMode = z.infer<typeof viewModeSchema>;
  */
 export const PREVIEW_TTL_MS = 10 * 60 * 1000;
 
-/**
- * Hard cap on what `readTextFile` returns, in bytes.
- *
- * The built-in viewer (§8.12) reads text over RPC rather than over the byte
- * routes, because it needs the *whole* string in the page to hand to a
- * renderer. One mebibyte is far more than anyone reads in a dialog and small
- * enough that a stray click on a 4 GB log costs one bounded read; past it the
- * viewer says how much it is showing and offers the download.
- */
-export const MAX_TEXT_PREVIEW_BYTES = 1024 * 1024;
+export { MAX_TEXT_PREVIEW_BYTES } from "./lib/preview-limit";
 
 /**
  * How many members `listArchive` hands back (§8.13).
@@ -563,11 +554,55 @@ export const bookmarkSchema = z.strictObject({
 });
 export type Bookmark = z.infer<typeof bookmarkSchema>;
 
+const remoteMachineSchema = z.strictObject({
+  id: z.string(),
+  label: z.string(),
+});
+export type RemoteMachine = z.infer<typeof remoteMachineSchema>;
+
+const remoteEntrySchema = z.strictObject({
+  name: z.string(),
+  path: z.string(),
+  kind: z.enum(["directory", "file"]),
+});
+export type RemoteEntry = z.infer<typeof remoteEntrySchema>;
+
+const remoteDirectorySchema = z.strictObject({
+  path: z.string(),
+  rootPath: z.string(),
+  parentPath: z.string().nullable(),
+  entries: z.array(remoteEntrySchema),
+  truncated: z.boolean(),
+});
+export type RemoteDirectory = z.infer<typeof remoteDirectorySchema>;
+
 /* ------------------------------------------------------------------ */
 /* RPC contract                                                        */
 /* ------------------------------------------------------------------ */
 
 export const fileManagerContract = defineRpcContract({
+  /** The online enrolled machines supported by the read-only browser. */
+  remoteMachines: {
+    input: z.null(),
+    output: z.strictObject({ machines: z.array(remoteMachineSchema) }),
+  },
+
+  /** The remote account's home if `path` is omitted, or a folder within its browsing root. */
+  remoteDirectory: {
+    input: z.strictObject({ hostId: z.string().min(1), path: z.string().min(1).optional() }),
+    output: remoteDirectorySchema,
+  },
+
+  /** An encoded folder prefix on a preview lease for the host's home or selected folder. */
+  remotePreview: {
+    input: z.strictObject({ hostId: z.string().min(1), path: z.string().min(1) }),
+    output: z.strictObject({
+      baseUrl: z.string(),
+      path: z.string(),
+      expiresAtMs: z.number().int(),
+    }),
+  },
+
   /** Panel bootstrap: root, persisted preferences, capabilities. */
   getState: {
     input: z.null(),

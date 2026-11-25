@@ -419,18 +419,20 @@ describe("FileManagerPanel navigation (§8.2)", () => {
     await slot.findByText("readme.md");
 
     const crumbs = slot.getByTestId("fm-breadcrumbs");
+    const folderButtons = crumbs.querySelectorAll("button[data-fm-crumb]");
+    expect(crumbs.querySelector('button[aria-label="Edit folder path"]')).not.toBeNull();
     // Array.from, not a spread: tsconfig's `lib` is ["ES2022", "DOM"] with no
     // DOM.Iterable, so a NodeList is not iterable at the type level (§3).
     expect(
-      Array.from(crumbs.querySelectorAll("button")).map((button) => button.textContent),
+      Array.from(folderButtons).map((button) => button.textContent),
     ).toEqual([
       "Home",
       "docs",
       "notes",
     ]);
 
-    fireEvent.click(crumbs.querySelectorAll("button")[1]!);
-    fireEvent.click(crumbs.querySelectorAll("button")[0]!);
+    fireEvent.click(folderButtons[1]!);
+    fireEvent.click(folderButtons[0]!);
     fireEvent.doubleClick(slot.getByTestId("fm-parent-row"));
 
     expect(slot.inspection.navigateCalls).toEqual([

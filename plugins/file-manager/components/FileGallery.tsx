@@ -77,6 +77,9 @@ export interface FileGalleryProps {
   gridRef?: RefObject<HTMLDivElement | null>;
   /** Rendered in place of the tiles when there are none. */
   emptyState?: ReactNode;
+  /** A browse-only tile opens from a click or key press, with no selection. */
+  onOpenEntry?: (entry: FileEntry) => void;
+  unavailableReason?: (entry: FileEntry) => string | undefined;
 }
 
 interface GalleryTileProps {
@@ -88,6 +91,8 @@ interface GalleryTileProps {
   dropTarget: boolean;
   /** Resolved thumbnail URL, or null when this entry has nothing to show. */
   thumbnailUrl: string | null;
+  onOpenEntry?: (entry: FileEntry) => void;
+  unavailableReason?: string;
   onRowClick: (entry: FileEntry, event: MouseEvent<HTMLElement>) => void;
   onRowDoubleClick: (entry: FileEntry) => void;
   onRowContextMenu: (entry: FileEntry, event: MouseEvent<HTMLElement>) => void;
@@ -107,6 +112,8 @@ function GalleryTileImpl({
   cut,
   dropTarget,
   thumbnailUrl,
+  onOpenEntry,
+  unavailableReason,
   onRowClick,
   onRowDoubleClick,
   onRowContextMenu,
@@ -129,27 +136,39 @@ function GalleryTileImpl({
 
   return (
     <div
-      role="option"
-      id={rowDomId(entry.path)}
-      aria-selected={selected}
+      role={onOpenEntry === undefined ? "option" : "button"}
+      id={onOpenEntry === undefined ? rowDomId(entry.path) : undefined}
+      aria-selected={onOpenEntry === undefined ? selected : undefined}
+      aria-disabled={unavailableReason !== undefined || undefined}
       data-testid="fm-tile"
       data-fm-path={entry.path}
       data-selected={selected ? "true" : undefined}
       data-drop-target={dropTarget ? "true" : undefined}
-      tabIndex={-1}
+      tabIndex={onOpenEntry === undefined ? -1 : 0}
       draggable={dragEnabled}
-      title={entry.name}
+      title={unavailableReason ?? entry.name}
       className={cn(
         "group flex min-w-0 cursor-default flex-col gap-1 rounded-md p-1.5 select-none",
         "hover:bg-state-hover",
+        onOpenEntry !== undefined && "cursor-pointer focus-visible:ring-2 focus-visible:ring-ring",
+        unavailableReason !== undefined && "cursor-not-allowed opacity-60",
         selected && "bg-surface-selected hover:bg-surface-selected",
         focused && "ring-1 ring-inset ring-ring",
         cut && "opacity-50",
         dropTarget && "ring-2 ring-inset ring-primary/50",
         entry.escapesRoot && "text-muted-foreground opacity-60",
       )}
-      onClick={(event) => onRowClick(entry, event)}
+      onClick={(event) => {
+        if (unavailableReason !== undefined) return;
+        if (onOpenEntry === undefined) onRowClick(entry, event);
+        else onOpenEntry(entry);
+      }}
       onDoubleClick={() => onRowDoubleClick(entry)}
+      onKeyDown={onOpenEntry === undefined ? undefined : (event) => {
+        if (unavailableReason !== undefined || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onOpenEntry(entry);
+      }}
       onContextMenu={(event) => onRowContextMenu(entry, event)}
       onDragStart={(event) => onRowDragStart(entry, event)}
       onDragOver={(event) => onRowDragOver(entry, event)}
@@ -186,7 +205,7 @@ function GalleryTileImpl({
 
         {/* Top-left, over the thumbnail: the tile has no checkbox column to
             put it in, and a corner is the one spot that never covers the name. */}
-        <div
+        {onOpenEntry === undefined ? <div
           className={cn(
             "absolute left-1 top-1 rounded-sm bg-background/80 p-0.5",
             !selected && "opacity-0 group-hover:opacity-100 focus-within:opacity-100",
@@ -202,7 +221,7 @@ function GalleryTileImpl({
             aria-label={t.select(entry.name)}
             onCheckedChange={() => undefined}
           />
-        </div>
+        </div> : null}
       </div>
 
       <div className="flex min-w-0 items-center gap-1">
@@ -236,6 +255,8 @@ export function FileGallery(props: FileGalleryProps) {
     onNavigateParent,
     gridRef,
     emptyState,
+    onOpenEntry,
+    unavailableReason,
   } = props;
 
   const focusOnScreen =
@@ -270,14 +291,14 @@ export function FileGallery(props: FileGalleryProps) {
 
       <div
         ref={gridRef}
-        role="listbox"
-        aria-multiselectable="true"
+        role={onOpenEntry === undefined ? "listbox" : "group"}
+        aria-multiselectable={onOpenEntry === undefined ? true : undefined}
         aria-label={t.files}
-        tabIndex={0}
+        tabIndex={onOpenEntry === undefined ? 0 : undefined}
         // Same rule as the table: point only at a tile that is really rendered,
         // because a dangling id is worse than none.
         aria-activedescendant={
-          focusOnScreen && focusedPath !== null ? rowDomId(focusedPath) : undefined
+          onOpenEntry === undefined && focusOnScreen && focusedPath !== null ? rowDomId(focusedPath) : undefined
         }
         data-testid="fm-gallery"
         className={cn(GRID_CLASSES, "outline-none")}
@@ -293,7 +314,9 @@ export function FileGallery(props: FileGalleryProps) {
                 <div className="h-3 w-2/3 animate-pulse rounded-sm bg-surface-recessed" />
               </div>
             ))
-          : entries.map((entry) => (
+          : entries.map((entry) => {
+            const reason = unavailableReason?.(entry);
+            return (
               <GalleryTile
                 key={entry.path}
                 entry={entry}
@@ -303,11 +326,13 @@ export function FileGallery(props: FileGalleryProps) {
                 cut={cutPaths.has(entry.path)}
                 dropTarget={dropTargetPath === entry.path}
                 thumbnailUrl={
-                  previewBaseUrl !== null && isImageEntry(entry)
+                  previewBaseUrl !== null && reason === undefined && isImageEntry(entry)
                     ? previewUrl(previewBaseUrl, entry.name)
                     : null
                 }
                 onRowClick={props.onRowClick}
+                onOpenEntry={onOpenEntry}
+                unavailableReason={reason}
                 onRowDoubleClick={props.onRowDoubleClick}
                 onRowContextMenu={props.onRowContextMenu}
                 onToggleSelect={props.onToggleSelect}
@@ -317,7 +342,8 @@ export function FileGallery(props: FileGalleryProps) {
                 onRowDrop={props.onRowDrop}
                 onRowDragEnd={props.onRowDragEnd}
               />
-            ))}
+            );
+          })}
       </div>
 
       {!loading && entries.length === 0 && emptyState !== undefined ? emptyState : null}

@@ -12,6 +12,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -87,6 +88,7 @@ import {
 import { useFmRpc, type RpcOutput } from "../lib/fm-rpc";
 import { saveStartFolder, startFolderLabel, startFolderMessages } from "../lib/start-folder";
 import { defineMessages, messagesNow, pluralRu, useMessages } from "../lib/i18n";
+import { readPanelView, readPanelViewMode, writePanelView } from "../lib/panel-view-session";
 import type { UploadRequest } from "../lib/upload-manager";
 import { isViewableEntry } from "../lib/viewer";
 import { ActivityTray, jobSettledText } from "./ActivityTray";
@@ -97,6 +99,7 @@ import { ErrorBanner } from "./ErrorBanner";
 import { effectiveKind, isFileEntry } from "./FileRow";
 import { FileGallery } from "./FileGallery";
 import { FileTable } from "./FileTable";
+import { machineMessages, RemoteFiles } from "./RemoteFiles";
 import { RowContextMenu } from "./RowContextMenu";
 import { SelectionActionBar } from "./SelectionActionBar";
 import type { SelectedEntryActionsProps } from "./selected-entry-actions";
@@ -477,9 +480,137 @@ export interface FileManagerSurfaceProps {
    * home folder, not at a thread.
    */
   threadId?: string | null;
+  /** Browser-session view memory is independent for each BB surface. */
+  sessionScope?: string;
 }
 
-export function FileManagerSurface({
+type Machine = RpcOutput<"remoteMachines">["machines"][number];
+type MachineSelection = Machine & { localRoute: string };
+
+function readMachineSelection(scope: string | undefined): MachineSelection | null {
+  const saved = readPanelView(scope, "selected-machine");
+  if (saved === null || saved === "") return null;
+  try {
+    const value = JSON.parse(saved) as Partial<MachineSelection> | null;
+    if (value === null || typeof value.id !== "string" || value.id === "" || typeof value.label !== "string" || typeof value.localRoute !== "string") return null;
+    return { id: value.id, label: value.label, localRoute: value.localRoute };
+  } catch {
+    return null;
+  }
+}
+
+export function FileManagerSurface(props: FileManagerSurfaceProps) {
+  const rpc = useFmRpc();
+  const t = useMessages(machineMessages);
+  const tabsId = useId();
+  const { sessionScope } = props;
+  const localRoute = props.chrome === "host-header" ? props.location.subPath : "";
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [selection, setSelection] = useState(() => readMachineSelection(sessionScope));
+  // A distinct explicit sidebar link still opens on the local machine.
+  const selected = localRoute === "" || selection?.localRoute === localRoute ? selection : null;
+  const selectMachine = useCallback((machine: Machine | null) => {
+    const next = machine === null ? null : { ...machine, localRoute };
+    setSelection(next);
+    writePanelView(sessionScope, "selected-machine", next === null ? "" : JSON.stringify(next));
+  }, [localRoute, sessionScope]);
+  const rememberRemoteFolder = useCallback((hostId: string, path: string) => {
+    writePanelView(sessionScope, `remote-path:${hostId}`, path);
+  }, [sessionScope]);
+  const rememberRemoteView = useCallback((hostId: string, mode: ViewMode) => {
+    writePanelView(sessionScope, `remote-view:${hostId}`, mode);
+  }, [sessionScope]);
+  const canSwitch = props.initialPath == null && props.revealPath == null;
+
+  useEffect(() => {
+    if (canSwitch && selection !== null && selected === null) selectMachine(null);
+  }, [canSwitch, selectMachine, selected, selection]);
+
+  useEffect(() => {
+    if (!canSwitch) return;
+    let request = 0;
+    const refreshMachines = (): void => {
+      const active = ++request;
+      void rpc.call("remoteMachines", null).then(({ machines: online }) => {
+        if (active === request) setMachines(online);
+      }).catch(() => {
+        // Older BB installations can still use the local file manager.
+      });
+    };
+    refreshMachines();
+    window.addEventListener("focus", refreshMachines);
+    return () => {
+      request += 1;
+      window.removeEventListener("focus", refreshMachines);
+    };
+  }, [canSwitch, rpc]);
+
+  if (!canSwitch) return <LocalFileManagerSurface {...props} />;
+  const visibleMachines = selected !== null && !machines.some((machine) => machine.id === selected.id)
+    ? [...machines, selected]
+    : machines;
+  const tabs = [{ id: "", label: t.local }, ...visibleMachines];
+  const activeIndex = tabs.findIndex((machine) => machine.id === (selected?.id ?? ""));
+  const panel = selected === null ? <LocalFileManagerSurface {...props} /> : (
+    <RemoteFiles
+      key={selected.id}
+      hostId={selected.id}
+      initialPath={readPanelView(sessionScope, `remote-path:${selected.id}`) ?? undefined}
+      initialViewMode={readPanelViewMode(sessionScope, `remote-view:${selected.id}`)}
+      onVisit={rememberRemoteFolder}
+      onViewModeChange={rememberRemoteView}
+    />
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background text-foreground">
+      {visibleMachines.length > 0 ? (
+        <div role="tablist" aria-label={t.machine} className="flex min-w-0 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5">
+          {tabs.map((machine, index) => (
+            <button
+              key={machine.id}
+              id={`${tabsId}-tab-${index}`}
+              type="button"
+              role="tab"
+              aria-selected={index === activeIndex}
+              aria-controls={`${tabsId}-panel`}
+              tabIndex={index === activeIndex ? 0 : -1}
+              title={machine.label}
+              className="h-8 max-w-48 shrink-0 truncate rounded-md px-3 text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-selected:bg-state-active aria-selected:font-medium aria-selected:text-foreground"
+              onClick={() => selectMachine(machine.id === "" ? null : machine)}
+              onKeyDown={(event) => {
+                let next: number;
+                switch (event.key) {
+                  case "ArrowLeft": next = (index + tabs.length - 1) % tabs.length; break;
+                  case "ArrowRight": next = (index + 1) % tabs.length; break;
+                  case "Home": next = 0; break;
+                  case "End": next = tabs.length - 1; break;
+                  default: return;
+                }
+                event.preventDefault();
+                const target = tabs[next]!;
+                event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+                selectMachine(target.id === "" ? null : target);
+              }}
+            >
+              {machine.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div
+        id={`${tabsId}-panel`}
+        role={visibleMachines.length > 0 ? "tabpanel" : undefined}
+        aria-labelledby={visibleMachines.length > 0 ? `${tabsId}-tab-${activeIndex}` : undefined}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        {panel}
+      </div>
+    </div>
+  );
+}
+
+function LocalFileManagerSurface({
   location,
   chrome,
   initialPath = null,
@@ -488,6 +619,7 @@ export function FileManagerSurface({
   extractOnReveal = false,
   initialQuery = "",
   threadId = null,
+  sessionScope,
 }: FileManagerSurfaceProps) {
   const t = useMessages(messages);
   const rpc = useFmRpc();
@@ -543,7 +675,7 @@ export function FileManagerSurface({
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   /** List or gallery (§8.9), persisted exactly like sort and hidden files. */
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [viewMode, setViewMode] = useState<ViewMode>(() => readPanelViewMode(sessionScope, "local-view") ?? "list");
   const galleryView = viewMode === "gallery";
   const [query, setQuery] = useState(initialQuery);
   const queryRef = useRef(query);
@@ -643,7 +775,7 @@ export function FileManagerSurface({
         setConfirmOnDelete(result.preferences.confirmOnDelete);
         setSortField(result.preferences.sortField);
         setSortDirection(result.preferences.sortDirection);
-        setViewMode(result.preferences.viewMode);
+        setViewMode(readPanelViewMode(sessionScope, "local-view") ?? result.preferences.viewMode);
         setStateError(null);
         // Where to open: a folder the caller asked for (§10.2), then an
         // explicit link, then the remembered folder, then the configured start
@@ -659,6 +791,10 @@ export function FileManagerSurface({
             setRedirectPending(true);
             locationRef.current.navigate(targetSubPath, { replace: true });
           }
+          return;
+        }
+        if (inlineChrome && readPanelView(sessionScope, "local-path") === subPathRef.current) {
+          setRestorePending(subPathToAbsolute(subPathRef.current, result.root));
           return;
         }
         // The thread's own project folder, when this surface has a thread and
@@ -707,7 +843,7 @@ export function FileManagerSurface({
     return () => {
       cancelled = true;
     };
-  }, [rpc]);
+  }, [inlineChrome, rpc, sessionScope]);
 
   /**
    * The host applied the redirect (or moved the panel somewhere else): either
@@ -925,6 +1061,10 @@ export function FileManagerSurface({
     // the moment anything touched the folder on screen (§1.9).
     const written = lastFolderWrittenRef.current;
     if (written !== null && written.path === listed && written.root === root) return;
+    if (inlineChrome) {
+      const canonicalSubPath = absoluteToSubPath(listed, root);
+      writePanelView(sessionScope, "local-path", canonicalSubPath || (listed === root ? "" : subPathRef.current));
+    }
     const value: RememberedFolder = { path: listed, root };
     lastFolderWrittenRef.current = value;
     rememberLastFolder(value);
@@ -935,7 +1075,7 @@ export function FileManagerSurface({
       lastFolderPendingRef.current = null;
       writeLastFolder(value);
     }, LAST_FOLDER_DEBOUNCE_MS);
-  }, [directory.data, listingEnabled, root]);
+  }, [directory.data, inlineChrome, listingEnabled, root, sessionScope]);
 
   useEffect(
     () => () => {
@@ -991,7 +1131,8 @@ export function FileManagerSurface({
   useEffect(() => {
     if (restoreFallbackCode === null || state === null || directory.error === null) return;
     setRestorePending(null);
-    forgetLastFolder();
+    if (inlineChrome && readPanelView(sessionScope, "local-path") === subPathRef.current) writePanelView(sessionScope, "local-path", null);
+    else forgetLastFolder();
     lastFolderWrittenRef.current = null;
     // The remembered folder *is* the start folder — which is the case for
     // anyone who has opened the panel once with a start folder configured.
@@ -1016,7 +1157,7 @@ export function FileManagerSurface({
         ),
       ),
     );
-  }, [directory.error, restoreFallbackCode, restoreFallbackMoves, state]);
+  }, [directory.error, inlineChrome, restoreFallbackCode, restoreFallbackMoves, sessionScope, state]);
 
   // A different answer arrived: the suppression is over, whatever it says.
   useEffect(() => {
@@ -1136,9 +1277,10 @@ export function FileManagerSurface({
   const applyViewMode = useCallback(
     (mode: ViewMode) => {
       setViewMode(mode);
+      writePanelView(sessionScope, "local-view", mode);
       persist({ viewMode: mode });
     },
-    [persist],
+    [persist, sessionScope],
   );
 
   const handleHeaderSort = useCallback(
@@ -2942,5 +3084,5 @@ export function FileManagerSurface({
  */
 export function FileManagerPanel({ subPath }: PluginNavPanelProps) {
   const location = useRouteLocation(subPath);
-  return <FileManagerSurface location={location} chrome="host-header" />;
+  return <FileManagerSurface location={location} chrome="host-header" sessionScope="sidebar" />;
 }

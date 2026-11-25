@@ -203,6 +203,22 @@ describe("File Manager as a panel tab (§10.1)", () => {
     expect(slot.inspection.navigateCalls).toEqual([]);
   });
 
+  it("restores the same tab's confirmed folder independently of the cold-open memory", async () => {
+    const slot = mountTab();
+    await slot.findByText("notes.txt");
+    const folder = slot.getAllByTestId("fm-row").find((row) => row.getAttribute("data-fm-path") === DOCS)!;
+    fireEvent.doubleClick(folder);
+    await slot.findByText("spec.md");
+    slot.unmount();
+    window.localStorage.clear();
+    resetLastFolderStore();
+
+    const restored = mountTab();
+    await restored.findByText("spec.md");
+    expect(currentPath(restored)).toBe(DOCS);
+    expect(restored.inspection.navigateCalls).toEqual([]);
+  });
+
   it("wears the compact toolbar: no title bar to hang the wide controls on", async () => {
     const slot = mountTab();
     await slot.findByText("notes.txt");

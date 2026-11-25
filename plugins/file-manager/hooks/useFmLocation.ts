@@ -10,6 +10,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useBbNavigate } from "@get-bb/plugin-sdk/app";
 
 import { PANEL_PATH } from "../contract";
+import { readPanelView } from "../lib/panel-view-session";
 
 export interface FmLocation {
   /** Root-relative path of the folder on screen; "" is the root itself. */
@@ -47,8 +48,8 @@ export function useRouteLocation(subPath: string): FmLocation {
  * `replace` is accepted and ignored — there is no history to replace an entry
  * in, and the bootstrap redirect must still land.
  */
-export function useLocalLocation(initialSubPath = ""): FmLocation {
-  const [subPath, setSubPath] = useState(initialSubPath);
+export function useLocalLocation(initialSubPath = "", sessionScope?: string): FmLocation {
+  const [subPath, setSubPath] = useState(() => readPanelView(sessionScope, "local-path") ?? initialSubPath);
   const go = useCallback((next: string) => {
     setSubPath(next);
   }, []);

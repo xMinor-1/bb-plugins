@@ -1,8 +1,13 @@
 import { configure } from "@testing-library/react";
+import { beforeEach } from "vitest";
 
 // Match slow runners: the default 1s async-utility timeout flakes there while
 // the suite-level vitest testTimeout still bounds real hangs.
 configure({ asyncUtilTimeout: 8_000 });
+
+if (typeof window !== "undefined") {
+  beforeEach(() => window.sessionStorage.clear());
+}
 
 // Radix menus scroll the highlighted item into view when their portal opens.
 // jsdom does not implement this browser API.

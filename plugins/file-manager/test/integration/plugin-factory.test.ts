@@ -96,7 +96,6 @@ describe("registrations", () => {
   it("registers every contract method exactly once", () => {
     const registered = [...host.harness.inspection.registrations.rpcMethods].sort();
     expect(registered).toEqual(CONTRACT_METHODS);
-    expect(registered).toHaveLength(28);
   });
 
   it("mounts the three §5 routes with the auth modes §5 requires", () => {
@@ -151,6 +150,9 @@ describe("reachability", () => {
    * fails with its own code instead.
    */
   const probes: Record<string, unknown> = {
+    remoteMachines: null,
+    remoteDirectory: { hostId: "does-not-exist" },
+    remotePreview: { hostId: "does-not-exist", path: "/does-not-exist" },
     getState: null,
     listDir: { path: "does-not-exist" },
     pathProperties: { path: "does-not-exist" },
@@ -184,7 +186,7 @@ describe("reachability", () => {
     renameBookmark: { path: "does-not-exist", name: "x" },
   };
 
-  it("covers all 28 methods with a probe", () => {
+  it("covers every contract method with a probe", () => {
     expect(Object.keys(probes).sort()).toEqual(CONTRACT_METHODS);
   });
 
